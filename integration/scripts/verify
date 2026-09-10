@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$project_dir"
+
+uv sync --frozen --all-groups
+uv run --frozen ruff format --check .
+uv run --frozen ruff check .
+uv run --frozen basedpyright
+uv run --frozen pytest
