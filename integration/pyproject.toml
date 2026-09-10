@@ -9,7 +9,10 @@ description = "Production integration scaffold for the SDI CI/CV/CD stages"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = "Apache-2.0"
-dependencies = []
+dependencies = [
+    "pydantic==2.13.5",
+    "ruamel-yaml==0.19.0",
+]
 
 [project.scripts]
 sdi-integration = "sdi_pipeline_integration._cli:main"
@@ -34,7 +37,7 @@ select = ["ALL"]
 ignore = ["COM812", "CPY001", "D203", "D213"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["D103", "S101", "S607"]
+"tests/**" = ["D103", "PLR2004", "S101", "S603", "S607"]
 
 [tool.basedpyright]
 include = ["src", "tests"]

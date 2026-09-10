@@ -1,0 +1,77 @@
+"""Deterministic generation and freshness checks for public JSON Schemas."""
+
+from __future__ import annotations
+
+import json
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from pydantic import BaseModel
+
+from ._contracts import (
+    MobilityRequirementsSpecification,
+    RunRequest,
+    TargetExecutionProfile,
+)
+from ._yaml_input import InputError
+
+SCHEMAS: dict[str, type[BaseModel]] = {
+    "pipeline-integration-run-request-v1.schema.json": RunRequest,
+    "mobility-requirements-specification-v1.schema.json": (
+        MobilityRequirementsSpecification
+    ),
+    "target-execution-profile-v1.schema.json": TargetExecutionProfile,
+}
+
+
+def _remove_null_defaults(value: object) -> None:
+    if isinstance(value, dict):
+        mapping = cast("dict[object, object]", value)
+        if mapping.get("default", object()) is None:
+            del mapping["default"]
+        for nested in mapping.values():
+            _remove_null_defaults(nested)
+    elif isinstance(value, list):
+        for nested in cast("list[object]", value):
+            _remove_null_defaults(nested)
+
+
+def _schema_bytes(model: type[BaseModel]) -> bytes:
+    schema = model.model_json_schema(mode="validation")
+    _remove_null_defaults(schema)
+    text = json.dumps(
+        schema,
+        allow_nan=False,
+        ensure_ascii=True,
+        indent=2,
+        sort_keys=True,
+    )
+    return f"{text}\n".encode()
+
+
+def write_schemas(directory: Path) -> None:
+    """Write every authoritative contract schema deterministically."""
+    directory.mkdir(parents=True, exist_ok=True)
+    for filename, model in SCHEMAS.items():
+        (directory / filename).write_bytes(_schema_bytes(model))
+
+
+def check_schemas(directory: Path) -> None:
+    """Reject missing, stale, or obsolete generated contract schemas."""
+    actual_names = {path.name for path in directory.glob("*.schema.json")}
+    expected_names = set(SCHEMAS)
+    if actual_names != expected_names:
+        missing = sorted(expected_names - actual_names)
+        obsolete = sorted(actual_names - expected_names)
+        msg = f"schema set is stale; missing={missing}, obsolete={obsolete}"
+        raise InputError(msg)
+    stale = [
+        filename
+        for filename, model in SCHEMAS.items()
+        if (directory / filename).read_bytes() != _schema_bytes(model)
+    ]
+    if stale:
+        msg = f"generated schemas are stale: {sorted(stale)}"
+        raise InputError(msg)
