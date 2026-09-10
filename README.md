@@ -1,36 +1,46 @@
-![header](https://capsule-render.vercel.app/api?type=waving&height=170&color=gradient&text=SDI%20CI/CV/CD%20Pipeline%20Framework&textBg=false&fontSize=40&fontColor=000000&descAlignY=50&fontAlignY=30)
+# SDI Pipeline Integration Scaffold
 
+This repository's supported entry point is the production integration scaffold
+under `integration/`. It will coordinate the CI, image-build, CV, and CD Stage
+interfaces for Software-Defined Mobility while keeping those Domain capabilities
+independently replaceable.
 
-**Table of contents** 
-- [1. Introduction](#1-introduction)
-- [2. Design](#2-design)
-- [3. Scenario](#3-scenario)
-- [4. Manual](#4-manual)
+The current scaffold proves packaging and repository verification only. Later
+slices add deterministic Fixtures that can prove pipeline integration behavior.
+Fixture output is not Validation evidence, Domain success, KPI evidence, or proof
+that a real composition, build, simulation, or deployment capability exists.
 
+## Development
 
-## 1. Introduction
-This is a CI/CV/CD pipeline framework for software-defined future mobility.
+Install [`uv`](https://docs.astral.sh/uv/) and run the deterministic baseline
+verification command from any directory:
 
-Main features of this pipeline framework is:
-* **Continuous Integration (CI)**: Automated service integration of AI-enabled mobility service (e.g., ROS2, Autoware)
-![CI Flow](assets/CI_main.png)
-* **Continuous Validation (CV)**: Simulation(e.g., Gazebo, CARLA)-based virtual validation of autonomous driving software
-![Gazebo Simulation](assets/gazebo_office_world.png) 
-* **Continuous Deployment (CD)**: Split deployment of moiblity software to mobility device and infrastrucutre (e.g., edge or cloud servers) 
+```sh
+integration/scripts/verify
+```
 
-For more details please check the APSEC'25 Tools Paper - [OrchestML](/CI/APSEC_2025_Tools.pdf).
+The command installs the exact locked Python 3.12 environment and checks the
+public CLI with pytest, Ruff, and Basedpyright. The installed command is:
 
-## 2. Design
+```sh
+uv run --project integration sdi-integration --help
+```
 
-[Software Requirement Specification](https://docs.google.com/spreadsheets/d/1P-EfpCEkrHRfhBJHL3unYKW5okFbLe2h5jsJ6gXnRrw/edit?usp=sharing)
+## Repository Areas
 
-[Software Designs (Models)](https://drive.google.com/drive/folders/1rNpvV7xWhPPySddRkV-D2rOdhiFWtSDM?usp=drive_link)
-- Component diagram
-- Sequence diagram
+- `integration/`: the independently owned Python package, contracts, Stage
+  profiles, Fixtures, tests, and verification entry point.
+- `requirements/`, `profiles/`, and `runs/`: version-controlled, dispatchable
+  inputs introduced by the run-contract implementation.
+- `deployment/jenkins/`: reproducible Jenkins deployment configuration added by
+  the deployment implementation.
+- `.github/workflows/`: protected workflow configuration added by the handoff
+  implementation.
+- `docs/`: role-neutral setup, operation, maintenance, and readiness guidance.
+- `CV/gazebo/`: retained Gazebo source assets. They are not connected to the
+  integration scaffold.
+- `CI/`: an unsupported workspace reserved for a possible future composition
+  adapter. It is not a supported entry point.
 
-## 3. Scenario
-![Year 2 Scenario](assets/year2-scenario.png)
-
-
-## 4. Manual
-For more details regarding the usage of the CI tool, please visit the original repo of OrchestML [here](https://github.com/gurkhaman/OrchestML).
+The Year-1 implementation and its artifact formats were retired rather than
+carried forward. Git history remains the archive.
