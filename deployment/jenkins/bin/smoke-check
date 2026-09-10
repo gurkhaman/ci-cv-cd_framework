@@ -328,6 +328,12 @@ test "$(cat /etc/sdi/jenkins-agent-label)" = "''' + agentLabel + '''"
 test "$(python3 --version)" = "Python 3.12.13"
 test "$(uv --version)" = "uv 0.12.1 (x86_64-unknown-linux-musl)"
 test "$(java -jar /usr/share/jenkins/agent.jar -version)" = "3391.va_37fa_a_305d6d"
+sdi-integration --version
+if [ "$(cat /etc/sdi/jenkins-agent-role)" = integration ]; then
+  ! command -v sdi-fixture-adapter >/dev/null 2>&1
+else
+  sdi-fixture-adapter --help >/dev/null
+fi
 git --version
 test ! -e /var/run/docker.sock
 test "$(find /run/secrets -maxdepth 1 -type f | wc -l)" -eq 1

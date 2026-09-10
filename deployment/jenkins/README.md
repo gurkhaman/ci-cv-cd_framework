@@ -13,8 +13,9 @@ The tracked authority is:
   Linux/amd64 image digest.
 - `controller/plugins.txt`: the complete 47-plugin runtime set, including every
   transitive dependency at an exact version.
-- `agents/Dockerfile`: the exact Jenkins Remoting, Python 3.12.13, and `uv`
-  inputs used to construct each minimal agent image.
+- `agents/Dockerfile`: the exact Jenkins Remoting, Python 3.12.13, `uv`, and
+  locked production integration package used to construct each minimal agent
+  image without inherited volume metadata.
 - `casc/jenkins.yaml`: global security, zero-executor, five-node, retention, and
   Job DSL configuration.
 - `jobs/pipeline-integration.groovy`: the fixed parameterized Pipeline SCM job.
@@ -35,7 +36,8 @@ but they are not configuration authority.
 - Python 3 for the isolated smoke-check client.
 - `uv` for strict adapter-descriptor validation and runtime-image selection.
 - Outbound HTTPS access to Docker Hub, GHCR, the Jenkins update service during a
-  clean image build, and GitHub when the job eventually checks out a revision.
+  clean image build, PyPI during a clean agent build, and GitHub when the job
+  eventually checks out a revision.
 
 `bin/stack validate` verifies the live Docker platform, secret ownership and
 permissions, supplied values, Dockerfile syntax, and the fully interpolated
@@ -112,7 +114,8 @@ deployment/jenkins/bin/stack stop
 ```
 
 `start` builds the exact controller and five agent images, starts all six
-containers, and waits for process health. Jenkins is available only at
+containers, rejects an agent image that declares any volume, and waits for
+process health. Jenkins is available only at
 `http://127.0.0.1:<configured-port>`. No inbound-agent TCP port is published;
 all agents connect over WebSocket. `stop` removes all containers and networks
 but retains only the `jenkins-home` named volume. Agent workspaces are separate
@@ -186,11 +189,15 @@ Authorization plugin.
 
 The agent build combines the descriptor-selected CPython 3.12.13 Fixture runtime
 with the official Jenkins inbound-agent `3391.va_37fa_a_305d6d-2` JDK 21 image
-and official `uv` 0.12.1 image. All three inputs are immutable multi-platform
-digests, and the deployment selects Linux/amd64. The official images provide the
-maintained Remoting/WebSocket launcher, Git, Java, Python, and `uv`; the custom
-entrypoint exists only to read the externally mounted registration file without
-placing its value in Compose environment configuration.
+and official `uv` 0.12.1 image. The production integration package and its exact
+dependencies are installed from `integration/uv.lock` while the image has build
+network access, so the internal-network agents need no runtime package download.
+All three image inputs are immutable multi-platform digests, and the deployment
+selects Linux/amd64. Remoting files are copied into the descriptor runtime rather
+than inherited as the final image, preventing the upstream anonymous volume
+declarations from persisting agent state. The custom entrypoint exists only to
+read the externally mounted registration file without placing its value in
+Compose environment configuration.
 
 Controller health and Fixture execution prove pipeline machinery only. They are
 not Domain success, Validation evidence, deployment evidence, or KPI evidence.

@@ -59,6 +59,8 @@ def _write_fake_deployment_tools(fake_bin: Path) -> None:
         'case "$*" in\n'
         "  'version --format {{.Server.Os}}/{{.Server.Arch}}') "
         "printf 'linux/amd64\\n' ;;\n"
+        "  'image inspect --format {{json .Config.Volumes}}'*) "
+        "printf 'null\\n' ;;\n"
         "esac\n"
     )
     docker.chmod(0o755)
@@ -159,6 +161,16 @@ def _assert_single_agent_reconciliation(
         "up --no-build --no-deps --detach --wait --wait-timeout 240 cv" in reconcile_log
     )
     assert "--tag sdi-jenkins-controller" not in reconcile_log
+    assert reconcile_log.count("image inspect --format {{json .Config.Volumes}}") == 1
+
+
+def _assert_stack_lifecycle_log(lifecycle_log: str) -> None:
+    assert "compose" in lifecycle_log
+    assert "build integration ci image-build cv cd" in lifecycle_log
+    assert "up --no-build --detach --wait --wait-timeout 240" in lifecycle_log
+    assert "image inspect --format {{json .Config.Volumes}}" in lifecycle_log
+    assert "down" in lifecycle_log
+    assert "down --volumes" not in lifecycle_log
 
 
 def test_controller_image_and_complete_plugin_set_are_exactly_pinned() -> None:
@@ -395,11 +407,7 @@ def test_stack_validate_uses_compose_and_rejects_insecure_secret_files(
         text=True,
     )
     lifecycle_log = docker_log.read_text()
-    assert "compose" in lifecycle_log
-    assert "build integration ci image-build cv cd" in lifecycle_log
-    assert "up --no-build --detach --wait --wait-timeout 240" in lifecycle_log
-    assert "down" in lifecycle_log
-    assert "down --volumes" not in lifecycle_log
+    _assert_stack_lifecycle_log(lifecycle_log)
 
     _assert_single_agent_reconciliation(
         config,

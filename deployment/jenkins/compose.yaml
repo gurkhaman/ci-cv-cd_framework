@@ -37,8 +37,8 @@ services:
     image: sdi-jenkins-agent-integration:3391.va-37fa-305d6d-2
     platform: linux/amd64
     build:
-      context: .
-      dockerfile: agents/Dockerfile
+      context: ../..
+      dockerfile: deployment/jenkins/agents/Dockerfile
       args:
         RUNTIME_IMAGE: docker.io/library/python@sha256:4766d8b510c428e595d74b9cc5bbb2fae8e26316fffb4adc89908d79aacd58a2
         SDI_JENKINS_AGENT_LABEL: ""
@@ -71,8 +71,8 @@ services:
     image: sdi-jenkins-agent-ci:3391.va-37fa-305d6d-2
     platform: linux/amd64
     build:
-      context: .
-      dockerfile: agents/Dockerfile
+      context: ../..
+      dockerfile: deployment/jenkins/agents/Dockerfile
       args:
         RUNTIME_IMAGE: ${JENKINS_COMPOSITION_AGENT_IMAGE}
         SDI_JENKINS_AGENT_LABEL: composition
@@ -105,8 +105,8 @@ services:
     image: sdi-jenkins-agent-image-build:3391.va-37fa-305d6d-2
     platform: linux/amd64
     build:
-      context: .
-      dockerfile: agents/Dockerfile
+      context: ../..
+      dockerfile: deployment/jenkins/agents/Dockerfile
       args:
         RUNTIME_IMAGE: ${JENKINS_IMAGE_BUILD_AGENT_IMAGE}
         SDI_JENKINS_AGENT_LABEL: image-build
@@ -139,8 +139,8 @@ services:
     image: sdi-jenkins-agent-cv:3391.va-37fa-305d6d-2
     platform: linux/amd64
     build:
-      context: .
-      dockerfile: agents/Dockerfile
+      context: ../..
+      dockerfile: deployment/jenkins/agents/Dockerfile
       args:
         RUNTIME_IMAGE: ${JENKINS_CV_AGENT_IMAGE}
         SDI_JENKINS_AGENT_LABEL: cv
@@ -173,8 +173,8 @@ services:
     image: sdi-jenkins-agent-cd:3391.va-37fa-305d6d-2
     platform: linux/amd64
     build:
-      context: .
-      dockerfile: agents/Dockerfile
+      context: ../..
+      dockerfile: deployment/jenkins/agents/Dockerfile
       args:
         RUNTIME_IMAGE: ${JENKINS_CD_AGENT_IMAGE}
         SDI_JENKINS_AGENT_LABEL: cd

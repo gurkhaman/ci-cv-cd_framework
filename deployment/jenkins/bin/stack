@@ -350,8 +350,27 @@ $plugin
         fail 'plugin lock does not match the reviewed versions'
 
     docker build --check --file "$root/controller/Dockerfile" "$root" >/dev/null
-    docker build --check --file "$root/agents/Dockerfile" "$root" >/dev/null
+    docker build --check --file "$root/agents/Dockerfile" "$repository_root" >/dev/null
     compose config --quiet
+}
+
+agent_image() {
+    case "$1" in
+        integration) printf '%s\n' 'sdi-jenkins-agent-integration:3391.va-37fa-305d6d-2' ;;
+        ci) printf '%s\n' 'sdi-jenkins-agent-ci:3391.va-37fa-305d6d-2' ;;
+        image-build) printf '%s\n' 'sdi-jenkins-agent-image-build:3391.va-37fa-305d6d-2' ;;
+        cv) printf '%s\n' 'sdi-jenkins-agent-cv:3391.va-37fa-305d6d-2' ;;
+        cd) printf '%s\n' 'sdi-jenkins-agent-cd:3391.va-37fa-305d6d-2' ;;
+    esac
+}
+
+validate_agent_image() {
+    agent=$1
+    image=$(agent_image "$agent")
+    volumes=$(docker image inspect --format '{{json .Config.Volumes}}' "$image") || \
+        fail "cannot inspect built $agent agent image"
+    [ "$volumes" = null ] || \
+        fail "$agent agent image declares an unexpected persistent volume"
 }
 
 build_controller() {
@@ -375,11 +394,15 @@ case "$action" in
         validate
         build_controller
         compose build integration ci image-build cv cd
+        for agent in integration ci image-build cv cd; do
+            validate_agent_image "$agent"
+        done
         compose up --no-build --detach --wait --wait-timeout 240
         ;;
     reconcile-agent)
         validate
         compose build "$reconcile_agent"
+        validate_agent_image "$reconcile_agent"
         compose up --no-build --no-deps --detach --wait --wait-timeout 240 \
             "$reconcile_agent"
         ;;
