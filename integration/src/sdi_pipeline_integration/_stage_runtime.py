@@ -41,8 +41,11 @@ from ._stage_contracts import (
     AdapterDescriptor,
     AdapterRequest,
     AdapterResponse,
+    DomainOutcome,
+    ImplementationMode,
     StageName,
     StageProfile,
+    contains_sensitive_material,
 )
 from ._yaml_input import InputError, parse_yaml
 
@@ -63,6 +66,8 @@ class StageInputSource:
     media_type: str
     schema_version: str
     content: bytes
+    producer_implementation_mode: ImplementationMode | None = None
+    producer_domain_outcome: DomainOutcome | None = None
 
 
 @dataclass(frozen=True)
@@ -72,6 +77,14 @@ class StageExecution:
     envelope: AcceptedAttemptEnvelope
     files: dict[str, bytes]
     outputs: dict[str, StageInputSource]
+
+
+class ExternalCancellation(BaseException):
+    """External signal requiring immediate result-less cleanup."""
+
+    def __init__(self, signal_number: int) -> None:
+        self.signal_number = signal_number
+        super().__init__(f"externally cancelled by signal {signal_number}")
 
 
 INPUT_MODELS: dict[str, type[BaseModel]] = {
@@ -324,9 +337,12 @@ def _capture_candidate(  # noqa: C901, PLR0912, PLR0913, PLR0915, PLR0917
         msg = "candidate response correlation does not match the request"
         raise InputError(msg)
     if implementation_mode == "fixture" and (
-        response.domain_outcome != "not_evaluated"
+        response.domain_outcome == "succeeded"
         or response.reason is None
-        or response.reason.category != "fixture"
+        or (
+            response.domain_outcome == "not_evaluated"
+            and response.reason.category != "fixture"
+        )
     ):
         msg = "Fixture response must preserve its evidence limits"
         raise InputError(msg)
@@ -374,6 +390,12 @@ def _capture_candidate(  # noqa: C901, PLR0912, PLR0913, PLR0915, PLR0917
         except ValidationError as error:
             msg = f"candidate output contract validation failed: {slot}: {error}"
             raise InputError(msg) from error
+    if any(
+        getattr(output, "evidence_basis", None) != implementation_mode
+        for output in validated_outputs.values()
+    ):
+        msg = "candidate output evidence basis does not match the reviewed adapter"
+        raise InputError(msg)
 
     if response.diagnostic.present:
         try:
@@ -389,6 +411,9 @@ def _capture_candidate(  # noqa: C901, PLR0912, PLR0913, PLR0915, PLR0917
             for character in diagnostic
         ):
             msg = "candidate diagnostic contains unsanitized control characters"
+            raise InputError(msg)
+        if contains_sensitive_material(diagnostic):
+            msg = "candidate diagnostic contains credentials or private endpoints"
             raise InputError(msg)
 
     if response.execution_conclusion == "succeeded":
@@ -579,18 +604,6 @@ def _accepted_envelope(  # noqa: PLR0913
                 "truncated": response.diagnostic.truncated,
             }
         )
-    accepted_inputs: list[dict[str, object]] = []
-    for declared in request.inputs:
-        source = input_sources[declared.slot]
-        accepted_inputs.append(
-            {
-                "slot": declared.slot,
-                "source_path": source.source_path,
-                "schema_version": source.schema_version,
-                "byte_size": len(source.content),
-                "sha256": hashlib.sha256(source.content).hexdigest(),
-            }
-        )
     envelope_data: dict[str, object] = {
         "schema_version": "sdi.accepted-attempt-envelope/v1",
         "correlation": request.correlation.model_dump(mode="json"),
@@ -598,15 +611,17 @@ def _accepted_envelope(  # noqa: PLR0913
         "execution_conclusion": response.execution_conclusion,
         "implementation_mode": descriptor.implementation_mode,
         "domain_outcome": response.domain_outcome,
+        "adapter_response_accepted": True,
         "process": {
             "started_at": started_at,
             "finished_at": finished_at,
             "duration_ms": max(
                 0, int((finished_at - started_at).total_seconds() * 1000)
             ),
+            "termination": "exited",
             "exit_code": 0,
         },
-        "accepted_inputs": accepted_inputs,
+        "accepted_inputs": _accepted_inputs(request, input_sources),
         "accepted_files": accepted_files,
     }
     if response.reason is not None:
@@ -618,10 +633,132 @@ def _accepted_envelope(  # noqa: PLR0913
     )
 
 
+def _accepted_inputs(
+    request: AdapterRequest, input_sources: Mapping[str, StageInputSource]
+) -> list[dict[str, object]]:
+    return [
+        {
+            "slot": declared.slot,
+            "source_path": input_sources[declared.slot].source_path,
+            "schema_version": input_sources[declared.slot].schema_version,
+            "byte_size": len(input_sources[declared.slot].content),
+            "sha256": hashlib.sha256(input_sources[declared.slot].content).hexdigest(),
+        }
+        for declared in request.inputs
+    ]
+
+
+def _runtime_failure_execution(  # noqa: PLR0913
+    *,
+    descriptor: AdapterDescriptor,
+    request: AdapterRequest,
+    input_sources: Mapping[str, StageInputSource],
+    started_at: datetime,
+    finished_at: datetime,
+    conclusion: str,
+    termination: str,
+    code: str,
+    summary: str,
+    exit_code: int | None = None,
+    signal_number: int | None = None,
+) -> StageExecution:
+    process: dict[str, object] = {
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "duration_ms": max(0, int((finished_at - started_at).total_seconds() * 1000)),
+        "termination": termination,
+    }
+    if exit_code is not None:
+        process["exit_code"] = exit_code
+    if signal_number is not None:
+        process["signal"] = signal_number
+    envelope = AcceptedAttemptEnvelope.model_validate(
+        {
+            "schema_version": "sdi.accepted-attempt-envelope/v1",
+            "correlation": request.correlation.model_dump(mode="json"),
+            "lifecycle_state": "completed",
+            "execution_conclusion": conclusion,
+            "implementation_mode": descriptor.implementation_mode,
+            "domain_outcome": "not_evaluated",
+            "reason": {
+                "category": "adapter",
+                "code": code,
+                "summary": summary,
+            },
+            "adapter_response_accepted": False,
+            "process": process,
+            "accepted_inputs": _accepted_inputs(request, input_sources),
+            "accepted_files": [],
+        },
+        strict=True,
+        extra="forbid",
+    )
+    return StageExecution(envelope=envelope, files={}, outputs={})
+
+
+def skipped_stage_execution(
+    *,
+    execution_id: str,
+    stage: StageName,
+    implementation_mode: ImplementationMode,
+    code: str,
+    summary: str,
+) -> StageExecution:
+    """Create one assembler-owned typed skip without claiming process work."""
+    envelope = AcceptedAttemptEnvelope.model_validate(
+        {
+            "schema_version": "sdi.accepted-attempt-envelope/v1",
+            "correlation": {
+                "execution_id": execution_id,
+                "stage": stage,
+                "attempt_number": 1,
+            },
+            "lifecycle_state": "skipped",
+            "execution_conclusion": "skipped",
+            "implementation_mode": implementation_mode,
+            "domain_outcome": "not_evaluated",
+            "reason": {
+                "category": "dependency",
+                "code": code,
+                "summary": summary,
+            },
+            "adapter_response_accepted": False,
+            "accepted_inputs": [],
+            "accepted_files": [],
+        },
+        strict=True,
+        extra="forbid",
+    )
+    return StageExecution(envelope=envelope, files={}, outputs={})
+
+
+def _publish_execution(attempt_root: Path, execution: StageExecution) -> None:
+    staging = Path(
+        tempfile.mkdtemp(
+            prefix=f".{attempt_root.name}.accepted-", dir=attempt_root.parent
+        )
+    )
+    try:
+        for relative_path, content in execution.files.items():
+            _write_file(staging, relative_path, content)
+        _write_file(
+            staging,
+            "accepted-attempt.json",
+            _canonical_json(
+                execution.envelope.model_dump(mode="json", exclude_none=True)
+            ),
+        )
+        staging.replace(attempt_root)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+
+
 def _materialize_stage_inputs(
     profile: StageProfile,
     input_root: Path,
     available_inputs: Mapping[str, StageInputSource],
+    implementation_mode: ImplementationMode,
 ) -> tuple[list[dict[str, object]], dict[str, BaseModel]]:
     required_slots = {item.slot for item in profile.inputs}
     selected_sources = {
@@ -636,6 +773,13 @@ def _materialize_stage_inputs(
     validated_inputs: dict[str, BaseModel] = {}
     for grant in profile.inputs:
         source = selected_sources[grant.slot]
+        if (
+            implementation_mode == "implemented"
+            and source.producer_implementation_mode == "fixture"
+            and source.producer_domain_outcome == "not_evaluated"
+        ):
+            msg = "implemented adapter cannot consume unevaluated Fixture output"
+            raise InputError(msg)
         model = INPUT_MODELS.get(grant.schema_version)
         if (
             model is None
@@ -714,16 +858,73 @@ def _process_group_exists(process_group: int) -> bool:
     return True
 
 
+def _candidate_rejection_reason(message: str) -> tuple[str, str]:  # noqa: PLR0911
+    lowered = message.lower()
+    if "did not publish response.json" in lowered:
+        return (
+            "sdi.adapter.response-absent",
+            "The Stage adapter did not publish a candidate response.",
+        )
+    if "response contract" in lowered or "valid json" in lowered:
+        return (
+            "sdi.adapter.response-malformed",
+            "The Stage adapter published a malformed candidate response.",
+        )
+    if "correlation" in lowered or "identity" in lowered:
+        return (
+            "sdi.adapter.identity-mismatch",
+            "The candidate identity did not match the Stage request.",
+        )
+    if "undeclared" in lowered or "ungranted" in lowered:
+        return (
+            "sdi.adapter.undeclared-output",
+            "The candidate contained output outside its reviewed grants.",
+        )
+    if any(
+        marker in lowered
+        for marker in ("symbolic link", "hard-linked", "non-regular", "device")
+    ):
+        return (
+            "sdi.adapter.unsafe-output",
+            "The candidate contained an unsafe filesystem object.",
+        )
+    if "exceeds" in lowered:
+        return (
+            "sdi.adapter.size-violation",
+            "The candidate exceeded a reviewed byte or tree limit.",
+        )
+    if "required output" in lowered or "inventory" in lowered:
+        return (
+            "sdi.adapter.output-missing",
+            "The candidate inventory did not contain exactly its declared files.",
+        )
+    if "changed" in lowered or "replaced" in lowered:
+        return (
+            "sdi.adapter.response-race",
+            "The candidate changed during transactional validation.",
+        )
+    if "contract validation" in lowered or "unsupported schema" in lowered:
+        return (
+            "sdi.adapter.schema-mismatch",
+            "The candidate output did not satisfy its reviewed contract.",
+        )
+    return (
+        "sdi.adapter.candidate-rejected",
+        "The complete Stage candidate transaction was rejected.",
+    )
+
+
 def _terminate_process_group(
-    process: subprocess.Popen[bytes], process_group: int
+    process: subprocess.Popen[bytes], process_group: int, *, immediate: bool = False
 ) -> None:
     try:
         os.killpg(process_group, signal.SIGTERM)
     except ProcessLookupError:
         return
-    deadline = time.monotonic() + ADAPTER_SHUTDOWN_GRACE_SECONDS
-    while _process_group_exists(process_group) and time.monotonic() < deadline:
-        time.sleep(0.05)
+    if not immediate:
+        deadline = time.monotonic() + ADAPTER_SHUTDOWN_GRACE_SECONDS
+        while _process_group_exists(process_group) and time.monotonic() < deadline:
+            time.sleep(0.05)
     if _process_group_exists(process_group):
         with suppress(ProcessLookupError):
             os.killpg(process_group, signal.SIGKILL)
@@ -759,22 +960,14 @@ def execute_stage(  # noqa: PLR0913
         attempt_root=attempt_root,
         available_inputs=committed_stage_sources(repository, identified),
     )
-    return execution.envelope.model_dump(mode="json")
+    return execution.envelope.model_dump(mode="json", exclude_none=True)
 
 
-def execute_identified_stage(  # noqa: PLR0915
-    *,
-    repository: GitRepository,
-    identified: Mapping[str, Any],
-    descriptor_path: str,
-    attempt_root: Path,
-    available_inputs: Mapping[str, StageInputSource],
-) -> StageExecution:
-    """Execute one Stage while preserving an already assigned Execution ID."""
+def load_stage_adapter(
+    repository: GitRepository, descriptor_path: str
+) -> tuple[AdapterDescriptor, StageProfile]:
+    """Load one descriptor and its digest-bound reviewed Stage profile."""
     validate_repository_path(descriptor_path)
-    if attempt_root.exists():
-        msg = "attempt root must not already exist"
-        raise InputError(msg)
     descriptor_blob = repository.read_regular_file(descriptor_path)
     descriptor = _validate_yaml_model(AdapterDescriptor, descriptor_blob)
     profile_blob = repository.read_regular_file(descriptor.stage_profile)
@@ -791,12 +984,54 @@ def execute_identified_stage(  # noqa: PLR0915
     ):
         msg = "Stage profile identity does not match the reviewed descriptor"
         raise InputError(msg)
+    return descriptor, profile
+
+
+def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
+    *,
+    repository: GitRepository,
+    identified: Mapping[str, Any],
+    descriptor_path: str,
+    attempt_root: Path,
+    available_inputs: Mapping[str, StageInputSource],
+    deadline_monotonic: float | None = None,
+) -> StageExecution:
+    """Execute one Stage while preserving an already assigned Execution ID."""
+    if attempt_root.exists():
+        msg = "attempt root must not already exist"
+        raise InputError(msg)
+    descriptor, profile = load_stage_adapter(repository, descriptor_path)
 
     attempt_root.parent.mkdir(parents=True, exist_ok=True)
+    if descriptor.implementation_mode == "not_implemented":
+        execution = skipped_stage_execution(
+            execution_id=identified["execution_id"],
+            stage=descriptor.stage,
+            implementation_mode="not_implemented",
+            code="sdi.stage.not-implemented",
+            summary="No reviewed implementation is available for this Stage.",
+        )
+        _publish_execution(attempt_root, execution)
+        return execution
+    if descriptor.implementation_mode == "implemented" and any(
+        source.producer_implementation_mode == "fixture"
+        and source.producer_domain_outcome == "not_evaluated"
+        for source in available_inputs.values()
+    ):
+        execution = skipped_stage_execution(
+            execution_id=identified["execution_id"],
+            stage=descriptor.stage,
+            implementation_mode="implemented",
+            code="sdi.dependency.fixture-evidence",
+            summary="Implemented work cannot consume unevaluated Fixture output.",
+        )
+        _publish_execution(attempt_root, execution)
+        return execution
+
     work_root = Path(
         tempfile.mkdtemp(prefix=f".{attempt_root.name}.work-", dir=attempt_root.parent)
     )
-    accepted_staging: Path | None = None
+    process: subprocess.Popen[bytes] | None = None
     try:
         input_root = work_root / "inputs"
         output_root = work_root / "candidate"
@@ -811,6 +1046,7 @@ def execute_identified_stage(  # noqa: PLR0915
             profile,
             input_root,
             available_inputs,
+            descriptor.implementation_mode,
         )
         request = AdapterRequest.model_validate(
             {
@@ -835,49 +1071,141 @@ def execute_identified_stage(  # noqa: PLR0915
             _canonical_json(request.model_dump(mode="json")),
         )
         started_at = datetime.now(UTC)
-        process = subprocess.Popen(  # noqa: S603
-            [
-                descriptor.entrypoint,
-                "run",
-                "--request",
-                str(request_path),
-                "--input-root",
-                str(input_root),
-                "--output-root",
-                str(output_root),
-            ],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env={
-                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-                "LC_ALL": "C.UTF-8",
-            },
-            start_new_session=True,
-        )
-        process_group = process.pid
         try:
-            return_code = process.wait(timeout=profile.work_limit_seconds)
-        except subprocess.TimeoutExpired as error:
+            process = subprocess.Popen(  # noqa: S603
+                [
+                    descriptor.entrypoint,
+                    "run",
+                    "--request",
+                    str(request_path),
+                    "--input-root",
+                    str(input_root),
+                    "--output-root",
+                    str(output_root),
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env={
+                    "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                    "LC_ALL": "C.UTF-8",
+                },
+                start_new_session=True,
+            )
+        except OSError:
+            execution = _runtime_failure_execution(
+                descriptor=descriptor,
+                request=request,
+                input_sources=available_inputs,
+                started_at=started_at,
+                finished_at=datetime.now(UTC),
+                conclusion="failed",
+                termination="lost",
+                code="sdi.adapter.process-lost",
+                summary="The Stage adapter process could not be started.",
+            )
+            _publish_execution(attempt_root, execution)
+            return execution
+        process_group = process.pid
+        timeout_seconds = float(profile.work_limit_seconds)
+        timeout_code = "sdi.stage.deadline-exceeded"
+        timeout_summary = "The Stage adapter exceeded its work limit."
+        if deadline_monotonic is not None:
+            remaining = max(0.0, deadline_monotonic - time.monotonic())
+            if remaining < timeout_seconds:
+                timeout_seconds = remaining
+                timeout_code = "sdi.run.deadline-exceeded"
+                timeout_summary = "The Pipeline integration run deadline expired."
+        try:
+            return_code = process.wait(timeout=timeout_seconds)
+        except ExternalCancellation:
+            _terminate_process_group(process, process_group, immediate=True)
+            raise
+        except subprocess.TimeoutExpired:
             _terminate_process_group(process, process_group)
-            msg = "Stage adapter exceeded its work limit"
-            raise InputError(msg) from error
+            execution = _runtime_failure_execution(
+                descriptor=descriptor,
+                request=request,
+                input_sources=available_inputs,
+                started_at=started_at,
+                finished_at=datetime.now(UTC),
+                conclusion="timed_out",
+                termination="timed_out",
+                code=timeout_code,
+                summary=timeout_summary,
+            )
+            _publish_execution(attempt_root, execution)
+            return execution
         finished_at = datetime.now(UTC)
         if _process_group_exists(process_group):
             _terminate_process_group(process, process_group)
-            msg = "Stage adapter left descendant processes after exit"
-            raise InputError(msg)
+            finished_at = datetime.now(UTC)
+            signaled = return_code < 0
+            execution = _runtime_failure_execution(
+                descriptor=descriptor,
+                request=request,
+                input_sources=available_inputs,
+                started_at=started_at,
+                finished_at=finished_at,
+                conclusion="failed",
+                termination="signaled" if signaled else "exited",
+                exit_code=None if signaled else return_code,
+                signal_number=-return_code if signaled else None,
+                code="sdi.adapter.descendants-survived",
+                summary="The Stage adapter left descendant processes after exit.",
+            )
+            _publish_execution(attempt_root, execution)
+            return execution
         if return_code != 0:
-            msg = "Stage adapter did not publish a candidate response successfully"
-            raise InputError(msg)
-        response, captured = _capture_candidate(
-            output_root,
-            output_root_identity,
-            request,
-            descriptor.implementation_mode,
-            identified,
-            input_models,
-        )
+            signaled = return_code < 0
+            execution = _runtime_failure_execution(
+                descriptor=descriptor,
+                request=request,
+                input_sources=available_inputs,
+                started_at=started_at,
+                finished_at=finished_at,
+                conclusion="failed",
+                termination="signaled" if signaled else "exited",
+                exit_code=None if signaled else return_code,
+                signal_number=-return_code if signaled else None,
+                code=(
+                    "sdi.adapter.process-signaled"
+                    if signaled
+                    else "sdi.adapter.nonzero-exit"
+                ),
+                summary=(
+                    "The Stage adapter process was terminated by a signal."
+                    if signaled
+                    else "The Stage adapter process exited unsuccessfully."
+                ),
+            )
+            _publish_execution(attempt_root, execution)
+            return execution
+        try:
+            response, captured = _capture_candidate(
+                output_root,
+                output_root_identity,
+                request,
+                descriptor.implementation_mode,
+                identified,
+                input_models,
+            )
+        except (InputError, OSError) as error:
+            code, summary = _candidate_rejection_reason(str(error))
+            execution = _runtime_failure_execution(
+                descriptor=descriptor,
+                request=request,
+                input_sources=available_inputs,
+                started_at=started_at,
+                finished_at=finished_at,
+                conclusion="failed",
+                termination="exited",
+                exit_code=0,
+                code=code,
+                summary=summary,
+            )
+            _publish_execution(attempt_root, execution)
+            return execution
         envelope = _accepted_envelope(
             descriptor=descriptor,
             request=request,
@@ -888,28 +1216,7 @@ def execute_identified_stage(  # noqa: PLR0915
             finished_at=finished_at,
         )
 
-        accepted_staging = Path(
-            tempfile.mkdtemp(
-                prefix=f".{attempt_root.name}.accepted-", dir=attempt_root.parent
-            )
-        )
         output_by_slot = {item.slot: item for item in request.outputs}
-        for slot in response.produced_outputs:
-            grant = output_by_slot[slot]
-            _write_file(accepted_staging, grant.path, captured[grant.path])
-        if response.diagnostic.present:
-            _write_file(
-                accepted_staging,
-                request.diagnostic.path,
-                captured[request.diagnostic.path],
-            )
-        _write_file(
-            accepted_staging,
-            "accepted-attempt.json",
-            _canonical_json(envelope.model_dump(mode="json")),
-        )
-        accepted_staging.replace(attempt_root)
-        accepted_staging = None
         output_sources = {
             slot: StageInputSource(
                 source_path=(
@@ -919,18 +1226,24 @@ def execute_identified_stage(  # noqa: PLR0915
                 media_type=output_by_slot[slot].media_type,
                 schema_version=output_by_slot[slot].schema_version,
                 content=captured[output_by_slot[slot].path],
+                producer_implementation_mode=descriptor.implementation_mode,
+                producer_domain_outcome=response.domain_outcome,
             )
             for slot in response.produced_outputs
         }
         accepted_files = {
             item.path: captured[item.path] for item in envelope.accepted_files
         }
-        return StageExecution(
+        execution = StageExecution(
             envelope=envelope,
             files=accepted_files,
             outputs=output_sources,
         )
+        _publish_execution(attempt_root, execution)
+        return execution  # noqa: TRY300
+    except ExternalCancellation:
+        if process is not None and process.poll() is None:
+            _terminate_process_group(process, process.pid, immediate=True)
+        raise
     finally:
-        if accepted_staging is not None:
-            shutil.rmtree(accepted_staging, ignore_errors=True)
         shutil.rmtree(work_root, ignore_errors=True)

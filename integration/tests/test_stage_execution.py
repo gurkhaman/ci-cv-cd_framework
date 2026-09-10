@@ -118,7 +118,7 @@ def test_executes_the_committed_composition_fixture_deterministically(
     )
 
 
-def test_rejects_an_undeclared_candidate_without_salvaging_files(
+def test_records_an_undeclared_candidate_without_salvaging_files(
     tmp_path: Path,
 ) -> None:
     repository, _ = _commit_fixture_repository(tmp_path)
@@ -185,10 +185,13 @@ secret_bindings: []
 
     completed = _execute(repository, commit_sha, attempt_root)
 
-    assert completed.returncode == 2
-    assert completed.stdout == ""
-    assert "candidate bundle" in completed.stderr.lower()
-    assert not attempt_root.exists()
+    assert completed.returncode == 0, completed.stderr
+    envelope = json.loads(completed.stdout)
+    assert envelope["execution_conclusion"] == "failed"
+    assert envelope["adapter_response_accepted"] is False
+    assert envelope["reason"]["code"] == "sdi.adapter.undeclared-output"
+    assert envelope["accepted_files"] == []
+    assert {path.name for path in attempt_root.iterdir()} == {"accepted-attempt.json"}
     assert not any(
         path.read_bytes() == b"must not be accepted"
         for path in tmp_path.rglob("undeclared.txt")
@@ -196,7 +199,9 @@ secret_bindings: []
     )
 
 
-def test_rejects_a_replaced_candidate_root(tmp_path: Path) -> None:
+def test_records_a_replaced_candidate_root_without_accepting_its_response(
+    tmp_path: Path,
+) -> None:
     repository, _ = _commit_fixture_repository(tmp_path)
     profile_path = repository / "integration/stage-profiles/composition-v1.yaml"
     profile_digest = hashlib.sha256(profile_path.read_bytes()).hexdigest()
@@ -264,10 +269,13 @@ secret_bindings: []
 
     completed = _execute(repository, commit_sha, attempt_root)
 
-    assert completed.returncode == 2
-    assert completed.stdout == ""
-    assert "root was replaced" in completed.stderr.lower()
-    assert not attempt_root.exists()
+    assert completed.returncode == 0, completed.stderr
+    envelope = json.loads(completed.stdout)
+    assert envelope["execution_conclusion"] == "failed"
+    assert envelope["adapter_response_accepted"] is False
+    assert envelope["reason"]["code"] == "sdi.adapter.response-race"
+    assert envelope["accepted_files"] == []
+    assert {path.name for path in attempt_root.iterdir()} == {"accepted-attempt.json"}
 
 
 @pytest.mark.parametrize(
@@ -304,3 +312,29 @@ def test_rejects_unconfined_output_grants_before_invocation(
     assert completed.returncode == 2
     assert completed.stdout == ""
     assert "path" in completed.stderr.lower()
+
+
+def test_rejects_a_descriptor_profile_digest_mismatch_before_invocation(
+    tmp_path: Path,
+) -> None:
+    repository, _ = _commit_fixture_repository(tmp_path)
+    descriptor = repository / "deployment/jenkins/adapters/composition-fixture-v1.yaml"
+    old_digest = next(
+        line.split(": ", 1)[1]
+        for line in descriptor.read_text().splitlines()
+        if line.startswith("stage_profile_sha256:")
+    )
+    descriptor.write_text(
+        descriptor.read_text().replace(old_digest, "a" * 64), encoding="utf-8"
+    )
+    _git(repository, "add", ".")
+    _git(repository, "commit", "-m", "Add mismatched descriptor digest")
+    commit_sha = _git(repository, "rev-parse", "HEAD")
+    attempt_root = tmp_path / "must-not-exist"
+
+    completed = _execute(repository, commit_sha, attempt_root)
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert "descriptor digest" in completed.stderr
+    assert not attempt_root.exists()

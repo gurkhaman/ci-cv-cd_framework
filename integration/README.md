@@ -90,3 +90,24 @@ Every attempt remains `implementation_mode: fixture` and
 `domain_outcome: not_evaluated`; the result explicitly records
 `kpi_evaluation: not_evaluated` and contains no overall Domain or six-combination
 verdict.
+
+## Settled Failure Semantics
+
+`dispatch-local` publishes a complete contract-valid bundle whenever finalization
+remains possible. Handled failures, crashes, deadline expiry, rejected candidate
+transactions, unavailable implementations, and blocked dependencies appear as
+typed attempts; skipped attempts never imply that a process ran. Adapter or
+deadline failures return status 1 after printing the result. A valid negative
+Domain outcome still returns status 0 because adapter execution succeeded.
+
+Candidate acceptance is transactional. A malformed, missing, changing, unsafe,
+undeclared, oversized, identity-mismatched, or schema-invalid candidate
+contributes no adapter-authored files. The resulting failed attempt explicitly
+records that no adapter response was accepted. An implemented adapter cannot
+consume unevaluated Fixture output, while an implemented output may feed a later
+Fixture during incremental replacement.
+
+External `SIGINT` or `SIGTERM` cancellation is the deliberate exception: the CLI
+immediately terminates the active adapter process tree, removes attempt-local and
+bundle staging state, and publishes neither Stage attempts nor a Pipeline
+integration result.

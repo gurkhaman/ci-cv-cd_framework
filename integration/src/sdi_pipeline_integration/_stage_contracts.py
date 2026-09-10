@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ipaddress
+import re
 from datetime import datetime
 from typing import Annotated, Literal, Self, cast
 
@@ -37,8 +39,9 @@ CV_PROFILE_VERSION = "sdi.cv-stage-profile/v1"
 CD_PROFILE_VERSION = "sdi.cd-stage-profile/v1"
 
 type StageName = Literal["composition", "image_build", "cv", "cd"]
-type ImplementationMode = Literal["fixture", "implemented"]
-type ExecutionConclusion = Literal["succeeded", "failed"]
+type ImplementationMode = Literal["fixture", "implemented", "not_implemented"]
+type ExecutionConclusion = Literal["succeeded", "failed", "timed_out", "skipped"]
+type AdapterExecutionConclusion = Literal["succeeded", "failed"]
 type DomainOutcome = Literal["succeeded", "failed", "not_evaluated"]
 Sha256 = Annotated[str, StringConstraints(strict=True, pattern=r"^[0-9a-f]{64}$")]
 SlotName = Annotated[
@@ -190,6 +193,45 @@ MAX_ARTIFACT_PATH_BYTES = 512
 MAX_ARTIFACT_COMPONENT_BYTES = 255
 ASCII_CONTROL_LIMIT = 32
 ASCII_DELETE = 127
+IPV4_PATTERN = re.compile(r"(?<![0-9.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9.])")
+IPV6_PATTERN = re.compile(
+    r"(?<![0-9a-f:])[0-9a-f]*:[0-9a-f:.]+(?![0-9a-f:])", re.IGNORECASE
+)
+
+
+def contains_sensitive_material(text: str) -> bool:
+    """Identify endpoint and credential forms forbidden from durable evidence."""
+    # Wire diagnostics have no standard redaction protocol. Reject credential
+    # assignment forms directly and delegate address classification to ipaddress.
+    lowered = text.casefold()
+    if any(
+        marker in lowered
+        for marker in (
+            "http://",
+            "https://",
+            "authorization:",
+            "bearer ",
+            "password=",
+            "password:",
+            "token=",
+            "token:",
+            "secret=",
+            "secret:",
+            "api_key=",
+            "api-key=",
+            "localhost",
+            "::1",
+        )
+    ):
+        return True
+    for candidate in [*IPV4_PATTERN.findall(text), *IPV6_PATTERN.findall(text)]:
+        try:
+            address = ipaddress.ip_address(candidate)
+        except ValueError:
+            continue
+        if address.is_private or address.is_loopback or address.is_link_local:
+            return True
+    return False
 
 
 def _validate_confined_path(path: str) -> str:
@@ -266,6 +308,9 @@ class Reason(ContractModel):
             for character in summary
         ):
             msg = "reason summary must not contain control characters"
+            raise ValueError(msg)
+        if contains_sensitive_material(summary):
+            msg = "reason summary must not contain credentials or private endpoints"
             raise ValueError(msg)
         return summary
 
@@ -451,7 +496,7 @@ class AdapterResponse(ContractModel):
 
     schema_version: Literal["sdi.stage-adapter-response/v1"]
     correlation: Correlation
-    execution_conclusion: ExecutionConclusion
+    execution_conclusion: AdapterExecutionConclusion
     domain_outcome: DomainOutcome
     reason: Reason | SkipJsonSchema[None] = None
     consumed_inputs: list[SlotName]
@@ -474,6 +519,16 @@ class AdapterResponse(ContractModel):
             raise ValueError(msg)
         if self.execution_conclusion == "failed" and self.reason is None:
             msg = "failed adapter execution requires a typed reason"
+            raise ValueError(msg)
+        if self.execution_conclusion not in {"succeeded", "failed"}:
+            msg = "an adapter may report only succeeded or failed execution"
+            raise ValueError(msg)
+        if self.domain_outcome == "failed" and (
+            self.execution_conclusion != "succeeded"
+            or self.reason is None
+            or self.reason.category != "domain"
+        ):
+            msg = "a negative Domain outcome requires a successful execution and reason"
             raise ValueError(msg)
         return self
 
@@ -523,7 +578,9 @@ class ProcessFacts(ContractModel):
     started_at: AwareDatetime
     finished_at: AwareDatetime
     duration_ms: NonNegativeInt
-    exit_code: Literal[0]
+    termination: Literal["exited", "signaled", "timed_out", "lost"]
+    exit_code: int | None = None
+    signal: PositiveInt | None = None
 
     @field_validator("started_at", "finished_at", mode="before")
     @classmethod
@@ -541,6 +598,21 @@ class ProcessFacts(ContractModel):
         if self.duration_ms != expected_duration:
             msg = "process duration does not match its immutable timestamps"
             raise ValueError(msg)
+        if self.termination == "exited" and (
+            self.exit_code is None or self.exit_code < 0 or self.signal is not None
+        ):
+            msg = "an exited process requires a nonnegative exit code"
+            raise ValueError(msg)
+        if self.termination == "signaled" and (
+            self.signal is None or self.exit_code is not None
+        ):
+            msg = "a signaled process requires only its signal number"
+            raise ValueError(msg)
+        if self.termination in {"timed_out", "lost"} and (
+            self.exit_code is not None or self.signal is not None
+        ):
+            msg = f"a {self.termination} process cannot claim an exit status"
+            raise ValueError(msg)
         return self
 
 
@@ -549,12 +621,13 @@ class AcceptedAttemptEnvelope(ContractModel):
 
     schema_version: Literal["sdi.accepted-attempt-envelope/v1"]
     correlation: Correlation
-    lifecycle_state: Literal["completed"]
+    lifecycle_state: Literal["completed", "skipped"]
     execution_conclusion: ExecutionConclusion
     implementation_mode: ImplementationMode
     domain_outcome: DomainOutcome
     reason: Reason | SkipJsonSchema[None] = None
-    process: ProcessFacts
+    adapter_response_accepted: bool
+    process: ProcessFacts | SkipJsonSchema[None] = None
     accepted_inputs: list[AcceptedInput]
     accepted_files: list[AcceptedFile]
 
@@ -564,13 +637,93 @@ class AcceptedAttemptEnvelope(ContractModel):
         return _reject_null_reason(data)
 
     @model_validator(mode="after")
-    def preserve_fixture_evidence_limits(self) -> Self:
-        if self.implementation_mode == "fixture" and (
-            self.domain_outcome != "not_evaluated"
+    def preserve_settled_semantics(self) -> Self:  # noqa: C901, PLR0912
+        if self.lifecycle_state == "skipped" and (
+            self.execution_conclusion != "skipped"
+            or self.domain_outcome != "not_evaluated"
+            or self.process is not None
+            or self.adapter_response_accepted
+            or self.accepted_inputs
+            or self.accepted_files
             or self.reason is None
-            or self.reason.category != "fixture"
         ):
+            msg = "a skipped attempt cannot claim execution or accepted evidence"
+            raise ValueError(msg)
+        if (
+            self.lifecycle_state == "completed"
+            and self.execution_conclusion == "skipped"
+        ):
+            msg = "a completed attempt cannot have a skipped conclusion"
+            raise ValueError(msg)
+        if self.lifecycle_state == "completed" and self.process is None:
+            msg = "a completed implemented or Fixture attempt requires process facts"
+            raise ValueError(msg)
+        if self.lifecycle_state == "completed" and not self.accepted_inputs:
+            msg = "a completed attempt requires its exact accepted inputs"
+            raise ValueError(msg)
+        if (
+            self.lifecycle_state == "skipped"
+            and self.reason is not None
+            and (self.reason.category != "dependency")
+        ):
+            msg = "a skipped attempt requires a dependency reason"
+            raise ValueError(msg)
+        if self.execution_conclusion in {"failed", "timed_out"} and (
+            self.domain_outcome != "not_evaluated" or self.reason is None
+        ):
+            msg = "failed or timed-out execution requires a typed unevaluated reason"
+            raise ValueError(msg)
+        if self.execution_conclusion == "timed_out" and (
+            self.process is None or self.process.termination != "timed_out"
+        ):
+            msg = "timed-out execution requires timed-out process facts"
+            raise ValueError(msg)
+        if not self.adapter_response_accepted and self.accepted_files:
+            msg = "an unaccepted adapter response cannot contribute files"
+            raise ValueError(msg)
+        if self.execution_conclusion == "succeeded" and not (
+            self.adapter_response_accepted
+            and self.process is not None
+            and self.process.termination == "exited"
+            and self.process.exit_code == 0
+        ):
+            msg = "successful execution requires an accepted zero-exit response"
+            raise ValueError(msg)
+        if self.adapter_response_accepted and not (
+            self.process is not None
+            and self.process.termination == "exited"
+            and self.process.exit_code == 0
+        ):
+            msg = "an accepted adapter response requires zero-exit process facts"
+            raise ValueError(msg)
+        if self.adapter_response_accepted and self.execution_conclusion in {
+            "timed_out",
+            "skipped",
+        }:
+            msg = "timeout and skip conclusions are runtime-owned"
+            raise ValueError(msg)
+        if self.domain_outcome == "failed" and (
+            self.execution_conclusion != "succeeded"
+            or self.reason is None
+            or self.reason.category != "domain"
+        ):
+            msg = "a negative Domain outcome requires a successful execution and reason"
+            raise ValueError(msg)
+        if self.implementation_mode == "fixture" and self.domain_outcome == "succeeded":
             msg = "Fixture attempt must preserve its evidence limits"
+            raise ValueError(msg)
+        if (
+            self.implementation_mode == "fixture"
+            and self.execution_conclusion == "succeeded"
+            and self.domain_outcome == "not_evaluated"
+            and (self.reason is None or self.reason.category != "fixture")
+        ):
+            msg = "successful Fixture execution requires its evidence-limit reason"
+            raise ValueError(msg)
+        if self.implementation_mode == "not_implemented" and not (
+            self.lifecycle_state == "skipped" and self.execution_conclusion == "skipped"
+        ):
+            msg = "a Stage without an implementation must be explicitly skipped"
             raise ValueError(msg)
         return self
 
@@ -617,8 +770,21 @@ class FixtureCase(ContractModel):
     case_id: Slug
     stage: StageName
     match_inputs: Annotated[list[FixtureInputMatch], Field(min_length=1)]
-    execution_conclusion: ExecutionConclusion
-    domain_outcome: Literal["not_evaluated"]
+    behavior: Literal[
+        "response",
+        "absent_response",
+        "crash",
+        "timeout",
+        "malformed_response",
+        "undeclared_output",
+        "unsafe_output",
+        "oversize_output",
+        "missing_output",
+        "schema_mismatch",
+        "response_mismatch",
+    ] = "response"
+    execution_conclusion: AdapterExecutionConclusion
+    domain_outcome: DomainOutcome
     reason: Reason
     outputs: list[FixtureOutput]
     diagnostic: FixtureDiagnostic
@@ -627,7 +793,25 @@ class FixtureCase(ContractModel):
     def validate_case(self) -> Self:
         _require_unique([item.slot for item in self.match_inputs], "Fixture input slot")
         _require_unique([item.slot for item in self.outputs], "Fixture output slot")
-        if self.execution_conclusion == "succeeded" and not self.outputs:
+        if (
+            self.behavior == "response"
+            and self.execution_conclusion == "succeeded"
+            and not self.outputs
+        ):
             msg = "a successful Fixture case must declare outputs"
+            raise ValueError(msg)
+        if self.execution_conclusion not in {"succeeded", "failed"}:
+            msg = "a Fixture adapter response may report only succeeded or failed"
+            raise ValueError(msg)
+        if self.execution_conclusion == "failed" and self.outputs:
+            msg = "a failed Fixture case cannot declare Domain output"
+            raise ValueError(msg)
+        if self.behavior != "response" and (
+            self.execution_conclusion != "failed"
+            or self.domain_outcome != "not_evaluated"
+            or self.outputs
+            or self.reason.category != "fixture"
+        ):
+            msg = "non-response Fixture behavior must describe unevaluated failure"
             raise ValueError(msg)
         return self

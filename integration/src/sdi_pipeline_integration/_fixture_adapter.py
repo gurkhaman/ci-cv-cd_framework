@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import sys
+import time
 import uuid
 from importlib.resources import files
 from pathlib import Path
@@ -150,6 +151,8 @@ def _response(  # noqa: PLR0913
     conclusion: str,
     code: str,
     summary: str,
+    category: str = "fixture",
+    domain_outcome: str = "not_evaluated",
     produced_outputs: list[str],
     diagnostic_present: bool,
 ) -> bytes:
@@ -158,9 +161,9 @@ def _response(  # noqa: PLR0913
             "schema_version": "sdi.stage-adapter-response/v1",
             "correlation": request.correlation.model_dump(mode="json"),
             "execution_conclusion": conclusion,
-            "domain_outcome": "not_evaluated",
+            "domain_outcome": domain_outcome,
             "reason": {
-                "category": "fixture",
+                "category": category,
                 "code": code,
                 "summary": summary,
             },
@@ -177,7 +180,9 @@ def _response(  # noqa: PLR0913
     return _canonical_json(response.model_dump(mode="json"))
 
 
-def run_adapter(*, request_path: Path, input_root: Path, output_root: Path) -> None:
+def run_adapter(  # noqa: C901, PLR0911, PLR0912, PLR0915
+    *, request_path: Path, input_root: Path, output_root: Path
+) -> None:
     """Publish one complete candidate response after all candidate files."""
     request = _load_request(request_path)
     if (
@@ -203,7 +208,66 @@ def run_adapter(*, request_path: Path, input_root: Path, output_root: Path) -> N
 
     case, case_root = selected
     output_by_slot = {item.slot: item for item in request.outputs}
-    if set(output_by_slot) != {item.slot for item in case.outputs}:
+    if case.behavior == "absent_response":
+        return
+    if case.behavior == "crash":
+        os._exit(70)
+    if case.behavior == "timeout":
+        time.sleep(request.work_limit_seconds + 60)
+    if case.behavior == "malformed_response":
+        _atomic_write(output_root, "response.json", b"{malformed")
+        return
+    if case.behavior == "undeclared_output":
+        _atomic_write(output_root, "undeclared.txt", b"undeclared Fixture output\n")
+        return
+    if case.behavior == "unsafe_output":
+        (output_root / "unsafe-link").symlink_to("/dev/null")
+        return
+    if case.behavior == "oversize_output":
+        grant = request.outputs[0]
+        _atomic_write(output_root, grant.path, b"x" * (grant.max_bytes + 1))
+        return
+    if case.behavior == "missing_output":
+        response = _response(
+            request,
+            conclusion="succeeded",
+            code=case.reason.code,
+            summary=case.reason.summary,
+            produced_outputs=[item.slot for item in request.outputs],
+            diagnostic_present=False,
+        )
+        _atomic_write(output_root, "response.json", response)
+        return
+    if case.behavior == "schema_mismatch":
+        for grant in request.outputs:
+            _atomic_write(output_root, grant.path, b"{}\n")
+        response = _response(
+            request,
+            conclusion="succeeded",
+            code=case.reason.code,
+            summary=case.reason.summary,
+            produced_outputs=[item.slot for item in request.outputs],
+            diagnostic_present=False,
+        )
+        _atomic_write(output_root, "response.json", response)
+        return
+    if case.behavior == "response_mismatch":
+        response = json.loads(
+            _response(
+                request,
+                conclusion="failed",
+                code=case.reason.code,
+                summary=case.reason.summary,
+                produced_outputs=[],
+                diagnostic_present=False,
+            )
+        )
+        response["correlation"]["attempt_number"] += 1
+        _atomic_write(output_root, "response.json", _canonical_json(response))
+        return
+    if case.execution_conclusion == "succeeded" and set(output_by_slot) != {
+        item.slot for item in case.outputs
+    }:
         msg = "Fixture outputs do not match the request grants"
         raise InputError(msg)
 
@@ -243,6 +307,8 @@ def run_adapter(*, request_path: Path, input_root: Path, output_root: Path) -> N
         conclusion=case.execution_conclusion,
         code=case.reason.code,
         summary=case.reason.summary,
+        category=case.reason.category,
+        domain_outcome=case.domain_outcome,
         produced_outputs=[item.slot for item in case.outputs],
         diagnostic_present=True,
     )

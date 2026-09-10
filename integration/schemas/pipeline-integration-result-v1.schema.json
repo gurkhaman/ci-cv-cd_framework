@@ -18,6 +18,10 @@
           "title": "Accepted Inputs",
           "type": "array"
         },
+        "adapter_response_accepted": {
+          "title": "Adapter Response Accepted",
+          "type": "boolean"
+        },
         "correlation": {
           "$ref": "#/$defs/Correlation"
         },
@@ -31,12 +35,16 @@
           "$ref": "#/$defs/ImplementationMode"
         },
         "lifecycle_state": {
-          "const": "completed",
+          "enum": [
+            "completed",
+            "skipped"
+          ],
           "title": "Lifecycle State",
           "type": "string"
         },
         "process": {
-          "$ref": "#/$defs/ProcessFacts"
+          "$ref": "#/$defs/ProcessFacts",
+          "title": "Process"
         },
         "reason": {
           "$ref": "#/$defs/Reason"
@@ -54,7 +62,7 @@
         "execution_conclusion",
         "implementation_mode",
         "domain_outcome",
-        "process",
+        "adapter_response_accepted",
         "accepted_inputs",
         "accepted_files"
       ],
@@ -396,14 +404,17 @@
     "ExecutionConclusion": {
       "enum": [
         "succeeded",
-        "failed"
+        "failed",
+        "timed_out",
+        "skipped"
       ],
       "type": "string"
     },
     "ImplementationMode": {
       "enum": [
         "fixture",
-        "implemented"
+        "implemented",
+        "not_implemented"
       ],
       "type": "string"
     },
@@ -417,18 +428,46 @@
           "type": "integer"
         },
         "exit_code": {
-          "const": 0,
-          "title": "Exit Code",
-          "type": "integer"
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Exit Code"
         },
         "finished_at": {
           "format": "date-time",
           "title": "Finished At",
           "type": "string"
         },
+        "signal": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Signal"
+        },
         "started_at": {
           "format": "date-time",
           "title": "Started At",
+          "type": "string"
+        },
+        "termination": {
+          "enum": [
+            "exited",
+            "signaled",
+            "timed_out",
+            "lost"
+          ],
+          "title": "Termination",
           "type": "string"
         }
       },
@@ -436,7 +475,7 @@
         "started_at",
         "finished_at",
         "duration_ms",
-        "exit_code"
+        "termination"
       ],
       "title": "ProcessFacts",
       "type": "object"
@@ -530,7 +569,6 @@
       "items": {
         "$ref": "#/$defs/BundleArtifact"
       },
-      "minItems": 1,
       "title": "Artifacts",
       "type": "array"
     },
@@ -564,7 +602,7 @@
       "type": "string"
     },
     "fixture_notice": {
-      "const": "Deterministic pipeline-interface Fixtures executed; no Domain capability, Validation verdict, deployment outcome, or KPI was evaluated.",
+      "const": "Deterministic pipeline-interface Fixtures may have simulated outcomes; no real Domain capability, Validation verdict, deployment outcome, or KPI was evaluated.",
       "title": "Fixture Notice",
       "type": "string"
     },

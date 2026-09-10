@@ -3,7 +3,8 @@
     "ImplementationMode": {
       "enum": [
         "fixture",
-        "implemented"
+        "implemented",
+        "not_implemented"
       ],
       "type": "string"
     },
