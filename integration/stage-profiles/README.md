@@ -1,5 +1,7 @@
 # Stage Profiles
 
-Reviewed Stage profiles are committed here when the permanent Stage-adapter
-interface is introduced. No Stage implementation is available in this foundation
-slice.
+Reviewed Stage profiles define the immutable input, bounded output, diagnostic,
+and work grants used by the permanent Stage-adapter interface. The composition
+profile grants only the run request, Mobility Requirements Specification, and
+target profile inputs and the composition-blueprint and deployment-schema
+outputs.

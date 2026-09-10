@@ -15,10 +15,27 @@ from ._contracts import (
     RunRequest,
     TargetExecutionProfile,
 )
+from ._domain_contracts import CompositionBlueprint, DeploymentSchema
+from ._stage_contracts import (
+    AcceptedAttemptEnvelope,
+    AdapterDescriptor,
+    AdapterRequest,
+    AdapterResponse,
+    FixtureCase,
+    StageProfile,
+)
 from ._yaml_input import InputError
 
 SCHEMAS: dict[str, type[BaseModel]] = {
+    "accepted-attempt-envelope-v1.schema.json": AcceptedAttemptEnvelope,
+    "adapter-descriptor-v1.schema.json": AdapterDescriptor,
+    "composition-blueprint-v1.schema.json": CompositionBlueprint,
+    "deployment-schema-v1.schema.json": DeploymentSchema,
+    "fixture-case-v1.schema.json": FixtureCase,
     "pipeline-integration-run-request-v1.schema.json": RunRequest,
+    "stage-adapter-request-v1.schema.json": AdapterRequest,
+    "stage-adapter-response-v1.schema.json": AdapterResponse,
+    "stage-profile-v1.schema.json": StageProfile,
     "mobility-requirements-specification-v1.schema.json": (
         MobilityRequirementsSpecification
     ),
