@@ -6,11 +6,23 @@ FROM ${RUNTIME_IMAGE} AS runtime
 FROM ${UV_IMAGE} AS uv
 FROM ${REMOTING_IMAGE}
 
+ARG SDI_JENKINS_AGENT_LABEL
+ARG SDI_JENKINS_AGENT_ROLE=integration
+
 USER root
 COPY --from=runtime /usr/local /usr/local
 COPY --from=uv /uv /uvx /usr/local/bin/
 COPY agents/jenkins-agent-entrypoint agents/jenkins-agent-health /usr/local/bin/
-RUN chmod 0555 \
+RUN case "$SDI_JENKINS_AGENT_ROLE" in \
+        integration) test -z "$SDI_JENKINS_AGENT_LABEL" ;; \
+        domain) test -n "$SDI_JENKINS_AGENT_LABEL" ;; \
+        *) exit 1 ;; \
+    esac \
+    && install -d -m 0555 /etc/sdi \
+    && printf '%s\n' "$SDI_JENKINS_AGENT_ROLE" > /etc/sdi/jenkins-agent-role \
+    && printf '%s\n' "$SDI_JENKINS_AGENT_LABEL" > /etc/sdi/jenkins-agent-label \
+    && chmod 0444 /etc/sdi/jenkins-agent-role /etc/sdi/jenkins-agent-label \
+    && chmod 0555 \
         /usr/local/bin/jenkins-agent-entrypoint \
         /usr/local/bin/jenkins-agent-health \
     && python3 --version \

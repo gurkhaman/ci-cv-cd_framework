@@ -56,6 +56,8 @@ MAX_RESPONSE_BYTES = 64 * 1024
 MAX_CANDIDATE_ENTRIES = 32
 MAX_CANDIDATE_DEPTH = 4
 ADAPTER_SHUTDOWN_GRACE_SECONDS = 10
+_JENKINS_AGENT_LABEL_FILE = Path("/etc/sdi/jenkins-agent-label")
+_JENKINS_AGENT_ROLE_FILE = Path("/etc/sdi/jenkins-agent-role")
 
 
 @dataclass(frozen=True)
@@ -987,6 +989,25 @@ def load_stage_adapter(
     return descriptor, profile
 
 
+def enforce_jenkins_agent_boundary(descriptor: AdapterDescriptor) -> None:
+    if not _JENKINS_AGENT_ROLE_FILE.exists():
+        return
+    agent_role = _JENKINS_AGENT_ROLE_FILE.read_text().strip()
+    if agent_role == "integration":
+        msg = "the integration Jenkins agent cannot execute a Domain adapter"
+        raise InputError(msg)
+    if agent_role != "domain":
+        msg = "the immutable Jenkins agent role is invalid"
+        raise InputError(msg)
+    if not _JENKINS_AGENT_LABEL_FILE.is_file():
+        msg = "the Domain Jenkins agent has no immutable label"
+        raise InputError(msg)
+    configured_label = _JENKINS_AGENT_LABEL_FILE.read_text().strip()
+    if configured_label != descriptor.agent_label:
+        msg = "the Domain agent label does not match the adapter descriptor"
+        raise InputError(msg)
+
+
 def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
     *,
     repository: GitRepository,
@@ -1001,19 +1022,7 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
         msg = "attempt root must not already exist"
         raise InputError(msg)
     descriptor, profile = load_stage_adapter(repository, descriptor_path)
-
-    agent_role = os.environ.get("SDI_JENKINS_AGENT_ROLE")
-    if agent_role == "integration":
-        msg = "the integration Jenkins agent cannot execute a Domain adapter"
-        raise InputError(msg)
-    if agent_role == "domain":
-        configured_label = os.environ.get("SDI_JENKINS_AGENT_LABEL")
-        if configured_label != descriptor.agent_label:
-            msg = "the Domain agent label does not match the adapter descriptor"
-            raise InputError(msg)
-    elif agent_role is not None:
-        msg = "SDI_JENKINS_AGENT_ROLE is invalid"
-        raise InputError(msg)
+    enforce_jenkins_agent_boundary(descriptor)
 
     attempt_root.parent.mkdir(parents=True, exist_ok=True)
     if descriptor.implementation_mode == "not_implemented":

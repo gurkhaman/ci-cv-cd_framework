@@ -117,16 +117,17 @@ def test_compose_defines_five_isolated_websocket_agents() -> None:
         assert len(agent["secrets"]) == 1
         registration_secrets.add(agent["secrets"][0])
 
-        if name == "integration":
-            assert agent["environment"]["SDI_JENKINS_AGENT_ROLE"] == "integration"
-            assert "SDI_JENKINS_AGENT_LABEL" not in agent["environment"]
-        else:
-            assert agent["environment"]["SDI_JENKINS_AGENT_ROLE"] == "domain"
-            assert agent["environment"]["SDI_JENKINS_AGENT_LABEL"] == AGENT_LABELS[name]
+        expected_role = "integration" if name == "integration" else "domain"
+        expected_label = "" if name == "integration" else AGENT_LABELS[name]
+        assert agent["build"]["args"]["SDI_JENKINS_AGENT_ROLE"] == expected_role
+        assert agent["build"]["args"]["SDI_JENKINS_AGENT_LABEL"] == expected_label
+        assert "SDI_JENKINS_AGENT_ROLE" not in agent["environment"]
+        assert "SDI_JENKINS_AGENT_LABEL" not in agent["environment"]
 
     assert len(registration_secrets) == 5
     assert all(
         compose["networks"][name]["internal"]
+        == "${JENKINS_AGENT_NETWORK_INTERNAL:-true}"
         for name in controller_networks
         if name != "controller-egress"
     )
@@ -158,6 +159,8 @@ def test_domain_agents_use_their_descriptor_selected_fixture_image() -> None:
     assert "FROM ${RUNTIME_IMAGE} AS runtime" in dockerfile
     assert "FROM ${REMOTING_IMAGE}" in dockerfile
     assert "FROM ${UV_IMAGE} AS uv" in dockerfile
+    assert "/etc/sdi/jenkins-agent-role" in dockerfile
+    assert "/etc/sdi/jenkins-agent-label" in dockerfile
 
 
 def test_jcasc_owns_exact_agent_identities_labels_and_executors() -> None:

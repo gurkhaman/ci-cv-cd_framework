@@ -89,6 +89,7 @@ case "$action" in
         JENKINS_IMAGE_BUILD_AGENT_IMAGE=unused
         JENKINS_CV_AGENT_IMAGE=unused
         JENKINS_CD_AGENT_IMAGE=unused
+        JENKINS_AGENT_NETWORK_INTERNAL=true
         export JENKINS_HTTP_PORT JENKINS_ADMIN_ID JENKINS_HANDOFF_ID
         export JENKINS_REPOSITORY_URL JENKINS_AGENT_CONTROLLER_URL
         export JENKINS_ADMIN_PASSWORD_FILE JENKINS_HANDOFF_PASSWORD_FILE
@@ -97,6 +98,7 @@ case "$action" in
         export JENKINS_CD_AGENT_SECRET_FILE
         export JENKINS_COMPOSITION_AGENT_IMAGE JENKINS_IMAGE_BUILD_AGENT_IMAGE
         export JENKINS_CV_AGENT_IMAGE JENKINS_CD_AGENT_IMAGE
+        export JENKINS_AGENT_NETWORK_INTERNAL
         case "$action" in
             stop) compose down ;;
             status) compose ps ;;
@@ -210,6 +212,11 @@ valid = (
 )
 raise SystemExit(0 if valid else 1)
 PY
+if [ "$JENKINS_AGENT_CONTROLLER_URL" = http://controller:8080 ]; then
+    JENKINS_AGENT_NETWORK_INTERNAL=true
+else
+    JENKINS_AGENT_NETWORK_INTERNAL=false
+fi
 
 validate_secret_file() {
     secret_file=$1
@@ -234,37 +241,53 @@ validate_secret_file() {
         fail "secret file must not be accessible by group or other users: $secret_file"
 }
 
-validate_secret_file "$JENKINS_ADMIN_PASSWORD_FILE"
-validate_secret_file "$JENKINS_HANDOFF_PASSWORD_FILE"
-if [ "$action" != start-controller ]; then
-    validate_secret_file "$JENKINS_INTEGRATION_AGENT_SECRET_FILE"
-    validate_secret_file "$JENKINS_CI_AGENT_SECRET_FILE"
-    validate_secret_file "$JENKINS_IMAGE_BUILD_AGENT_SECRET_FILE"
-    validate_secret_file "$JENKINS_CV_AGENT_SECRET_FILE"
-    validate_secret_file "$JENKINS_CD_AGENT_SECRET_FILE"
+validate_registration_secret() {
+    secret_file=$1
+    validate_secret_file "$secret_file"
+    secret=$(tr -d '\r\n' < "$secret_file")
+    case "$secret" in
+        *[!0-9a-f]*|'')
+            fail "agent registration secret must be lowercase hexadecimal: $secret_file"
+            ;;
+    esac
+    [ "${#secret}" -eq 64 ] || \
+        fail "agent registration secret must contain 64 hexadecimal characters: $secret_file"
+}
 
-    registration_secrets=':'
-    for secret_file in \
-        "$JENKINS_INTEGRATION_AGENT_SECRET_FILE" \
-        "$JENKINS_CI_AGENT_SECRET_FILE" \
-        "$JENKINS_IMAGE_BUILD_AGENT_SECRET_FILE" \
-        "$JENKINS_CV_AGENT_SECRET_FILE" \
-        "$JENKINS_CD_AGENT_SECRET_FILE"
-    do
-        secret=$(tr -d '\r\n' < "$secret_file")
-        case "$secret" in
-            *[!0-9a-f]*|'')
-                fail "agent registration secret must be lowercase hexadecimal: $secret_file"
-                ;;
+case "$action" in
+    start-controller)
+        validate_secret_file "$JENKINS_ADMIN_PASSWORD_FILE"
+        validate_secret_file "$JENKINS_HANDOFF_PASSWORD_FILE"
+        ;;
+    reconcile-agent)
+        case "$reconcile_agent" in
+            ci) selected_secret_file=$JENKINS_CI_AGENT_SECRET_FILE ;;
+            image-build) selected_secret_file=$JENKINS_IMAGE_BUILD_AGENT_SECRET_FILE ;;
+            cv) selected_secret_file=$JENKINS_CV_AGENT_SECRET_FILE ;;
+            cd) selected_secret_file=$JENKINS_CD_AGENT_SECRET_FILE ;;
         esac
-        [ "${#secret}" -eq 64 ] || \
-            fail "agent registration secret must contain 64 hexadecimal characters: $secret_file"
-        case "$registration_secrets" in
-            *":$secret:"*) fail 'agent registration secrets must not be shared' ;;
-        esac
-        registration_secrets="$registration_secrets$secret:"
-    done
-fi
+        validate_registration_secret "$selected_secret_file"
+        ;;
+    *)
+        validate_secret_file "$JENKINS_ADMIN_PASSWORD_FILE"
+        validate_secret_file "$JENKINS_HANDOFF_PASSWORD_FILE"
+        registration_secrets=':'
+        for secret_file in \
+            "$JENKINS_INTEGRATION_AGENT_SECRET_FILE" \
+            "$JENKINS_CI_AGENT_SECRET_FILE" \
+            "$JENKINS_IMAGE_BUILD_AGENT_SECRET_FILE" \
+            "$JENKINS_CV_AGENT_SECRET_FILE" \
+            "$JENKINS_CD_AGENT_SECRET_FILE"
+        do
+            validate_registration_secret "$secret_file"
+            secret=$(tr -d '\r\n' < "$secret_file")
+            case "$registration_secrets" in
+                *":$secret:"*) fail 'agent registration secrets must not be shared' ;;
+            esac
+            registration_secrets="$registration_secrets$secret:"
+        done
+        ;;
+esac
 
 command -v docker >/dev/null 2>&1 || fail 'Docker Engine is required'
 command -v uv >/dev/null 2>&1 || fail 'uv is required'
@@ -294,6 +317,7 @@ export JENKINS_IMAGE_BUILD_AGENT_SECRET_FILE JENKINS_CV_AGENT_SECRET_FILE
 export JENKINS_CD_AGENT_SECRET_FILE
 export JENKINS_COMPOSITION_AGENT_IMAGE JENKINS_IMAGE_BUILD_AGENT_IMAGE
 export JENKINS_CV_AGENT_IMAGE JENKINS_CD_AGENT_IMAGE
+export JENKINS_AGENT_NETWORK_INTERNAL
 
 validate() {
     expected_image='docker.io/jenkins/jenkins:2.568.3-jdk21@sha256:68964c38dbb70c0bf6adff480d6dda2e1191d2d07e076c9fd2996345303eb999'
@@ -355,9 +379,9 @@ case "$action" in
         ;;
     reconcile-agent)
         validate
-        build_controller
         compose build "$reconcile_agent"
-        compose up --no-build --detach --wait --wait-timeout 240 "$reconcile_agent"
+        compose up --no-build --no-deps --detach --wait --wait-timeout 240 \
+            "$reconcile_agent"
         ;;
     *)
         usage >&2

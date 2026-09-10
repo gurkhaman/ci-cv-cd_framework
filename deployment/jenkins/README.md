@@ -92,11 +92,12 @@ agent receives no Domain credential and has no Domain label. The four Fixture
 descriptors currently declare no Domain secret binding, so every agent container
 sees only its own registration file and no controller password.
 
-The Compose role environment is also part of the supported Stage execution
-boundary. `sdi-integration execute-stage` refuses every Domain adapter on the
-`integration` agent and requires a Domain agent's configured label to match the
-selected descriptor before it starts a child process. Local execution outside
-Jenkins has no deployment role and remains available for development.
+Each image contains an immutable role and label identity under `/etc/sdi` on its
+read-only root filesystem. The supported `sdi-integration execute-stage` command
+refuses every Domain adapter on the `integration` image and requires a Domain
+image's label to match the selected descriptor before it starts a child process.
+Job environment changes cannot alter that boundary. Local execution outside an
+agent image has no deployment role and remains available for development.
 
 ## Operation
 
@@ -118,12 +119,20 @@ but retains only the `jenkins-home` named volume. Agent workspaces are separate
 tmpfs mounts, have no shared or persistent filesystem, and disappear whenever
 their container is replaced.
 
+The smoke jobs prove the workspace substrate can be cleaned before and after
+allocations, including always-run shell cleanup. GUR-39 owns that cleanup around
+every real Pipeline allocation, including cancellation paths; this ticket does
+not add the root `Jenkinsfile` or claim job-independent cleanup policy.
+
 Each Domain service owns its descriptor-selected `RUNTIME_IMAGE` build input and
 local image tag. `bin/stack` loads each image through the integration CLI's strict
 descriptor model and injects it only into the matching Compose service. A
 reviewed descriptor image replacement followed by
 `bin/stack reconcile-agent <ci|image-build|cv|cd>` builds and replaces only the
-affected Domain agent.
+affected Domain agent without starting or rebuilding the controller. When its
+controller URL is remote HTTPS, the agent network permits outbound reachability;
+the node identity and scheduling label remain unchanged. Only the selected
+agent's registration secret is validated or mounted during reconciliation.
 
 `bin/stack destroy` is the explicit destructive operation for reconstruction. It
 removes the controller and its named volume. Back up operational state first if

@@ -54,6 +54,8 @@ def _write_fake_deployment_tools(fake_bin: Path) -> None:
         '"${JENKINS_IMAGE_BUILD_AGENT_IMAGE:-}" '
         '"${JENKINS_CV_AGENT_IMAGE:-}" '
         '"${JENKINS_CD_AGENT_IMAGE:-}" >> "$DOCKER_LOG"\n'
+        "printf 'network-internal=%s\\n' "
+        '"${JENKINS_AGENT_NETWORK_INTERNAL:-}" >> "$DOCKER_LOG"\n'
         'case "$*" in\n'
         "  'version --format {{.Server.Os}}/{{.Server.Arch}}') "
         "printf 'linux/amd64\\n' ;;\n"
@@ -101,6 +103,62 @@ def _assert_plaintext_relocated_agent_url_is_rejected(
 
     assert completed.returncode == 2
     assert "internal Compose URL or an uncredentialed HTTPS URL" in completed.stderr
+
+    config.write_text(
+        valid_config.replace(
+            "JENKINS_AGENT_CONTROLLER_URL=http://controller:8080",
+            "JENKINS_AGENT_CONTROLLER_URL=https://jenkins.example.test",
+        )
+    )
+    completed = subprocess.run(
+        [JENKINS_ROOT / "bin" / "stack", "--config", config, "validate"],
+        check=False,
+        capture_output=True,
+        env={
+            "DOCKER_LOG": str(docker_log),
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        },
+        text=True,
+    )
+    config.write_text(valid_config)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "network-internal=false" in docker_log.read_text()
+
+
+def _assert_single_agent_reconciliation(
+    config: Path,
+    fake_bin: Path,
+    docker_log: Path,
+    admin_secret: Path,
+    unrelated_agent_secret: Path,
+) -> None:
+    docker_log.write_text("")
+    admin_secret.chmod(0o000)
+    unrelated_agent_secret.chmod(0o000)
+    subprocess.run(
+        [
+            JENKINS_ROOT / "bin" / "stack",
+            "--config",
+            config,
+            "reconcile-agent",
+            "cv",
+        ],
+        check=True,
+        capture_output=True,
+        env={
+            "DOCKER_LOG": str(docker_log),
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        },
+        text=True,
+    )
+    reconcile_log = docker_log.read_text()
+
+    assert "build cv" in reconcile_log
+    assert (
+        "up --no-build --no-deps --detach --wait --wait-timeout 240 cv" in reconcile_log
+    )
+    assert "--tag sdi-jenkins-controller" not in reconcile_log
 
 
 def test_controller_image_and_complete_plugin_set_are_exactly_pinned() -> None:
@@ -342,6 +400,14 @@ def test_stack_validate_uses_compose_and_rejects_insecure_secret_files(
     assert "up --no-build --detach --wait --wait-timeout 240" in lifecycle_log
     assert "down" in lifecycle_log
     assert "down --volumes" not in lifecycle_log
+
+    _assert_single_agent_reconciliation(
+        config,
+        fake_bin,
+        docker_log,
+        admin_secret,
+        agent_secrets["ci"],
+    )
 
     config.write_text("NOT_A_CONTROLLER_SETTING=value\n")
     completed = subprocess.run(
