@@ -1,0 +1,52 @@
+jenkins:
+  systemMessage: "SDI pipeline integration controller. Repository configuration is authoritative."
+  numExecutors: 0
+  mode: EXCLUSIVE
+  slaveAgentPort: -1
+  disableRememberMe: true
+  noUsageStatistics: true
+  scmCheckoutRetryCount: 0
+  markupFormatter: plainText
+  crumbIssuer:
+    standard: {}
+  securityRealm:
+    local:
+      allowsSignup: false
+      enableCaptcha: false
+      users:
+        - id: "${JENKINS_ADMIN_ID}"
+          password: "${jenkins-admin-password}"
+        - id: "${JENKINS_HANDOFF_ID}"
+          password: "${jenkins-handoff-password}"
+  authorizationStrategy:
+    projectMatrix:
+      entries:
+        - user:
+            name: "${JENKINS_ADMIN_ID}"
+            permissions:
+              - "Overall/Administer"
+        - user:
+            name: "${JENKINS_HANDOFF_ID}"
+            permissions:
+              - "Overall/Read"
+
+unclassified:
+  buildDiscarders:
+    configuredBuildDiscarders:
+      - jobBuildDiscarder
+      - simpleBuildDiscarder:
+          discarder:
+            logRotator:
+              daysToKeepStr: "90"
+              artifactDaysToKeepStr: "90"
+
+jobs:
+  - providedEnv:
+      HANDOFF_USER: "${JENKINS_HANDOFF_ID}"
+      REPOSITORY_URL: "${JENKINS_REPOSITORY_URL}"
+  - file: /usr/local/share/jenkins/job-dsl/pipeline-integration.groovy
+
+security:
+  apiToken:
+    creationOfLegacyTokenEnabled: false
+    tokenGenerationOnCreationEnabled: false

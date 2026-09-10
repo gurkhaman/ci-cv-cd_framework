@@ -1,0 +1,273 @@
+#!/usr/bin/env python3
+"""Check the externally observable state of the ephemeral Jenkins controller."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import http.cookiejar
+import json
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from typing import Any, cast
+
+EXPECTED_JENKINS_VERSION = "2.568.3"
+HTTP_OK = 200
+HTTP_FORBIDDEN = 403
+HTTP_NOT_FOUND = 404
+EXPECTED_PARAMETERS = {
+    "HANDOFF_CONTRACT_VERSION",
+    "EXECUTION_ID",
+    "REQUESTED_GIT_REF",
+    "RESOLVED_COMMIT_SHA",
+    "RUN_REQUEST_PATH",
+    "GITHUB_RUN_ID",
+    "GITHUB_RUN_ATTEMPT",
+}
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("mode", choices=("check", "drift"))
+    parser.add_argument("--url", required=True)
+    parser.add_argument("--admin-id", required=True)
+    parser.add_argument("--admin-password-file", type=Path, required=True)
+    parser.add_argument("--handoff-id", required=True)
+    parser.add_argument("--handoff-password-file", type=Path, required=True)
+    parser.add_argument("--repository-url", required=True)
+    parser.add_argument("--plugin-lock", type=Path, required=True)
+    parser.add_argument("--casc", type=Path, required=True)
+    return parser
+
+
+class _JenkinsClient:
+    def __init__(self, base_url: str, user: str, password: str) -> None:
+        self._base_url = base_url.rstrip("/")
+        credentials = base64.b64encode(f"{user}:{password}".encode()).decode()
+        self._authorization = f"Basic {credentials}"
+        self._opener = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+        )
+
+    def request(
+        self,
+        path: str,
+        *,
+        data: bytes | None = None,
+        content_type: str | None = None,
+    ) -> tuple[int, bytes, dict[str, str]]:
+        headers = {"Authorization": self._authorization}
+        if content_type is not None:
+            headers["Content-Type"] = content_type
+        request = urllib.request.Request(  # noqa: S310 - URL is CLI-validated.
+            f"{self._base_url}{path}", data=data, headers=headers
+        )
+        return self._open(request)
+
+    def _open(
+        self, request: urllib.request.Request
+    ) -> tuple[int, bytes, dict[str, str]]:
+        try:
+            with self._opener.open(request, timeout=30) as response:
+                return response.status, response.read(), dict(response.headers)
+        except urllib.error.HTTPError as error:
+            return error.code, error.read(), dict(error.headers)
+
+    def json(self, path: str) -> tuple[int, dict[str, Any], dict[str, str]]:
+        status, body, headers = self.request(path)
+        parsed = json.loads(body)
+        if not isinstance(parsed, dict):
+            message = f"expected JSON object from {path}"
+            raise TypeError(message)
+        return status, cast("dict[str, Any]", parsed), headers
+
+    def crumb(self) -> tuple[str, str]:
+        status, crumb, _ = self.json("/crumbIssuer/api/json")
+        _equal(status, HTTP_OK, "crumb endpoint status")
+        return str(crumb["crumbRequestField"]), str(crumb["crumb"])
+
+    def post_with_crumb(
+        self, path: str, *, data: bytes, content_type: str
+    ) -> tuple[int, bytes, dict[str, str]]:
+        field, crumb = self.crumb()
+        headers = {
+            "Authorization": self._authorization,
+            "Content-Type": content_type,
+            field: crumb,
+        }
+        request = urllib.request.Request(  # noqa: S310 - URL is CLI-validated.
+            f"{self._base_url}{path}", data=data, headers=headers
+        )
+        return self._open(request)
+
+
+def _password(path: Path) -> str:
+    password = path.read_text().strip()
+    if not password:
+        message = f"empty password file: {path}"
+        raise ValueError(message)
+    return password
+
+
+def _equal(actual: object, expected: object, label: str) -> None:
+    if actual != expected:
+        message = f"{label}: expected {expected!r}, found {actual!r}"
+        raise RuntimeError(message)
+
+
+def _require(*, condition: bool, message: str) -> None:
+    if not condition:
+        raise RuntimeError(message)
+
+
+def _expected_plugins(path: Path) -> dict[str, str]:
+    pairs = (
+        line.split(":", maxsplit=1)
+        for line in path.read_text().splitlines()
+        if line and not line.startswith("#")
+    )
+    return dict(pairs)
+
+
+def _check_job_config(config_xml: bytes, repository_url: str, handoff_id: str) -> None:
+    root = ET.fromstring(config_xml)  # noqa: S314 - trusted loopback Jenkins output.
+    parameters = {
+        element.text for element in root.findall(".//parameterDefinitions/*/name")
+    }
+    _equal(parameters, EXPECTED_PARAMETERS, "job parameters")
+    property_tags = {element.tag for element in root.findall(".//properties/*")}
+    _require(
+        condition=any(
+            tag.endswith("DisableConcurrentBuildsJobProperty") for tag in property_tags
+        ),
+        message="job allows concurrent builds",
+    )
+    _equal(root.findtext(".//daysToKeep"), "90", "job build retention")
+    _equal(root.findtext(".//artifactDaysToKeep"), "90", "job artifact retention")
+    _equal(root.findtext(".//userRemoteConfigs/*/url"), repository_url, "job SCM URL")
+    _equal(
+        root.findtext(".//branches/*/name"),
+        "${RESOLVED_COMMIT_SHA}",
+        "job SCM revision",
+    )
+    _equal(root.findtext(".//scriptPath"), "Jenkinsfile", "job pipeline source")
+
+    permissions = {element.text for element in root.findall(".//permission")}
+    _equal(
+        permissions,
+        {
+            f"USER:hudson.model.Item.Read:{handoff_id}",
+            f"USER:hudson.model.Item.Build:{handoff_id}",
+            f"USER:hudson.model.Item.Cancel:{handoff_id}",
+        },
+        "job authorization",
+    )
+
+
+def _check(args: argparse.Namespace) -> None:
+    admin = _JenkinsClient(args.url, args.admin_id, _password(args.admin_password_file))
+    status, root, headers = admin.json("/api/json?tree=numExecutors,slaveAgentPort")
+    _equal(status, HTTP_OK, "root API status")
+    _equal(headers["X-Jenkins"], EXPECTED_JENKINS_VERSION, "Jenkins version")
+    _equal(root["numExecutors"], 0, "controller executors")
+    _equal(root["slaveAgentPort"], -1, "inbound-agent TCP port")
+
+    status, plugin_manager, _ = admin.json(
+        "/pluginManager/api/json?depth=1&tree=plugins[shortName,version,active,enabled]"
+    )
+    _equal(status, HTTP_OK, "plugin API status")
+    plugins = {str(plugin["shortName"]): plugin for plugin in plugin_manager["plugins"]}
+    expected_plugins = _expected_plugins(args.plugin_lock)
+    _equal(set(plugins), set(expected_plugins), "loaded plugin set")
+    for name, expected_version in expected_plugins.items():
+        _equal(plugins[name]["version"], expected_version, f"{name} version")
+        _require(
+            condition=plugins[name]["active"] is True,
+            message=f"{name} is not active",
+        )
+        _require(
+            condition=plugins[name]["enabled"] is True,
+            message=f"{name} is not enabled",
+        )
+
+    status, config_xml, _ = admin.request("/job/pipeline-integration/config.xml")
+    _equal(status, HTTP_OK, "job configuration status")
+    _check_job_config(config_xml, args.repository_url, args.handoff_id)
+
+    casc_bytes = args.casc.read_bytes()
+    status, body, _ = admin.post_with_crumb(
+        "/configuration-as-code/check",
+        data=casc_bytes,
+        content_type="application/yaml",
+    )
+    _equal(
+        status,
+        HTTP_OK,
+        f"JCasC check status ({body.decode(errors='replace')})",
+    )
+    _equal(body.strip(), b"[]", "JCasC check response")
+
+    handoff = _JenkinsClient(
+        args.url, args.handoff_id, _password(args.handoff_password_file)
+    )
+    status, _, _ = handoff.json("/job/pipeline-integration/api/json")
+    _equal(status, HTTP_OK, "handoff user job visibility")
+    status, _, _ = handoff.request("/script")
+    _equal(status, HTTP_FORBIDDEN, "handoff user administration denial")
+
+
+def _introduce_drift(args: argparse.Namespace) -> None:
+    admin = _JenkinsClient(args.url, args.admin_id, _password(args.admin_password_file))
+    script = (
+        "import jenkins.model.Jenkins\n"
+        "def j = Jenkins.get()\n"
+        "j.setNumExecutors(1)\n"
+        "j.getItem('pipeline-integration').delete()\n"
+        "println('drifted')\n"
+    )
+    data = urllib.parse.urlencode({"script": script}).encode()
+    status, body, _ = admin.post_with_crumb(
+        "/scriptText",
+        data=data,
+        content_type="application/x-www-form-urlencoded",
+    )
+    _equal(
+        status,
+        HTTP_OK,
+        f"script console status ({body.decode(errors='replace')})",
+    )
+    _equal(body.strip(), b"drifted", "script console response")
+
+    status, root, _ = admin.json("/api/json?tree=numExecutors")
+    _equal(status, HTTP_OK, "drifted root API status")
+    _equal(root["numExecutors"], 1, "drifted controller executors")
+    status, _, _ = admin.request("/job/pipeline-integration/api/json")
+    _equal(status, HTTP_NOT_FOUND, "deleted job status")
+
+
+def _main() -> int:
+    args = _parser().parse_args()
+    try:
+        if args.mode == "check":
+            _check(args)
+        else:
+            _introduce_drift(args)
+    except (
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+        KeyError,
+        ET.ParseError,
+    ) as error:
+        sys.stderr.write(f"smoke-check: {error}\n")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())
