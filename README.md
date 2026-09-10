@@ -11,6 +11,11 @@ interface, and validates its complete local archive candidate. Fixture output is
 not Validation evidence, Domain success, KPI evidence, or proof that a real
 composition, build, simulation, or deployment capability exists.
 
+The repository also reconstructs an on-demand, zero-executor Jenkins controller
+from an immutable image digest, an exact plugin lock, Configuration as Code, and
+Job DSL. The controller smoke check does not require or imply that the future
+inbound agents or Jenkins pipeline are implemented.
+
 ## Development
 
 Install [`uv`](https://docs.astral.sh/uv/) and run the deterministic baseline
@@ -20,8 +25,9 @@ verification command from any directory:
 integration/scripts/verify
 ```
 
-The command installs the exact locked Python 3.12 environment and checks the
-public CLI with pytest, Ruff, and Basedpyright. The installed command is:
+The command installs the exact locked Python 3.12 environment; checks schemas,
+the public CLI, Ruff, and Basedpyright; and runs the ephemeral Jenkins controller
+smoke check on the supported Docker host. The installed command is:
 
 ```sh
 uv run --project integration sdi-integration --help
@@ -33,8 +39,9 @@ uv run --project integration sdi-integration --help
   profiles, Fixtures, tests, and verification entry point.
 - `requirements/`, `profiles/`, and `runs/`: version-controlled, dispatchable
   inputs introduced by the run-contract implementation.
-- `deployment/jenkins/`: reproducible Jenkins deployment configuration added by
-  the deployment implementation.
+- `deployment/jenkins/`: the pinned zero-executor Jenkins controller deployment,
+  exact plugin lock, configuration, fixed job, and lifecycle interface. Agents
+  arrive in later implementation issues.
 - `.github/workflows/`: protected workflow configuration added by the handoff
   implementation.
 - `docs/`: role-neutral setup, operation, maintenance, and readiness guidance.

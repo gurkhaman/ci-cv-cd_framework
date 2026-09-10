@@ -1,0 +1,86 @@
+#!/bin/sh
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+stack=$root/bin/stack
+checker=$root/bin/smoke-check
+temporary=$(mktemp -d "${TMPDIR:-/tmp}/sdi-jenkins-smoke-XXXXXX")
+project_name=$(printf '%s' "${temporary##*/}" | tr '[:upper:]' '[:lower:]')
+config=$temporary/controller.env
+admin_password=$temporary/admin-password
+handoff_password=$temporary/handoff-password
+
+cleanup() {
+    status=$?
+    trap - EXIT HUP INT TERM
+    if [ "$status" -ne 0 ]; then
+        "$stack" --config "$config" --project-name "$project_name" logs >&2 || true
+    fi
+    cleanup_status=0
+    "$stack" --config "$config" --project-name "$project_name" destroy \
+        >/dev/null || cleanup_status=$?
+    if [ "$cleanup_status" -eq 0 ]; then
+        rm -rf -- "$temporary"
+    else
+        printf 'smoke: failed to remove project %s; configuration retained at %s\n' \
+            "$project_name" "$temporary" >&2
+        if [ "$status" -eq 0 ]; then
+            status=$cleanup_status
+        fi
+    fi
+    exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' HUP INT TERM
+
+command -v python3 >/dev/null 2>&1 || {
+    printf '%s\n' 'smoke: python3 is required' >&2
+    exit 2
+}
+
+port=$(python3 -c \
+    'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+
+umask 077
+printf '%s\n' 'ephemeral-admin-password-for-controller-smoke' > "$admin_password"
+printf '%s\n' 'ephemeral-handoff-password-for-controller-smoke' > "$handoff_password"
+printf '%s\n' \
+    "JENKINS_HTTP_PORT=$port" \
+    'JENKINS_ADMIN_ID=smoke-administrator' \
+    'JENKINS_HANDOFF_ID=smoke-github-handoff' \
+    'JENKINS_REPOSITORY_URL=https://github.com/gurkhaman/ci-cv-cd_framework.git' \
+    "JENKINS_ADMIN_PASSWORD_FILE=$admin_password" \
+    "JENKINS_HANDOFF_PASSWORD_FILE=$handoff_password" > "$config"
+
+"$stack" --config "$config" --project-name "$project_name" destroy
+
+check() {
+    "$checker" check \
+        --url "http://127.0.0.1:$port" \
+        --admin-id smoke-administrator \
+        --admin-password-file "$admin_password" \
+        --handoff-id smoke-github-handoff \
+        --handoff-password-file "$handoff_password" \
+        --repository-url https://github.com/gurkhaman/ci-cv-cd_framework.git \
+        --plugin-lock "$root/controller/plugins.txt" \
+        --casc "$root/casc/jenkins.yaml"
+}
+
+"$stack" --config "$config" --project-name "$project_name" start
+check
+
+"$checker" drift \
+    --url "http://127.0.0.1:$port" \
+    --admin-id smoke-administrator \
+    --admin-password-file "$admin_password" \
+    --handoff-id smoke-github-handoff \
+    --handoff-password-file "$handoff_password" \
+    --repository-url https://github.com/gurkhaman/ci-cv-cd_framework.git \
+    --plugin-lock "$root/controller/plugins.txt" \
+    --casc "$root/casc/jenkins.yaml"
+
+"$stack" --config "$config" --project-name "$project_name" stop
+"$stack" --config "$config" --project-name "$project_name" start
+check
+
+printf '%s\n' 'Ephemeral Jenkins controller smoke check passed.'

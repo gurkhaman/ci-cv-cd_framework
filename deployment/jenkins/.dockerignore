@@ -1,0 +1,8 @@
+**
+!controller/
+!controller/Dockerfile
+!controller/plugins.txt
+!casc/
+!casc/jenkins.yaml
+!jobs/
+!jobs/pipeline-integration.groovy
