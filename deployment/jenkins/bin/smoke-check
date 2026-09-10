@@ -333,11 +333,13 @@ test "$(uv --version)" = "uv 0.12.1 (x86_64-unknown-linux-musl)"
 test "$(java -jar /usr/share/jenkins/agent.jar -version)" = "3391.va_37fa_a_305d6d"
 sdi-integration --version
 if [ "$(cat /etc/sdi/jenkins-agent-role)" = integration ]; then
-  ! command -v sdi-fixture-adapter >/dev/null 2>&1
-  ! python3 -c 'import sdi_pipeline_integration._fixture_adapter' >/dev/null 2>&1
+  if sdi-fixture-adapter --help >/dev/null 2>"$WORKSPACE/adapter.stderr"; then
+    echo "integration agent unexpectedly ran the Domain adapter" >&2
+    exit 1
+  fi
+  grep -Fx 'sdi-fixture-adapter: the integration Jenkins agent cannot execute a Domain adapter' "$WORKSPACE/adapter.stderr"
 else
   sdi-fixture-adapter --help >/dev/null
-  python3 -c 'import sdi_pipeline_integration._fixture_adapter'
 fi
 git --version
 test ! -e /var/run/docker.sock

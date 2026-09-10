@@ -9,7 +9,11 @@ from pathlib import Path
 
 import pytest
 
-from sdi_pipeline_integration import _stage_runtime
+from sdi_pipeline_integration import (
+    _fixture_adapter,
+    _jenkins_agent_boundary,
+    _stage_runtime,
+)
 from sdi_pipeline_integration._git_input import GitRepository
 from sdi_pipeline_integration._yaml_input import InputError
 
@@ -134,13 +138,19 @@ def test_immutable_agent_identity_enforces_the_domain_execution_boundary(
     )
     role_file = tmp_path / "jenkins-agent-role"
     label_file = tmp_path / "jenkins-agent-label"
-    monkeypatch.setattr(_stage_runtime, "_JENKINS_AGENT_ROLE_FILE", role_file)
-    monkeypatch.setattr(_stage_runtime, "_JENKINS_AGENT_LABEL_FILE", label_file)
+    monkeypatch.setattr(_jenkins_agent_boundary, "_ROLE_FILE", role_file)
+    monkeypatch.setattr(_jenkins_agent_boundary, "_LABEL_FILE", label_file)
 
     role_file.write_text("integration\n")
     label_file.write_text("\n")
     with pytest.raises(InputError, match="cannot execute a Domain adapter"):
         _stage_runtime.enforce_jenkins_agent_boundary(descriptor)
+    with pytest.raises(InputError, match="cannot execute a Domain adapter"):
+        _fixture_adapter.run_adapter(
+            request_path=tmp_path / "missing-request.json",
+            input_root=tmp_path / "missing-inputs",
+            output_root=tmp_path / "missing-outputs",
+        )
 
     role_file.write_text("domain\n")
     label_file.write_text("cv\n")

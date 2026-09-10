@@ -32,6 +32,7 @@ from ._domain_contracts import (
     ValidationEvidence,
 )
 from ._git_input import CommittedBlob, GitRepository, validate_repository_path
+from ._jenkins_agent_boundary import enforce_domain_execution_boundary
 from ._json_input import parse_json
 from ._run_input import PROTECTED_MAIN_REF, identify_committed_run
 from ._stage_contracts import (
@@ -56,8 +57,6 @@ MAX_RESPONSE_BYTES = 64 * 1024
 MAX_CANDIDATE_ENTRIES = 32
 MAX_CANDIDATE_DEPTH = 4
 ADAPTER_SHUTDOWN_GRACE_SECONDS = 10
-_JENKINS_AGENT_LABEL_FILE = Path("/etc/sdi/jenkins-agent-label")
-_JENKINS_AGENT_ROLE_FILE = Path("/etc/sdi/jenkins-agent-role")
 
 
 @dataclass(frozen=True)
@@ -990,22 +989,7 @@ def load_stage_adapter(
 
 
 def enforce_jenkins_agent_boundary(descriptor: AdapterDescriptor) -> None:
-    if not _JENKINS_AGENT_ROLE_FILE.exists():
-        return
-    agent_role = _JENKINS_AGENT_ROLE_FILE.read_text().strip()
-    if agent_role == "integration":
-        msg = "the integration Jenkins agent cannot execute a Domain adapter"
-        raise InputError(msg)
-    if agent_role != "domain":
-        msg = "the immutable Jenkins agent role is invalid"
-        raise InputError(msg)
-    if not _JENKINS_AGENT_LABEL_FILE.is_file():
-        msg = "the Domain Jenkins agent has no immutable label"
-        raise InputError(msg)
-    configured_label = _JENKINS_AGENT_LABEL_FILE.read_text().strip()
-    if configured_label != descriptor.agent_label:
-        msg = "the Domain agent label does not match the adapter descriptor"
-        raise InputError(msg)
+    enforce_domain_execution_boundary(expected_label=descriptor.agent_label)
 
 
 def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
