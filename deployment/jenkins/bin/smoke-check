@@ -318,11 +318,14 @@ try {{
     def agentLabel = agentName == 'integration' ? '' : labelName
     def command = '''set -eu
 marker="$WORKSPACE/.sdi-agent-workspace-marker"
+tree="$WORKSPACE/.sdi-agent-workspace-tree"
 cleanup() {{ find "$WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {{}} +; }}
 cleanup
 test -z "$(find "$WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)"
 trap cleanup EXIT HUP INT TERM
 touch "$marker"
+mkdir "$tree"
+touch "$tree/file"
 test "$(cat /etc/sdi/jenkins-agent-role)" = "''' + agentRole + '''"
 test "$(cat /etc/sdi/jenkins-agent-label)" = "''' + agentLabel + '''"
 test "$(python3 --version)" = "Python 3.12.13"
@@ -358,6 +361,14 @@ done
       if (build.getBuiltOnStr() != agentName) {{
         throw new IllegalStateException(
           labelName + " ran on " + build.getBuiltOnStr() + ", expected " + agentName
+        )
+      }}
+      def workspace = j.getNode(agentName).getWorkspaceFor(job)
+      def marker = workspace.child('.sdi-agent-workspace-marker')
+      def tree = workspace.child('.sdi-agent-workspace-tree')
+      if (marker.exists() || tree.exists()) {{
+        throw new IllegalStateException(
+          agentName + " workspace was not clean after build " + buildIndex
         )
       }}
     }}
