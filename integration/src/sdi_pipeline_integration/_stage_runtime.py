@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import time
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -23,15 +24,24 @@ from ._contracts import (
     RunRequest,
     TargetExecutionProfile,
 )
-from ._domain_contracts import CompositionBlueprint, DeploymentSchema
+from ._domain_contracts import (
+    CompositionBlueprint,
+    DeploymentResult,
+    DeploymentSchema,
+    ImageBuildResult,
+    ValidationEvidence,
+)
 from ._git_input import CommittedBlob, GitRepository, validate_repository_path
 from ._json_input import parse_json
 from ._run_input import PROTECTED_MAIN_REF, identify_committed_run
 from ._stage_contracts import (
+    ASCII_CONTROL_LIMIT,
+    ASCII_DELETE,
     AcceptedAttemptEnvelope,
     AdapterDescriptor,
     AdapterRequest,
     AdapterResponse,
+    StageName,
     StageProfile,
 )
 from ._yaml_input import InputError, parse_yaml
@@ -42,8 +52,44 @@ if TYPE_CHECKING:
 MAX_RESPONSE_BYTES = 64 * 1024
 MAX_CANDIDATE_ENTRIES = 32
 MAX_CANDIDATE_DEPTH = 4
-ASCII_CONTROL_LIMIT = 32
 ADAPTER_SHUTDOWN_GRACE_SECONDS = 10
+
+
+@dataclass(frozen=True)
+class StageInputSource:
+    """Immutable accepted bytes available to a later Stage."""
+
+    source_path: str
+    media_type: str
+    schema_version: str
+    content: bytes
+
+
+@dataclass(frozen=True)
+class StageExecution:
+    """One accepted attempt plus the exact files available for assembly."""
+
+    envelope: AcceptedAttemptEnvelope
+    files: dict[str, bytes]
+    outputs: dict[str, StageInputSource]
+
+
+INPUT_MODELS: dict[str, type[BaseModel]] = {
+    "sdi.pipeline-integration-run-request/v1": RunRequest,
+    "sdi.mobility-requirements-specification/v1": MobilityRequirementsSpecification,
+    "sdi.target-execution-profile/v1": TargetExecutionProfile,
+    "sdi.composition-blueprint/v1": CompositionBlueprint,
+    "sdi.deployment-schema/v1": DeploymentSchema,
+    "sdi.image-build-result/v1": ImageBuildResult,
+    "sdi.validation-evidence/v1": ValidationEvidence,
+}
+OUTPUT_MODELS: dict[str, type[BaseModel]] = {
+    "sdi.composition-blueprint/v1": CompositionBlueprint,
+    "sdi.deployment-schema/v1": DeploymentSchema,
+    "sdi.image-build-result/v1": ImageBuildResult,
+    "sdi.validation-evidence/v1": ValidationEvidence,
+    "sdi.deployment-result/v1": DeploymentResult,
+}
 
 
 def _canonical_json(value: object) -> bytes:
@@ -71,6 +117,27 @@ def _validate_yaml_model[ModelT: BaseModel](
         raise InputError(msg) from error
 
 
+def _validate_source_model(
+    model: type[BaseModel], source: StageInputSource
+) -> BaseModel:
+    try:
+        if source.media_type == "application/yaml":
+            parsed = parse_yaml(source.content, source.source_path)
+        elif source.media_type == "application/json":
+            parsed = parse_json(
+                source.content,
+                source.source_path,
+                max_bytes=max(1, len(source.content)),
+            )
+        else:
+            msg = "Stage input uses an unsupported media type"
+            raise InputError(msg)
+        return model.model_validate(parsed, strict=True, extra="forbid")
+    except ValidationError as error:
+        msg = f"{source.source_path}: contract validation failed: {error}"
+        raise InputError(msg) from error
+
+
 def _write_file(root: Path, relative_path: str, content: bytes) -> None:
     validate_repository_path(relative_path)
     destination = root / relative_path
@@ -81,7 +148,7 @@ def _write_file(root: Path, relative_path: str, content: bytes) -> None:
         os.fsync(stream.fileno())
 
 
-def _capture_tree(  # noqa: C901, PLR0915
+def capture_tree(  # noqa: C901, PLR0915
     root: Path,
     expected_root_identity: tuple[int, int],
     grants: Mapping[str, int],
@@ -211,7 +278,7 @@ def _capture_tree(  # noqa: C901, PLR0915
     return paths, captured
 
 
-def _expected_directories(files: set[str]) -> set[str]:
+def expected_directories(files: set[str]) -> set[str]:
     directories: set[str] = set()
     for path in files:
         parent = Path(path).parent
@@ -221,17 +288,18 @@ def _expected_directories(files: set[str]) -> set[str]:
     return directories
 
 
-def _capture_candidate(  # noqa: C901, PLR0912, PLR0915
+def _capture_candidate(  # noqa: C901, PLR0912, PLR0913, PLR0915, PLR0917
     output_root: Path,
     output_root_identity: tuple[int, int],
     request: AdapterRequest,
     implementation_mode: str,
     identified: Mapping[str, Any],
+    input_models: Mapping[str, BaseModel],
 ) -> tuple[AdapterResponse, dict[str, bytes]]:
     grants = {item.path: item.max_bytes for item in request.outputs}
     grants[request.diagnostic.path] = request.diagnostic.max_bytes
     grants["response.json"] = MAX_RESPONSE_BYTES
-    inventory_paths, captured = _capture_tree(
+    inventory_paths, captured = capture_tree(
         output_root,
         output_root_identity,
         grants,
@@ -285,19 +353,15 @@ def _capture_candidate(  # noqa: C901, PLR0912, PLR0915
     }
     if response.diagnostic.present:
         expected_files.add(request.diagnostic.path)
-    expected_paths = expected_files | _expected_directories(expected_files)
+    expected_paths = expected_files | expected_directories(expected_files)
     if inventory_paths != expected_paths:
         msg = "candidate bundle inventory does not match its response"
         raise InputError(msg)
 
     validated_outputs: dict[str, BaseModel] = {}
-    output_models: dict[str, type[BaseModel]] = {
-        "sdi.composition-blueprint/v1": CompositionBlueprint,
-        "sdi.deployment-schema/v1": DeploymentSchema,
-    }
     for slot in response.produced_outputs:
         grant = output_by_slot[slot]
-        model = output_models.get(grant.schema_version)
+        model = OUTPUT_MODELS.get(grant.schema_version)
         if model is None:
             msg = "candidate output uses an unsupported schema version"
             raise InputError(msg)
@@ -320,15 +384,27 @@ def _capture_candidate(  # noqa: C901, PLR0912, PLR0915
             msg = "candidate diagnostic is not valid UTF-8"
             raise InputError(msg) from error
         if "\0" in diagnostic or any(
-            ord(character) < ASCII_CONTROL_LIMIT and character not in "\t\r\n"
+            (ord(character) < ASCII_CONTROL_LIMIT and character not in "\t\r\n")
+            or ord(character) == ASCII_DELETE
             for character in diagnostic
         ):
             msg = "candidate diagnostic contains unsanitized control characters"
             raise InputError(msg)
 
     if response.execution_conclusion == "succeeded":
-        _validate_composition_outputs(validated_outputs, request, identified)
-    second_paths, second_capture = _capture_tree(
+        validate_stage_documents(
+            request.correlation.stage,
+            validated_outputs,
+            input_models,
+            {item.slot: item.sha256 for item in request.inputs},
+            (
+                identified["scenario_id"],
+                identified["testcase_id"],
+                identified["combination_id"],
+                identified["profile_id"],
+            ),
+        )
+    second_paths, second_capture = capture_tree(
         output_root,
         output_root_identity,
         grants,
@@ -339,25 +415,27 @@ def _capture_candidate(  # noqa: C901, PLR0912, PLR0915
     return response, captured
 
 
-def _validate_composition_outputs(
+def validate_stage_documents(  # noqa: C901, PLR0912, PLR0915
+    stage: StageName,
     outputs: Mapping[str, BaseModel],
-    request: AdapterRequest,
-    identified: Mapping[str, Any],
+    inputs: Mapping[str, BaseModel],
+    expected_input_digests: Mapping[str, str],
+    expected_identity: tuple[str, str, str, str],
 ) -> None:
-    blueprint = outputs.get("composition_blueprint")
-    deployment = outputs.get("deployment_schema")
-    if not isinstance(blueprint, CompositionBlueprint) or not isinstance(
-        deployment, DeploymentSchema
-    ):
-        msg = "composition candidate must contain both Domain outputs"
-        raise InputError(msg)
-    expected_identity = (
-        identified["scenario_id"],
-        identified["testcase_id"],
-        identified["combination_id"],
-        identified["profile_id"],
-    )
-    for output in (blueprint, deployment):
+    domain_outputs = tuple(outputs.values())
+    for output in domain_outputs:
+        if not isinstance(
+            output,
+            (
+                CompositionBlueprint,
+                DeploymentSchema,
+                ImageBuildResult,
+                ValidationEvidence,
+                DeploymentResult,
+            ),
+        ):
+            msg = "candidate output is not a supported Domain contract"
+            raise InputError(msg)
         actual_identity = (
             output.scenario_id,
             output.testcase_id,
@@ -367,11 +445,21 @@ def _validate_composition_outputs(
         if actual_identity != expected_identity:
             msg = "candidate Domain output correlation does not match accepted inputs"
             raise InputError(msg)
-        if {item.slot: item.sha256 for item in output.source_inputs} != {
-            item.slot: item.sha256 for item in request.inputs
-        }:
+        if {
+            item.slot: item.sha256 for item in output.source_inputs
+        } != expected_input_digests:
             msg = "candidate Domain output input digests do not match the request"
             raise InputError(msg)
+
+    blueprint = outputs.get("composition_blueprint") or inputs.get(
+        "composition_blueprint"
+    )
+    deployment = outputs.get("deployment_schema") or inputs.get("deployment_schema")
+    if not isinstance(blueprint, CompositionBlueprint) or not isinstance(
+        deployment, DeploymentSchema
+    ):
+        msg = f"{stage} candidate is missing its composition inputs"
+        raise InputError(msg)
     if deployment.blueprint_id != blueprint.blueprint_id:
         msg = "deployment schema does not reference the accepted blueprint"
         raise InputError(msg)
@@ -381,13 +469,83 @@ def _validate_composition_outputs(
         msg = "deployment schema must place every accepted blueprint service once"
         raise InputError(msg)
 
+    if stage == "composition":
+        if set(outputs) != {"composition_blueprint", "deployment_schema"}:
+            msg = "composition candidate must contain both Domain outputs"
+            raise InputError(msg)
+        return
+
+    image_build = outputs.get("image_build_result") or inputs.get("image_build_result")
+    if not isinstance(image_build, ImageBuildResult):
+        msg = f"{stage} candidate is missing the image-build result"
+        raise InputError(msg)
+    if (
+        image_build.blueprint_id != blueprint.blueprint_id
+        or image_build.deployment_schema_id != deployment.deployment_schema_id
+    ):
+        msg = "image-build result does not reference accepted composition outputs"
+        raise InputError(msg)
+    profile = inputs.get("target_profile")
+    if {item.service_id for item in image_build.images} != {
+        item.service_id for item in blueprint.services
+    }:
+        msg = "image-build result does not cover the accepted services"
+        raise InputError(msg)
+    if isinstance(profile, TargetExecutionProfile) and any(
+        item.architecture != profile.platform.architecture
+        for item in image_build.images
+    ):
+        msg = "image-build result does not match the accepted target architecture"
+        raise InputError(msg)
+    if stage == "image_build":
+        if set(outputs) != {"image_build_result"}:
+            msg = "image-build candidate must contain its result"
+            raise InputError(msg)
+        return
+
+    validation = outputs.get("validation_evidence") or inputs.get("validation_evidence")
+    if not isinstance(validation, ValidationEvidence):
+        msg = f"{stage} candidate is missing Validation evidence"
+        raise InputError(msg)
+    if (
+        validation.blueprint_id != blueprint.blueprint_id
+        or validation.deployment_schema_id != deployment.deployment_schema_id
+        or validation.image_build_result_id != image_build.image_build_result_id
+    ):
+        msg = "Validation evidence does not reference accepted prior outputs"
+        raise InputError(msg)
+    if stage == "cv":
+        if set(outputs) != {"validation_evidence"}:
+            msg = "CV candidate must contain Validation evidence"
+            raise InputError(msg)
+        return
+
+    deployment_result = outputs.get("deployment_result")
+    if not isinstance(deployment_result, DeploymentResult):
+        msg = "CD candidate must contain its deployment result"
+        raise InputError(msg)
+    if (
+        deployment_result.blueprint_id != blueprint.blueprint_id
+        or deployment_result.deployment_schema_id != deployment.deployment_schema_id
+        or deployment_result.image_build_result_id != image_build.image_build_result_id
+        or deployment_result.validation_evidence_id != validation.validation_evidence_id
+    ):
+        msg = "deployment result does not reference accepted prior outputs"
+        raise InputError(msg)
+    if {
+        (item.service_id, item.location_id)
+        for item in deployment_result.deployment_records
+    } != {(item.service_id, item.location_id) for item in deployment.placements}:
+        msg = "deployment result does not cover every intended placement"
+        raise InputError(msg)
+
 
 def _accepted_envelope(  # noqa: PLR0913
     *,
     descriptor: AdapterDescriptor,
     request: AdapterRequest,
     response: AdapterResponse,
-    identified: Mapping[str, Any],
+    input_sources: Mapping[str, StageInputSource],
     captured: Mapping[str, bytes],
     started_at: datetime,
     finished_at: datetime,
@@ -421,17 +579,16 @@ def _accepted_envelope(  # noqa: PLR0913
                 "truncated": response.diagnostic.truncated,
             }
         )
-    provenance = {item["schema_version"]: item for item in identified["inputs"]}
     accepted_inputs: list[dict[str, object]] = []
     for declared in request.inputs:
-        source = provenance[declared.schema_version]
+        source = input_sources[declared.slot]
         accepted_inputs.append(
             {
                 "slot": declared.slot,
-                "source_path": source["path"],
-                "schema_version": source["schema_version"],
-                "byte_size": source["byte_size"],
-                "sha256": source["sha256"],
+                "source_path": source.source_path,
+                "schema_version": source.schema_version,
+                "byte_size": len(source.content),
+                "sha256": hashlib.sha256(source.content).hexdigest(),
             }
         )
     envelope_data: dict[str, object] = {
@@ -461,46 +618,92 @@ def _accepted_envelope(  # noqa: PLR0913
     )
 
 
-def _stage_inputs(
-    repository: GitRepository,
-    identified: Mapping[str, Any],
+def _materialize_stage_inputs(
     profile: StageProfile,
     input_root: Path,
-) -> list[dict[str, object]]:
-    provenance = identified["inputs"]
-    if len(profile.inputs) != len(provenance):
+    available_inputs: Mapping[str, StageInputSource],
+) -> tuple[list[dict[str, object]], dict[str, BaseModel]]:
+    required_slots = {item.slot for item in profile.inputs}
+    selected_sources = {
+        slot: source
+        for slot, source in available_inputs.items()
+        if slot in required_slots
+    }
+    if set(selected_sources) != required_slots:
         msg = "Stage profile input grants do not match accepted run inputs"
         raise InputError(msg)
     declared_inputs: list[dict[str, object]] = []
-    input_models: dict[str, type[BaseModel]] = {
-        "sdi.pipeline-integration-run-request/v1": RunRequest,
-        "sdi.mobility-requirements-specification/v1": (
-            MobilityRequirementsSpecification
-        ),
-        "sdi.target-execution-profile/v1": TargetExecutionProfile,
-    }
-    provenance_by_schema = {item["schema_version"]: item for item in provenance}
+    validated_inputs: dict[str, BaseModel] = {}
     for grant in profile.inputs:
-        source = provenance_by_schema.get(grant.schema_version)
-        model = input_models.get(grant.schema_version)
-        if source is None or model is None:
+        source = selected_sources[grant.slot]
+        model = INPUT_MODELS.get(grant.schema_version)
+        if (
+            model is None
+            or source.schema_version != grant.schema_version
+            or source.media_type != grant.media_type
+        ):
             msg = "Stage input grant does not match an accepted input slot"
             raise InputError(msg)
-        blob = repository.read_regular_file(source["path"])
-        _validate_yaml_model(model, blob)
-        digest = hashlib.sha256(blob.content).hexdigest()
-        if len(blob.content) != source["byte_size"] or digest != source["sha256"]:
-            msg = "accepted input provenance changed before Stage execution"
-            raise InputError(msg)
-        _write_file(input_root, grant.path, blob.content)
+        validated_inputs[grant.slot] = _validate_source_model(model, source)
+        digest = hashlib.sha256(source.content).hexdigest()
+        _write_file(input_root, grant.path, source.content)
         declared_inputs.append(
             {
                 **grant.model_dump(mode="json"),
-                "byte_size": len(blob.content),
+                "byte_size": len(source.content),
                 "sha256": digest,
             }
         )
-    return declared_inputs
+    return declared_inputs, validated_inputs
+
+
+def committed_stage_sources(
+    repository: GitRepository, identified: Mapping[str, Any]
+) -> dict[str, StageInputSource]:
+    """Revalidate and capture the three immutable committed run inputs."""
+    expected = {
+        "sdi.pipeline-integration-run-request/v1": (
+            "run_request",
+            "application/yaml",
+        ),
+        "sdi.mobility-requirements-specification/v1": (
+            "requirements_specification",
+            "application/yaml",
+        ),
+        "sdi.target-execution-profile/v1": (
+            "target_profile",
+            "application/yaml",
+        ),
+    }
+    sources: dict[str, StageInputSource] = {}
+    for provenance in identified["inputs"]:
+        schema_version = provenance["schema_version"]
+        definition = expected.get(schema_version)
+        if definition is None:
+            msg = "identified run contains an unsupported input contract"
+            raise InputError(msg)
+        slot, media_type = definition
+        blob = repository.read_regular_file(provenance["path"])
+        digest = hashlib.sha256(blob.content).hexdigest()
+        if (
+            len(blob.content) != provenance["byte_size"]
+            or digest != provenance["sha256"]
+        ):
+            msg = "accepted input provenance changed before Stage execution"
+            raise InputError(msg)
+        source = StageInputSource(
+            source_path=blob.path,
+            media_type=media_type,
+            schema_version=schema_version,
+            content=blob.content,
+        )
+        model = INPUT_MODELS[schema_version]
+        _validate_source_model(model, source)
+        sources[slot] = source
+    if set(sources) != {"run_request", "requirements_specification", "target_profile"}:
+        msg = "identified run does not contain its exact committed input set"
+        raise InputError(msg)
+    return sources
 
 
 def _process_group_exists(process_group: int) -> bool:
@@ -528,7 +731,7 @@ def _terminate_process_group(
         process.wait()
 
 
-def execute_stage(  # noqa: C901, PLR0913, PLR0915
+def execute_stage(  # noqa: PLR0913
     *,
     repository_path: Path,
     requested_ref: str,
@@ -541,10 +744,6 @@ def execute_stage(  # noqa: C901, PLR0913, PLR0915
     if requested_ref != PROTECTED_MAIN_REF:
         msg = f"requested ref must be {PROTECTED_MAIN_REF}"
         raise InputError(msg)
-    validate_repository_path(descriptor_path)
-    if attempt_root.exists():
-        msg = "attempt root must not already exist"
-        raise InputError(msg)
     identified = identify_committed_run(
         repository_path=repository_path,
         requested_ref=requested_ref,
@@ -553,6 +752,29 @@ def execute_stage(  # noqa: C901, PLR0913, PLR0915
     )
     repository = GitRepository(repository_path, resolved_commit)
     repository.require_ref_commit(requested_ref)
+    execution = execute_identified_stage(
+        repository=repository,
+        identified=identified,
+        descriptor_path=descriptor_path,
+        attempt_root=attempt_root,
+        available_inputs=committed_stage_sources(repository, identified),
+    )
+    return execution.envelope.model_dump(mode="json")
+
+
+def execute_identified_stage(  # noqa: PLR0915
+    *,
+    repository: GitRepository,
+    identified: Mapping[str, Any],
+    descriptor_path: str,
+    attempt_root: Path,
+    available_inputs: Mapping[str, StageInputSource],
+) -> StageExecution:
+    """Execute one Stage while preserving an already assigned Execution ID."""
+    validate_repository_path(descriptor_path)
+    if attempt_root.exists():
+        msg = "attempt root must not already exist"
+        raise InputError(msg)
     descriptor_blob = repository.read_regular_file(descriptor_path)
     descriptor = _validate_yaml_model(AdapterDescriptor, descriptor_blob)
     profile_blob = repository.read_regular_file(descriptor.stage_profile)
@@ -585,7 +807,11 @@ def execute_stage(  # noqa: C901, PLR0913, PLR0915
             output_root_metadata.st_dev,
             output_root_metadata.st_ino,
         )
-        declared_inputs = _stage_inputs(repository, identified, profile, input_root)
+        declared_inputs, input_models = _materialize_stage_inputs(
+            profile,
+            input_root,
+            available_inputs,
+        )
         request = AdapterRequest.model_validate(
             {
                 "schema_version": "sdi.stage-adapter-request/v1",
@@ -650,12 +876,13 @@ def execute_stage(  # noqa: C901, PLR0913, PLR0915
             request,
             descriptor.implementation_mode,
             identified,
+            input_models,
         )
         envelope = _accepted_envelope(
             descriptor=descriptor,
             request=request,
             response=response,
-            identified=identified,
+            input_sources=available_inputs,
             captured=captured,
             started_at=started_at,
             finished_at=finished_at,
@@ -683,7 +910,26 @@ def execute_stage(  # noqa: C901, PLR0913, PLR0915
         )
         accepted_staging.replace(attempt_root)
         accepted_staging = None
-        return envelope.model_dump(mode="json")
+        output_sources = {
+            slot: StageInputSource(
+                source_path=(
+                    f"stages/{descriptor.stage.replace('_', '-')}/"
+                    f"{output_by_slot[slot].path.removeprefix('outputs/')}"
+                ),
+                media_type=output_by_slot[slot].media_type,
+                schema_version=output_by_slot[slot].schema_version,
+                content=captured[output_by_slot[slot].path],
+            )
+            for slot in response.produced_outputs
+        }
+        accepted_files = {
+            item.path: captured[item.path] for item in envelope.accepted_files
+        }
+        return StageExecution(
+            envelope=envelope,
+            files=accepted_files,
+            outputs=output_sources,
+        )
     finally:
         if accepted_staging is not None:
             shutil.rmtree(accepted_staging, ignore_errors=True)
