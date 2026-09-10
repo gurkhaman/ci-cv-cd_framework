@@ -37,7 +37,11 @@ RUN case "$SDI_JENKINS_AGENT_ROLE" in \
     && printf '%s\n' "$SDI_JENKINS_AGENT_LABEL" > /etc/sdi/jenkins-agent-label \
     && chmod 0444 /etc/sdi/jenkins-agent-role /etc/sdi/jenkins-agent-label \
     && if [ "$SDI_JENKINS_AGENT_ROLE" = integration ]; then \
-        rm /opt/sdi/integration/.venv/bin/sdi-fixture-adapter; \
+        rm -rf \
+            /opt/sdi/integration/.venv/bin/sdi-fixture-adapter \
+            /opt/sdi/integration/.venv/lib/python3.12/site-packages/sdi_pipeline_integration/_fixture_adapter.py \
+            /opt/sdi/integration/.venv/lib/python3.12/site-packages/sdi_pipeline_integration/_fixture_cases \
+            /opt/sdi/integration/.venv/lib/python3.12/site-packages/sdi_pipeline_integration/__pycache__/_fixture_adapter.*; \
     fi \
     && chmod 0555 \
         /usr/local/bin/jenkins-agent-entrypoint \

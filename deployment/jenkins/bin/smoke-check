@@ -334,8 +334,10 @@ test "$(java -jar /usr/share/jenkins/agent.jar -version)" = "3391.va_37fa_a_305d
 sdi-integration --version
 if [ "$(cat /etc/sdi/jenkins-agent-role)" = integration ]; then
   ! command -v sdi-fixture-adapter >/dev/null 2>&1
+  ! python3 -c 'import sdi_pipeline_integration._fixture_adapter' >/dev/null 2>&1
 else
   sdi-fixture-adapter --help >/dev/null
+  python3 -c 'import sdi_pipeline_integration._fixture_adapter'
 fi
 git --version
 test ! -e /var/run/docker.sock
