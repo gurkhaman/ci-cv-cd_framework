@@ -9,6 +9,14 @@ from pathlib import Path
 
 import pytest
 
+from sdi_pipeline_integration import (
+    _fixture_adapter,
+    _jenkins_agent_boundary,
+    _stage_runtime,
+)
+from sdi_pipeline_integration._git_input import GitRepository
+from sdi_pipeline_integration._yaml_input import InputError
+
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
 COMMITTED_FILES = (
     "runs/s-04/s-04-tc-03-c-01-fixture.yaml",
@@ -52,7 +60,9 @@ def _commit_fixture_repository(tmp_path: Path) -> tuple[Path, str]:
 
 
 def _execute(
-    repository: Path, commit_sha: str, attempt_root: Path
+    repository: Path,
+    commit_sha: str,
+    attempt_root: Path,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -116,6 +126,39 @@ def test_executes_the_committed_composition_fixture_deterministically(
     assert json.loads((first_root / "accepted-attempt.json").read_text()) == (
         first_envelope
     )
+
+
+def test_immutable_agent_identity_enforces_the_domain_execution_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository, commit_sha = _commit_fixture_repository(tmp_path)
+    descriptor, _ = _stage_runtime.load_stage_adapter(
+        GitRepository(repository, commit_sha),
+        "deployment/jenkins/adapters/composition-fixture-v1.yaml",
+    )
+    role_file = tmp_path / "jenkins-agent-role"
+    label_file = tmp_path / "jenkins-agent-label"
+    monkeypatch.setattr(_jenkins_agent_boundary, "_ROLE_FILE", role_file)
+    monkeypatch.setattr(_jenkins_agent_boundary, "_LABEL_FILE", label_file)
+
+    role_file.write_text("integration\n")
+    label_file.write_text("\n")
+    with pytest.raises(InputError, match="cannot execute a Domain adapter"):
+        _stage_runtime.enforce_jenkins_agent_boundary(descriptor)
+    with pytest.raises(InputError, match="cannot execute a Domain adapter"):
+        _fixture_adapter.run_adapter(
+            request_path=tmp_path / "missing-request.json",
+            input_root=tmp_path / "missing-inputs",
+            output_root=tmp_path / "missing-outputs",
+        )
+
+    role_file.write_text("domain\n")
+    label_file.write_text("cv\n")
+    with pytest.raises(InputError, match="does not match the adapter descriptor"):
+        _stage_runtime.enforce_jenkins_agent_boundary(descriptor)
+
+    label_file.write_text("composition\n")
+    _stage_runtime.enforce_jenkins_agent_boundary(descriptor)
 
 
 def test_records_an_undeclared_candidate_without_salvaging_files(

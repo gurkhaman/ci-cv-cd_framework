@@ -17,8 +17,9 @@ from pydantic import ValidationError
 from ._local_dispatch import dispatch_local, validate_bundle
 from ._run_input import identify_committed_run
 from ._schemas import check_schemas, write_schemas
+from ._stage_contracts import AdapterDescriptor
 from ._stage_runtime import ExternalCancellation, execute_stage
-from ._yaml_input import InputError
+from ._yaml_input import InputError, parse_yaml
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
@@ -67,6 +68,11 @@ def _parser() -> argparse.ArgumentParser:
     schema_action.add_argument("--check", action="store_true")
     schema_action.add_argument("--write", action="store_true")
     schemas.add_argument("--directory", type=Path, default=Path("schemas"))
+    adapter_image = commands.add_parser(
+        "adapter-image",
+        help="print the immutable runtime image selected by an adapter descriptor",
+    )
+    adapter_image.add_argument("--descriptor", type=Path, required=True)
     execute = commands.add_parser(
         "execute-stage",
         help="execute and transactionally accept one trusted Stage adapter",
@@ -145,6 +151,17 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
         except (InputError, OSError) as error:
             sys.stderr.write(f"sdi-integration: {error}\n")
             return 2
+        return 0
+    if arguments.command == "adapter-image":
+        try:
+            document = parse_yaml(
+                arguments.descriptor.read_bytes(), str(arguments.descriptor)
+            )
+            descriptor = AdapterDescriptor.model_validate(document)
+        except (InputError, OSError, ValidationError) as error:
+            sys.stderr.write(f"sdi-integration: {error}\n")
+            return 2
+        sys.stdout.write(f"{descriptor.image}\n")
         return 0
     if arguments.command == "execute-stage":
         attempt_existed = arguments.attempt_root.exists() or (

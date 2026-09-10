@@ -29,6 +29,77 @@ jenkins:
             name: "${JENKINS_HANDOFF_ID}"
             permissions:
               - "Overall/Read"
+  nodes:
+    - permanent:
+        name: "integration"
+        remoteFS: "/home/jenkins/agent"
+        numExecutors: 1
+        mode: EXCLUSIVE
+        labelString: "integration"
+        launcher:
+          inbound:
+            workDirSettings:
+              disabled: false
+              failIfWorkDirIsMissing: true
+              internalDir: "remoting"
+              workDirPath: "/home/jenkins/agent"
+        retentionStrategy: "always"
+    - permanent:
+        name: "ci"
+        remoteFS: "/home/jenkins/agent"
+        numExecutors: 1
+        mode: EXCLUSIVE
+        labelString: "composition"
+        launcher:
+          inbound:
+            workDirSettings:
+              disabled: false
+              failIfWorkDirIsMissing: true
+              internalDir: "remoting"
+              workDirPath: "/home/jenkins/agent"
+        retentionStrategy: "always"
+    - permanent:
+        name: "image-build"
+        remoteFS: "/home/jenkins/agent"
+        numExecutors: 1
+        mode: EXCLUSIVE
+        labelString: "image-build"
+        launcher:
+          inbound:
+            workDirSettings:
+              disabled: false
+              failIfWorkDirIsMissing: true
+              internalDir: "remoting"
+              workDirPath: "/home/jenkins/agent"
+        retentionStrategy: "always"
+    - permanent:
+        name: "cv"
+        remoteFS: "/home/jenkins/agent"
+        numExecutors: 1
+        mode: EXCLUSIVE
+        labelString: "cv"
+        launcher:
+          inbound:
+            workDirSettings:
+              disabled: false
+              failIfWorkDirIsMissing: true
+              internalDir: "remoting"
+              workDirPath: "/home/jenkins/agent"
+        retentionStrategy: "always"
+    - permanent:
+        name: "cd"
+        remoteFS: "/home/jenkins/agent"
+        numExecutors: 1
+        mode: EXCLUSIVE
+        labelString: "cd"
+        launcher:
+          inbound:
+            workDirSettings:
+              disabled: false
+              failIfWorkDirIsMissing: true
+              internalDir: "remoting"
+              workDirPath: "/home/jenkins/agent"
+        retentionStrategy: "always"
 
 unclassified:
   buildDiscarders:

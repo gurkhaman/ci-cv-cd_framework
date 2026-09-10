@@ -16,9 +16,9 @@
 ## Pipeline Integration Scaffold
 
 - `integration/` requires Python `>=3.12,<3.13`, pins CPython 3.12.13 for development, and uses its own exact `uv.lock`.
-- Run the deterministic repository checks from any directory with `integration/scripts/verify`. It performs frozen environment setup, generated-schema freshness, Ruff formatting and linting, Basedpyright, pytest, and the ephemeral Jenkins controller smoke check on the supported Docker host.
+- Run the deterministic repository checks from any directory with `integration/scripts/verify`. It performs frozen environment setup, generated-schema freshness, Ruff formatting and linting, Basedpyright, pytest, and the ephemeral six-container Jenkins stack smoke check on the supported Docker host.
 - The public entry point is `uv run --project integration sdi-integration`. The CLI, committed file contracts, and future language-neutral Stage-adapter process interface are the supported boundaries; internal Python modules are not compatibility contracts.
-- The current scaffold validates committed inputs, executes the four-Stage Fixture through the permanent Stage-adapter process interface, and reconstructs the pinned zero-executor Jenkins controller. Real Domain adapters, inbound Jenkins agents, the root Jenkins pipeline, and the GitHub workflow arrive in their dedicated implementation tickets.
+- The current scaffold validates committed inputs, executes the four-Stage Fixture through the permanent Stage-adapter process interface, and reconstructs the pinned zero-executor Jenkins controller with five isolated inbound agents. Real Domain adapters, the root Jenkins pipeline, and the GitHub workflow arrive in their dedicated implementation tickets.
 
 ## Issue And Review Workflow
 
@@ -38,7 +38,7 @@
 ## Generated And Local Files
 
 - `.gitignore` excludes Python caches and environments, generated artifacts, workspaces, recovery artifacts, local deployment configuration, runtime secrets, and Gazebo parser output without hiding committed schemas or Fixture cases.
-- No active root `Jenkinsfile` or GitHub workflow exists until its implementation ticket. `deployment/jenkins/` owns the runnable controller while `.github/workflows/` remains reserved without a runnable placeholder.
+- No active root `Jenkinsfile` or GitHub workflow exists until its implementation ticket. `deployment/jenkins/` owns the runnable controller and agents while `.github/workflows/` remains reserved without a runnable placeholder.
 - Check `git status` after commands and keep machine-specific values, secrets, generated evidence, and recovery state out of commits.
 
 ## Agent skills

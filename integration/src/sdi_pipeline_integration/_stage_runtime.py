@@ -32,6 +32,7 @@ from ._domain_contracts import (
     ValidationEvidence,
 )
 from ._git_input import CommittedBlob, GitRepository, validate_repository_path
+from ._jenkins_agent_boundary import enforce_domain_execution_boundary
 from ._json_input import parse_json
 from ._run_input import PROTECTED_MAIN_REF, identify_committed_run
 from ._stage_contracts import (
@@ -987,6 +988,10 @@ def load_stage_adapter(
     return descriptor, profile
 
 
+def enforce_jenkins_agent_boundary(descriptor: AdapterDescriptor) -> None:
+    enforce_domain_execution_boundary(expected_label=descriptor.agent_label)
+
+
 def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
     *,
     repository: GitRepository,
@@ -1001,6 +1006,7 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
         msg = "attempt root must not already exist"
         raise InputError(msg)
     descriptor, profile = load_stage_adapter(repository, descriptor_path)
+    enforce_jenkins_agent_boundary(descriptor)
 
     attempt_root.parent.mkdir(parents=True, exist_ok=True)
     if descriptor.implementation_mode == "not_implemented":

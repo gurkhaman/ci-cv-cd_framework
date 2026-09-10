@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
+from ._jenkins_agent_boundary import enforce_domain_execution_boundary
 from ._json_input import parse_json
 from ._stage_contracts import (
     ASCII_CONTROL_LIMIT,
@@ -184,7 +185,11 @@ def run_adapter(  # noqa: C901, PLR0911, PLR0912, PLR0915
     *, request_path: Path, input_root: Path, output_root: Path
 ) -> None:
     """Publish one complete candidate response after all candidate files."""
+    enforce_domain_execution_boundary()
     request = _load_request(request_path)
+    enforce_domain_execution_boundary(
+        expected_label=request.correlation.stage.replace("_", "-")
+    )
     if (
         not input_root.is_dir()
         or not output_root.is_dir()
@@ -327,8 +332,9 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Expose only the stable one-shot Stage-adapter operation."""
-    arguments = _parser().parse_args(argv)
     try:
+        enforce_domain_execution_boundary()
+        arguments = _parser().parse_args(argv)
         run_adapter(
             request_path=arguments.request,
             input_root=arguments.input_root,

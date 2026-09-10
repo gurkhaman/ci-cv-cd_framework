@@ -9,6 +9,11 @@ project_name=$(printf '%s' "${temporary##*/}" | tr '[:upper:]' '[:lower:]')
 config=$temporary/controller.env
 admin_password=$temporary/admin-password
 handoff_password=$temporary/handoff-password
+integration_agent_secret=$temporary/integration-agent-secret
+ci_agent_secret=$temporary/ci-agent-secret
+image_build_agent_secret=$temporary/image-build-agent-secret
+cv_agent_secret=$temporary/cv-agent-secret
+cd_agent_secret=$temporary/cd-agent-secret
 
 cleanup() {
     status=$?
@@ -49,8 +54,14 @@ printf '%s\n' \
     'JENKINS_ADMIN_ID=smoke-administrator' \
     'JENKINS_HANDOFF_ID=smoke-github-handoff' \
     'JENKINS_REPOSITORY_URL=https://github.com/gurkhaman/ci-cv-cd_framework.git' \
+    'JENKINS_AGENT_CONTROLLER_URL=http://controller:8080' \
     "JENKINS_ADMIN_PASSWORD_FILE=$admin_password" \
-    "JENKINS_HANDOFF_PASSWORD_FILE=$handoff_password" > "$config"
+    "JENKINS_HANDOFF_PASSWORD_FILE=$handoff_password" \
+    "JENKINS_INTEGRATION_AGENT_SECRET_FILE=$integration_agent_secret" \
+    "JENKINS_CI_AGENT_SECRET_FILE=$ci_agent_secret" \
+    "JENKINS_IMAGE_BUILD_AGENT_SECRET_FILE=$image_build_agent_secret" \
+    "JENKINS_CV_AGENT_SECRET_FILE=$cv_agent_secret" \
+    "JENKINS_CD_AGENT_SECRET_FILE=$cd_agent_secret" > "$config"
 
 "$stack" --config "$config" --project-name "$project_name" destroy
 
@@ -66,8 +77,18 @@ check() {
         --casc "$root/casc/jenkins.yaml"
 }
 
+"$stack" --config "$config" --project-name "$project_name" start-controller
+"$checker" provision-secrets \
+    --url "http://127.0.0.1:$port" \
+    --admin-id smoke-administrator \
+    --admin-password-file "$admin_password" \
+    --agent-secret-directory "$temporary"
 "$stack" --config "$config" --project-name "$project_name" start
 check
+"$checker" exercise-agents \
+    --url "http://127.0.0.1:$port" \
+    --admin-id smoke-administrator \
+    --admin-password-file "$admin_password"
 
 "$checker" drift \
     --url "http://127.0.0.1:$port" \
@@ -83,4 +104,4 @@ check
 "$stack" --config "$config" --project-name "$project_name" start
 check
 
-printf '%s\n' 'Ephemeral Jenkins controller smoke check passed.'
+printf '%s\n' 'Ephemeral Jenkins controller and five-agent smoke check passed.'
