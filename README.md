@@ -5,10 +5,11 @@ under `integration/`. It will coordinate the CI, image-build, CV, and CD Stage
 interfaces for Software-Defined Mobility while keeping those Domain capabilities
 independently replaceable.
 
-The current scaffold proves packaging and repository verification only. Later
-slices add deterministic Fixtures that can prove pipeline integration behavior.
-Fixture output is not Validation evidence, Domain success, KPI evidence, or proof
-that a real composition, build, simulation, or deployment capability exists.
+The current scaffold validates and identifies committed inputs and executes one
+deterministic composition Fixture through the permanent Stage-adapter process
+interface. Fixture output is not Validation evidence, Domain success, KPI
+evidence, or proof that a real composition, build, simulation, or deployment
+capability exists.
 
 ## Development
 

@@ -2,9 +2,8 @@
 
 This independent `uv` project owns the supported `sdi-integration` CLI and the
 deep `sdi_pipeline_integration` package boundary. The CLI, committed file
-contracts, and the future language-neutral Stage-adapter process interface are
-the supported interfaces. Internal Python modules are not compatibility
-contracts.
+contracts, and the language-neutral Stage-adapter process interface are the
+supported interfaces. Internal Python modules are not compatibility contracts.
 
 Run all checks through `scripts/verify` rather than using an ambient Python
 environment.
@@ -27,3 +26,35 @@ The repository must have one uncredentialed GitHub `origin` URL. Successful
 validation emits one JSON record containing a newly assigned lowercase UUIDv4
 Execution ID and exact-byte provenance. Validation failures exit with status 2,
 write no record, and assign no Execution ID.
+
+## Execute The Composition Fixture
+
+`execute-stage` identifies the committed run, selects its reviewed adapter
+descriptor, verifies the descriptor-bound Stage profile, and invokes the adapter
+through the one-shot process interface. It accepts declared files only after the
+complete candidate bundle, response correlation, file limits, and Domain schemas
+validate:
+
+```sh
+uv run --project integration sdi-integration execute-stage \
+  --repository . \
+  --requested-ref refs/heads/main \
+  --resolved-commit "$GITHUB_SHA" \
+  --run-request-path runs/s-04/s-04-tc-03-c-01-fixture.yaml \
+  --descriptor-path deployment/jenkins/adapters/composition-fixture-v1.yaml \
+  --attempt-root artifacts/composition-attempt
+```
+
+The adapter process exposes only:
+
+```sh
+sdi-fixture-adapter run \
+  --request request.json \
+  --input-root inputs \
+  --output-root candidate
+```
+
+The accepted envelope records `execution_conclusion: succeeded`,
+`implementation_mode: fixture`, and `domain_outcome: not_evaluated` separately.
+The deterministic blueprint and deployment schema prove pipeline-interface
+handling only. They are not composition, deployment, Validation, or KPI evidence.

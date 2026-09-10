@@ -18,7 +18,7 @@
 - `integration/` requires Python `>=3.12,<3.13`, pins CPython 3.12.13 for development, and uses its own exact `uv.lock`.
 - Run the deterministic repository checks from any directory with `integration/scripts/verify`. It performs frozen environment setup, Ruff formatting and linting, Basedpyright, and pytest.
 - The public entry point is `uv run --project integration sdi-integration`. The CLI, committed file contracts, and future language-neutral Stage-adapter process interface are the supported boundaries; internal Python modules are not compatibility contracts.
-- The current scaffold proves packaging and baseline verification only. Real Domain adapters, Stage execution, Jenkins deployment, and the GitHub workflow arrive in their dedicated implementation tickets.
+- The current scaffold validates committed inputs and executes the composition Fixture through the permanent Stage-adapter process interface. Real Domain adapters, the remaining Fixture stages, Jenkins deployment, and the GitHub workflow arrive in their dedicated implementation tickets.
 
 ## Issue And Review Workflow
 
