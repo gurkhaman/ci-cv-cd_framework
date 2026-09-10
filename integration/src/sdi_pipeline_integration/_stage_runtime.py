@@ -1002,6 +1002,19 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
         raise InputError(msg)
     descriptor, profile = load_stage_adapter(repository, descriptor_path)
 
+    agent_role = os.environ.get("SDI_JENKINS_AGENT_ROLE")
+    if agent_role == "integration":
+        msg = "the integration Jenkins agent cannot execute a Domain adapter"
+        raise InputError(msg)
+    if agent_role == "domain":
+        configured_label = os.environ.get("SDI_JENKINS_AGENT_LABEL")
+        if configured_label != descriptor.agent_label:
+            msg = "the Domain agent label does not match the adapter descriptor"
+            raise InputError(msg)
+    elif agent_role is not None:
+        msg = "SDI_JENKINS_AGENT_ROLE is invalid"
+        raise InputError(msg)
+
     attempt_root.parent.mkdir(parents=True, exist_ok=True)
     if descriptor.implementation_mode == "not_implemented":
         execution = skipped_stage_execution(

@@ -12,9 +12,10 @@ not Validation evidence, Domain success, KPI evidence, or proof that a real
 composition, build, simulation, or deployment capability exists.
 
 The repository also reconstructs an on-demand, zero-executor Jenkins controller
-from an immutable image digest, an exact plugin lock, Configuration as Code, and
-Job DSL. The controller smoke check does not require or imply that the future
-inbound agents or Jenkins pipeline are implemented.
+and five isolated one-executor inbound agents from immutable image inputs,
+Configuration as Code, and Job DSL. The live smoke check proves their WebSocket
+connections, labels, isolation, disposable workspaces, and configuration
+convergence. The root Jenkins pipeline remains a later implementation issue.
 
 ## Development
 
@@ -26,7 +27,7 @@ integration/scripts/verify
 ```
 
 The command installs the exact locked Python 3.12 environment; checks schemas,
-the public CLI, Ruff, and Basedpyright; and runs the ephemeral Jenkins controller
+the public CLI, Ruff, and Basedpyright; and runs the ephemeral Jenkins stack
 smoke check on the supported Docker host. The installed command is:
 
 ```sh
@@ -39,9 +40,9 @@ uv run --project integration sdi-integration --help
   profiles, Fixtures, tests, and verification entry point.
 - `requirements/`, `profiles/`, and `runs/`: version-controlled, dispatchable
   inputs introduced by the run-contract implementation.
-- `deployment/jenkins/`: the pinned zero-executor Jenkins controller deployment,
-  exact plugin lock, configuration, fixed job, and lifecycle interface. Agents
-  arrive in later implementation issues.
+- `deployment/jenkins/`: the pinned zero-executor Jenkins controller, five
+  isolated inbound agents, exact plugin lock, configuration, fixed job, and
+  lifecycle interface.
 - `.github/workflows/`: protected workflow configuration added by the handoff
   implementation.
 - `docs/`: role-neutral setup, operation, maintenance, and readiness guidance.

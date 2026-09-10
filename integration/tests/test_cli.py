@@ -5,10 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 from importlib.metadata import version
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from pathlib import Path
 
 
 def test_installed_cli_reports_distribution_version() -> None:
@@ -32,6 +29,25 @@ def test_installed_cli_exposes_help() -> None:
     )
 
     assert completed.stdout.startswith("usage: sdi-integration")
+
+
+def test_cli_reads_the_descriptor_selected_agent_image() -> None:
+    descriptor = (
+        Path(__file__).parents[2]
+        / "deployment/jenkins/adapters/composition-fixture-v1.yaml"
+    )
+    completed = subprocess.run(
+        ["sdi-integration", "adapter-image", "--descriptor", str(descriptor)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == (
+        "docker.io/library/python@"
+        "sha256:4766d8b510c428e595d74b9cc5bbb2fae8e26316fffb4adc89908d79aacd58a2\n"
+    )
 
 
 def test_fixture_adapter_exposes_only_the_one_shot_run_operation() -> None:

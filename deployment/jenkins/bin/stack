@@ -13,7 +13,7 @@ fail() {
 
 usage() {
     printf '%s\n' \
-        'usage: stack [--config PATH] [--project-name NAME] validate|start|stop|status|logs|destroy|smoke'
+        'usage: stack [--config PATH] [--project-name NAME] validate|start-controller|start|stop|status|logs|destroy|smoke|reconcile-agent AGENT'
 }
 
 while [ "$#" -gt 0 ]; do
@@ -38,11 +38,24 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-[ "$#" -eq 1 ] || {
+[ "$#" -ge 1 ] || {
     usage >&2
     exit 2
 }
 action=$1
+shift
+
+reconcile_agent=
+if [ "$action" = reconcile-agent ]; then
+    [ "$#" -eq 1 ] || fail 'reconcile-agent requires one Domain agent name'
+    reconcile_agent=$1
+    case "$reconcile_agent" in
+        ci|image-build|cv|cd) ;;
+        *) fail 'reconcile-agent accepts ci, image-build, cv, or cd' ;;
+    esac
+elif [ "$#" -ne 0 ]; then
+    fail "$action accepts no arguments"
+fi
 
 if [ "$action" = smoke ]; then
     exec "$root/bin/smoke"
@@ -64,15 +77,30 @@ case "$action" in
         JENKINS_ADMIN_ID=unused
         JENKINS_HANDOFF_ID=unused
         JENKINS_REPOSITORY_URL=https://github.com/unused/unused.git
+        JENKINS_AGENT_CONTROLLER_URL=http://controller:8080
         JENKINS_ADMIN_PASSWORD_FILE=/dev/null
         JENKINS_HANDOFF_PASSWORD_FILE=/dev/null
+        JENKINS_INTEGRATION_AGENT_SECRET_FILE=/dev/null
+        JENKINS_CI_AGENT_SECRET_FILE=/dev/null
+        JENKINS_IMAGE_BUILD_AGENT_SECRET_FILE=/dev/null
+        JENKINS_CV_AGENT_SECRET_FILE=/dev/null
+        JENKINS_CD_AGENT_SECRET_FILE=/dev/null
+        JENKINS_COMPOSITION_AGENT_IMAGE=unused
+        JENKINS_IMAGE_BUILD_AGENT_IMAGE=unused
+        JENKINS_CV_AGENT_IMAGE=unused
+        JENKINS_CD_AGENT_IMAGE=unused
         export JENKINS_HTTP_PORT JENKINS_ADMIN_ID JENKINS_HANDOFF_ID
-        export JENKINS_REPOSITORY_URL JENKINS_ADMIN_PASSWORD_FILE
-        export JENKINS_HANDOFF_PASSWORD_FILE
+        export JENKINS_REPOSITORY_URL JENKINS_AGENT_CONTROLLER_URL
+        export JENKINS_ADMIN_PASSWORD_FILE JENKINS_HANDOFF_PASSWORD_FILE
+        export JENKINS_INTEGRATION_AGENT_SECRET_FILE JENKINS_CI_AGENT_SECRET_FILE
+        export JENKINS_IMAGE_BUILD_AGENT_SECRET_FILE JENKINS_CV_AGENT_SECRET_FILE
+        export JENKINS_CD_AGENT_SECRET_FILE
+        export JENKINS_COMPOSITION_AGENT_IMAGE JENKINS_IMAGE_BUILD_AGENT_IMAGE
+        export JENKINS_CV_AGENT_IMAGE JENKINS_CD_AGENT_IMAGE
         case "$action" in
             stop) compose down ;;
             status) compose ps ;;
-            logs) compose logs controller ;;
+            logs) compose logs ;;
             destroy) compose down --volumes --remove-orphans ;;
         esac
         exit
@@ -85,8 +113,14 @@ JENKINS_HTTP_PORT=
 JENKINS_ADMIN_ID=
 JENKINS_HANDOFF_ID=
 JENKINS_REPOSITORY_URL=
+JENKINS_AGENT_CONTROLLER_URL=
 JENKINS_ADMIN_PASSWORD_FILE=
 JENKINS_HANDOFF_PASSWORD_FILE=
+JENKINS_INTEGRATION_AGENT_SECRET_FILE=
+JENKINS_CI_AGENT_SECRET_FILE=
+JENKINS_IMAGE_BUILD_AGENT_SECRET_FILE=
+JENKINS_CV_AGENT_SECRET_FILE=
+JENKINS_CD_AGENT_SECRET_FILE=
 
 while IFS='=' read -r key value; do
     case "$key" in
@@ -95,8 +129,14 @@ while IFS='=' read -r key value; do
         JENKINS_ADMIN_ID) JENKINS_ADMIN_ID=$value ;;
         JENKINS_HANDOFF_ID) JENKINS_HANDOFF_ID=$value ;;
         JENKINS_REPOSITORY_URL) JENKINS_REPOSITORY_URL=$value ;;
+        JENKINS_AGENT_CONTROLLER_URL) JENKINS_AGENT_CONTROLLER_URL=$value ;;
         JENKINS_ADMIN_PASSWORD_FILE) JENKINS_ADMIN_PASSWORD_FILE=$value ;;
         JENKINS_HANDOFF_PASSWORD_FILE) JENKINS_HANDOFF_PASSWORD_FILE=$value ;;
+        JENKINS_INTEGRATION_AGENT_SECRET_FILE) JENKINS_INTEGRATION_AGENT_SECRET_FILE=$value ;;
+        JENKINS_CI_AGENT_SECRET_FILE) JENKINS_CI_AGENT_SECRET_FILE=$value ;;
+        JENKINS_IMAGE_BUILD_AGENT_SECRET_FILE) JENKINS_IMAGE_BUILD_AGENT_SECRET_FILE=$value ;;
+        JENKINS_CV_AGENT_SECRET_FILE) JENKINS_CV_AGENT_SECRET_FILE=$value ;;
+        JENKINS_CD_AGENT_SECRET_FILE) JENKINS_CD_AGENT_SECRET_FILE=$value ;;
         *) fail "unknown configuration key: $key" ;;
     esac
 done < "$config"
@@ -106,8 +146,14 @@ for value in \
     "$JENKINS_ADMIN_ID" \
     "$JENKINS_HANDOFF_ID" \
     "$JENKINS_REPOSITORY_URL" \
+    "$JENKINS_AGENT_CONTROLLER_URL" \
     "$JENKINS_ADMIN_PASSWORD_FILE" \
-    "$JENKINS_HANDOFF_PASSWORD_FILE"
+    "$JENKINS_HANDOFF_PASSWORD_FILE" \
+    "$JENKINS_INTEGRATION_AGENT_SECRET_FILE" \
+    "$JENKINS_CI_AGENT_SECRET_FILE" \
+    "$JENKINS_IMAGE_BUILD_AGENT_SECRET_FILE" \
+    "$JENKINS_CV_AGENT_SECRET_FILE" \
+    "$JENKINS_CD_AGENT_SECRET_FILE"
 do
     [ -n "$value" ] || fail 'all configuration values are required'
 done
@@ -134,7 +180,39 @@ case "$JENKINS_REPOSITORY_URL" in
     *@*) fail 'JENKINS_REPOSITORY_URL must not contain credentials' ;;
 esac
 
-for secret_file in "$JENKINS_ADMIN_PASSWORD_FILE" "$JENKINS_HANDOFF_PASSWORD_FILE"; do
+command -v python3 >/dev/null 2>&1 || fail 'Python 3 is required'
+python3 - "$JENKINS_AGENT_CONTROLLER_URL" <<'PY' || \
+    fail 'JENKINS_AGENT_CONTROLLER_URL must be the internal Compose URL or an uncredentialed HTTPS URL'
+import sys
+from urllib.parse import urlsplit
+
+value = sys.argv[1]
+try:
+    parsed = urlsplit(value)
+except ValueError:
+    raise SystemExit(1) from None
+valid_scheme = value == "http://controller:8080" or parsed.scheme == "https"
+try:
+    parsed.port
+except ValueError:
+    valid_port = False
+else:
+    valid_port = True
+valid = (
+    valid_scheme
+    and valid_port
+    and parsed.hostname is not None
+    and parsed.username is None
+    and parsed.password is None
+    and not parsed.query
+    and not parsed.fragment
+    and not any(character.isspace() for character in value)
+)
+raise SystemExit(0 if valid else 1)
+PY
+
+validate_secret_file() {
+    secret_file=$1
     case "$secret_file" in
         /*) ;;
         *) fail "secret file path must be absolute: $secret_file" ;;
@@ -154,18 +232,68 @@ for secret_file in "$JENKINS_ADMIN_PASSWORD_FILE" "$JENKINS_HANDOFF_PASSWORD_FIL
         fail "secret file must be owner-readable: $secret_file"
     [ $((0$mode & 077)) -eq 0 ] || \
         fail "secret file must not be accessible by group or other users: $secret_file"
-done
+}
+
+validate_secret_file "$JENKINS_ADMIN_PASSWORD_FILE"
+validate_secret_file "$JENKINS_HANDOFF_PASSWORD_FILE"
+if [ "$action" != start-controller ]; then
+    validate_secret_file "$JENKINS_INTEGRATION_AGENT_SECRET_FILE"
+    validate_secret_file "$JENKINS_CI_AGENT_SECRET_FILE"
+    validate_secret_file "$JENKINS_IMAGE_BUILD_AGENT_SECRET_FILE"
+    validate_secret_file "$JENKINS_CV_AGENT_SECRET_FILE"
+    validate_secret_file "$JENKINS_CD_AGENT_SECRET_FILE"
+
+    registration_secrets=':'
+    for secret_file in \
+        "$JENKINS_INTEGRATION_AGENT_SECRET_FILE" \
+        "$JENKINS_CI_AGENT_SECRET_FILE" \
+        "$JENKINS_IMAGE_BUILD_AGENT_SECRET_FILE" \
+        "$JENKINS_CV_AGENT_SECRET_FILE" \
+        "$JENKINS_CD_AGENT_SECRET_FILE"
+    do
+        secret=$(tr -d '\r\n' < "$secret_file")
+        case "$secret" in
+            *[!0-9a-f]*|'')
+                fail "agent registration secret must be lowercase hexadecimal: $secret_file"
+                ;;
+        esac
+        [ "${#secret}" -eq 64 ] || \
+            fail "agent registration secret must contain 64 hexadecimal characters: $secret_file"
+        case "$registration_secrets" in
+            *":$secret:"*) fail 'agent registration secrets must not be shared' ;;
+        esac
+        registration_secrets="$registration_secrets$secret:"
+    done
+fi
 
 command -v docker >/dev/null 2>&1 || fail 'Docker Engine is required'
+command -v uv >/dev/null 2>&1 || fail 'uv is required'
 [ "$(uname -s)" = Linux ] || fail 'a Linux host is required'
 [ "$(uname -m)" = x86_64 ] || fail 'an x86_64 host is required'
 platform=$(docker version --format '{{.Server.Os}}/{{.Server.Arch}}') || \
     fail 'Docker Engine is not reachable'
 [ "$platform" = linux/amd64 ] || fail "Docker Engine must be linux/amd64, found $platform"
 
+descriptor_image() {
+    descriptor=$1
+    uv run --project "$repository_root/integration" --frozen \
+        sdi-integration adapter-image --descriptor "$root/adapters/$descriptor" || \
+        fail "invalid adapter descriptor: $descriptor"
+}
+
+JENKINS_COMPOSITION_AGENT_IMAGE=$(descriptor_image composition-fixture-v1.yaml)
+JENKINS_IMAGE_BUILD_AGENT_IMAGE=$(descriptor_image image-build-fixture-v1.yaml)
+JENKINS_CV_AGENT_IMAGE=$(descriptor_image cv-fixture-v1.yaml)
+JENKINS_CD_AGENT_IMAGE=$(descriptor_image cd-fixture-v1.yaml)
+
 export JENKINS_HTTP_PORT JENKINS_ADMIN_ID JENKINS_HANDOFF_ID
-export JENKINS_REPOSITORY_URL JENKINS_ADMIN_PASSWORD_FILE
-export JENKINS_HANDOFF_PASSWORD_FILE
+export JENKINS_REPOSITORY_URL JENKINS_AGENT_CONTROLLER_URL
+export JENKINS_ADMIN_PASSWORD_FILE JENKINS_HANDOFF_PASSWORD_FILE
+export JENKINS_INTEGRATION_AGENT_SECRET_FILE JENKINS_CI_AGENT_SECRET_FILE
+export JENKINS_IMAGE_BUILD_AGENT_SECRET_FILE JENKINS_CV_AGENT_SECRET_FILE
+export JENKINS_CD_AGENT_SECRET_FILE
+export JENKINS_COMPOSITION_AGENT_IMAGE JENKINS_IMAGE_BUILD_AGENT_IMAGE
+export JENKINS_CV_AGENT_IMAGE JENKINS_CD_AGENT_IMAGE
 
 validate() {
     expected_image='docker.io/jenkins/jenkins:2.568.3-jdk21@sha256:68964c38dbb70c0bf6adff480d6dda2e1191d2d07e076c9fd2996345303eb999'
@@ -198,21 +326,38 @@ $plugin
         fail 'plugin lock does not match the reviewed versions'
 
     docker build --check --file "$root/controller/Dockerfile" "$root" >/dev/null
+    docker build --check --file "$root/agents/Dockerfile" "$root" >/dev/null
     compose config --quiet
+}
+
+build_controller() {
+    docker build \
+        --platform linux/amd64 \
+        --tag sdi-jenkins-controller:2.568.3 \
+        --file "$root/controller/Dockerfile" \
+        "$root"
 }
 
 case "$action" in
     validate)
         validate
         ;;
+    start-controller)
+        validate
+        build_controller
+        compose up --no-build --detach --wait --wait-timeout 240 controller
+        ;;
     start)
         validate
-        docker build \
-            --platform linux/amd64 \
-            --tag sdi-jenkins-controller:2.568.3 \
-            --file "$root/controller/Dockerfile" \
-            "$root"
-        compose up --no-build --detach --wait --wait-timeout 240 controller
+        build_controller
+        compose build integration ci image-build cv cd
+        compose up --no-build --detach --wait --wait-timeout 240
+        ;;
+    reconcile-agent)
+        validate
+        build_controller
+        compose build "$reconcile_agent"
+        compose up --no-build --detach --wait --wait-timeout 240 "$reconcile_agent"
         ;;
     *)
         usage >&2

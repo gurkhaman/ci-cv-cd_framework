@@ -29,6 +29,12 @@ EXPECTED_HANDOFF_PARAMETERS = {
     "GITHUB_RUN_ID",
     "GITHUB_RUN_ATTEMPT",
 }
+FAKE_AGENT_IMAGES = (
+    "docker.io/example/composition@sha256:" + "1" * 64,
+    "docker.io/example/image-build@sha256:" + "2" * 64,
+    "docker.io/example/cv@sha256:" + "3" * 64,
+    "docker.io/example/cd@sha256:" + "4" * 64,
+)
 
 
 def _load_yaml(path: Path) -> Mapping[str, Any]:
@@ -36,6 +42,65 @@ def _load_yaml(path: Path) -> Mapping[str, Any]:
     loaded = yaml.load(path)  # pyright: ignore[reportUnknownMemberType]
     assert isinstance(loaded, dict)
     return cast("Mapping[str, Any]", loaded)
+
+
+def _write_fake_deployment_tools(fake_bin: Path) -> None:
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/bin/sh\n"
+        'printf \'%s\\n\' "$*" >> "$DOCKER_LOG"\n'
+        "printf 'images=%s|%s|%s|%s\\n' "
+        '"${JENKINS_COMPOSITION_AGENT_IMAGE:-}" '
+        '"${JENKINS_IMAGE_BUILD_AGENT_IMAGE:-}" '
+        '"${JENKINS_CV_AGENT_IMAGE:-}" '
+        '"${JENKINS_CD_AGENT_IMAGE:-}" >> "$DOCKER_LOG"\n'
+        'case "$*" in\n'
+        "  'version --format {{.Server.Os}}/{{.Server.Arch}}') "
+        "printf 'linux/amd64\\n' ;;\n"
+        "esac\n"
+    )
+    docker.chmod(0o755)
+
+    uv = fake_bin / "uv"
+    uv.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        "  *composition-fixture-v1.yaml) "
+        f"printf '{FAKE_AGENT_IMAGES[0]}\\n' ;;\n"
+        "  *image-build-fixture-v1.yaml) "
+        f"printf '{FAKE_AGENT_IMAGES[1]}\\n' ;;\n"
+        f"  *cv-fixture-v1.yaml) printf '{FAKE_AGENT_IMAGES[2]}\\n' ;;\n"
+        f"  *cd-fixture-v1.yaml) printf '{FAKE_AGENT_IMAGES[3]}\\n' ;;\n"
+        "  *) exit 2 ;;\n"
+        "esac\n"
+    )
+    uv.chmod(0o755)
+
+
+def _assert_plaintext_relocated_agent_url_is_rejected(
+    config: Path, fake_bin: Path, docker_log: Path
+) -> None:
+    valid_config = config.read_text()
+    config.write_text(
+        valid_config.replace(
+            "JENKINS_AGENT_CONTROLLER_URL=http://controller:8080",
+            "JENKINS_AGENT_CONTROLLER_URL=http://remote.example.test:8080",
+        )
+    )
+    completed = subprocess.run(
+        [JENKINS_ROOT / "bin" / "stack", "--config", config, "validate"],
+        check=False,
+        capture_output=True,
+        env={
+            "DOCKER_LOG": str(docker_log),
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        },
+        text=True,
+    )
+    config.write_text(valid_config)
+
+    assert completed.returncode == 2
+    assert "internal Compose URL or an uncredentialed HTTPS URL" in completed.stderr
 
 
 def test_controller_image_and_complete_plugin_set_are_exactly_pinned() -> None:
@@ -71,8 +136,14 @@ def test_compose_exposes_only_loopback_http_and_persists_only_controller_state()
     assert controller["ports"] == ["127.0.0.1:${JENKINS_HTTP_PORT}:8080"]
     assert controller["restart"] == "no"
     assert controller["volumes"] == ["jenkins-home:/var/jenkins_home"]
-    assert set(controller["networks"]) == {"controller-agents", "controller-egress"}
-    assert compose["networks"]["controller-agents"]["internal"] is True
+    assert set(controller["networks"]) == {
+        "controller-egress",
+        "controller-integration",
+        "controller-ci",
+        "controller-image-build",
+        "controller-cv",
+        "controller-cd",
+    }
     assert set(compose["volumes"]) == {"jenkins-home"}
     assert "50000" not in (JENKINS_ROOT / "compose.yaml").read_text()
 
@@ -153,16 +224,7 @@ def test_stack_validate_uses_compose_and_rejects_insecure_secret_files(
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     docker_log = tmp_path / "docker.log"
-    docker = fake_bin / "docker"
-    docker.write_text(
-        "#!/bin/sh\n"
-        'printf \'%s\\n\' "$*" >> "$DOCKER_LOG"\n'
-        'case "$*" in\n'
-        "  'version --format {{.Server.Os}}/{{.Server.Arch}}') "
-        "printf 'linux/amd64\\n' ;;\n"
-        "esac\n"
-    )
-    docker.chmod(0o755)
+    _write_fake_deployment_tools(fake_bin)
 
     admin_secret = tmp_path / "admin-password"
     handoff_secret = tmp_path / "handoff-password"
@@ -170,14 +232,27 @@ def test_stack_validate_uses_compose_and_rejects_insecure_secret_files(
     handoff_secret.write_text("handoff-secret\n")
     admin_secret.chmod(0o600)
     handoff_secret.chmod(0o644)
+    agent_secrets = {
+        name: tmp_path / f"{name}-agent-secret"
+        for name in ("integration", "ci", "image-build", "cv", "cd")
+    }
+    for index, secret in enumerate(agent_secrets.values(), start=10):
+        secret.write_text(f"{index:x}" * 64)
+        secret.chmod(0o600)
     config = tmp_path / "controller.env"
     config.write_text(
         "JENKINS_HTTP_PORT=8080\n"
         "JENKINS_ADMIN_ID=administrator\n"
         "JENKINS_HANDOFF_ID=github-handoff\n"
         "JENKINS_REPOSITORY_URL=https://github.com/example/repository.git\n"
+        "JENKINS_AGENT_CONTROLLER_URL=http://controller:8080\n"
         f"JENKINS_ADMIN_PASSWORD_FILE={admin_secret}\n"
         f"JENKINS_HANDOFF_PASSWORD_FILE={handoff_secret}\n"
+        f"JENKINS_INTEGRATION_AGENT_SECRET_FILE={agent_secrets['integration']}\n"
+        f"JENKINS_CI_AGENT_SECRET_FILE={agent_secrets['ci']}\n"
+        f"JENKINS_IMAGE_BUILD_AGENT_SECRET_FILE={agent_secrets['image-build']}\n"
+        f"JENKINS_CV_AGENT_SECRET_FILE={agent_secrets['cv']}\n"
+        f"JENKINS_CD_AGENT_SECRET_FILE={agent_secrets['cd']}\n"
     )
 
     completed = subprocess.run(
@@ -219,8 +294,27 @@ def test_stack_validate_uses_compose_and_rejects_insecure_secret_files(
         text=True,
     )
     assert completed.returncode == 0, completed.stderr
-    assert "compose" in docker_log.read_text()
-    assert "config --quiet" in docker_log.read_text()
+    validation_log = docker_log.read_text()
+    assert "compose" in validation_log
+    assert "config --quiet" in validation_log
+    assert f"images={'|'.join(FAKE_AGENT_IMAGES)}" in validation_log
+
+    _assert_plaintext_relocated_agent_url_is_rejected(config, fake_bin, docker_log)
+
+    agent_secrets["ci"].write_text(agent_secrets["integration"].read_text())
+    completed = subprocess.run(
+        [JENKINS_ROOT / "bin" / "stack", "--config", config, "validate"],
+        check=False,
+        capture_output=True,
+        env={
+            "DOCKER_LOG": str(docker_log),
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        },
+        text=True,
+    )
+    assert completed.returncode == 2
+    assert "registration secrets must not be shared" in completed.stderr
+    agent_secrets["ci"].write_text("b" * 64)
 
     subprocess.run(
         [JENKINS_ROOT / "bin" / "stack", "--config", config, "start"],
@@ -243,9 +337,9 @@ def test_stack_validate_uses_compose_and_rejects_insecure_secret_files(
         text=True,
     )
     lifecycle_log = docker_log.read_text()
-    assert (
-        "up --no-build --detach --wait --wait-timeout 240 controller" in lifecycle_log
-    )
+    assert "compose" in lifecycle_log
+    assert "build integration ci image-build cv cd" in lifecycle_log
+    assert "up --no-build --detach --wait --wait-timeout 240" in lifecycle_log
     assert "down" in lifecycle_log
     assert "down --volumes" not in lifecycle_log
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -52,7 +53,11 @@ def _commit_fixture_repository(tmp_path: Path) -> tuple[Path, str]:
 
 
 def _execute(
-    repository: Path, commit_sha: str, attempt_root: Path
+    repository: Path,
+    commit_sha: str,
+    attempt_root: Path,
+    *,
+    environment: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -73,6 +78,7 @@ def _execute(
         ],
         check=False,
         capture_output=True,
+        env=environment,
         text=True,
     )
 
@@ -116,6 +122,22 @@ def test_executes_the_committed_composition_fixture_deterministically(
     assert json.loads((first_root / "accepted-attempt.json").read_text()) == (
         first_envelope
     )
+
+
+def test_integration_agent_cannot_execute_a_domain_adapter(tmp_path: Path) -> None:
+    repository, commit_sha = _commit_fixture_repository(tmp_path)
+    attempt_root = tmp_path / "must-not-exist"
+
+    completed = _execute(
+        repository,
+        commit_sha,
+        attempt_root,
+        environment={**os.environ, "SDI_JENKINS_AGENT_ROLE": "integration"},
+    )
+
+    assert completed.returncode == 2
+    assert "integration Jenkins agent cannot execute" in completed.stderr
+    assert not attempt_root.exists()
 
 
 def test_records_an_undeclared_candidate_without_salvaging_files(
