@@ -1,5 +1,12 @@
 {
   "$defs": {
+    "AdapterExecutionConclusion": {
+      "enum": [
+        "succeeded",
+        "failed"
+      ],
+      "type": "string"
+    },
     "Correlation": {
       "additionalProperties": false,
       "description": "Stable project correlation carried across one Stage attempt.",
@@ -51,13 +58,6 @@
         "succeeded",
         "failed",
         "not_evaluated"
-      ],
-      "type": "string"
-    },
-    "ExecutionConclusion": {
-      "enum": [
-        "succeeded",
-        "failed"
       ],
       "type": "string"
     },
@@ -130,7 +130,7 @@
       "$ref": "#/$defs/DomainOutcome"
     },
     "execution_conclusion": {
-      "$ref": "#/$defs/ExecutionConclusion"
+      "$ref": "#/$defs/AdapterExecutionConclusion"
     },
     "produced_outputs": {
       "items": {

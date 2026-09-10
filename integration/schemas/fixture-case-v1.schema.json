@@ -1,9 +1,17 @@
 {
   "$defs": {
-    "ExecutionConclusion": {
+    "AdapterExecutionConclusion": {
       "enum": [
         "succeeded",
         "failed"
+      ],
+      "type": "string"
+    },
+    "DomainOutcome": {
+      "enum": [
+        "succeeded",
+        "failed",
+        "not_evaluated"
       ],
       "type": "string"
     },
@@ -151,6 +159,24 @@
   "additionalProperties": false,
   "description": "Exact-digest-selected deterministic pipeline-interface behavior.",
   "properties": {
+    "behavior": {
+      "default": "response",
+      "enum": [
+        "response",
+        "absent_response",
+        "crash",
+        "timeout",
+        "malformed_response",
+        "undeclared_output",
+        "unsafe_output",
+        "oversize_output",
+        "missing_output",
+        "schema_mismatch",
+        "response_mismatch"
+      ],
+      "title": "Behavior",
+      "type": "string"
+    },
     "case_id": {
       "maxLength": 63,
       "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
@@ -161,12 +187,10 @@
       "$ref": "#/$defs/FixtureDiagnostic"
     },
     "domain_outcome": {
-      "const": "not_evaluated",
-      "title": "Domain Outcome",
-      "type": "string"
+      "$ref": "#/$defs/DomainOutcome"
     },
     "execution_conclusion": {
-      "$ref": "#/$defs/ExecutionConclusion"
+      "$ref": "#/$defs/AdapterExecutionConclusion"
     },
     "match_inputs": {
       "items": {

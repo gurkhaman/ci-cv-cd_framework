@@ -54,7 +54,7 @@ class CompositionBlueprint(ContractModel):
     """Target-aware logical service composition without validation claims."""
 
     schema_version: Literal["sdi.composition-blueprint/v1"]
-    evidence_basis: Literal["fixture"]
+    evidence_basis: Literal["fixture", "implemented"]
     blueprint_id: Slug
     scenario_id: ScenarioId
     testcase_id: TestcaseId
@@ -122,7 +122,7 @@ class DeploymentSchema(ContractModel):
     """Intended placement for every service in one accepted blueprint."""
 
     schema_version: Literal["sdi.deployment-schema/v1"]
-    evidence_basis: Literal["fixture"]
+    evidence_basis: Literal["fixture", "implemented"]
     deployment_schema_id: Slug
     blueprint_id: Slug
     scenario_id: ScenarioId

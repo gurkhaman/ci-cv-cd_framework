@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from itertools import pairwise
 from typing import Annotated, Literal, Self
 
 from pydantic import (
@@ -38,8 +39,9 @@ from ._stage_contracts import (
 PIPELINE_RESULT_SCHEMA_VERSION = "sdi.pipeline-integration-result/v1"
 PIPELINE_RESULT_PATH = "pipeline-integration-result.json"
 FIXTURE_NOTICE = (
-    "Deterministic pipeline-interface Fixtures executed; no Domain capability, "
-    "Validation verdict, deployment outcome, or KPI was evaluated."
+    "Deterministic pipeline-interface Fixtures may have simulated outcomes; no "
+    "real Domain capability, Validation verdict, deployment outcome, or KPI was "
+    "evaluated."
 )
 EXPECTED_STAGES: tuple[StageName, ...] = ("composition", "image_build", "cv", "cd")
 GitCommitSha = Annotated[
@@ -130,10 +132,11 @@ class PipelineIntegrationResult(ContractModel):
     attempts: Annotated[
         list[AcceptedAttemptEnvelope], Field(min_length=4, max_length=4)
     ]
-    artifacts: Annotated[list[BundleArtifact], Field(min_length=1)]
+    artifacts: list[BundleArtifact]
     fixture_notice: Literal[
-        "Deterministic pipeline-interface Fixtures executed; no Domain capability, "
-        "Validation verdict, deployment outcome, or KPI was evaluated."
+        "Deterministic pipeline-interface Fixtures may have simulated outcomes; no "
+        "real Domain capability, Validation verdict, deployment outcome, or KPI was "
+        "evaluated."
     ]
     kpi_evaluation: Literal["not_evaluated"]
 
@@ -151,27 +154,12 @@ class PipelineIntegrationResult(ContractModel):
         if any(
             attempt.correlation.execution_id != self.execution_id
             or attempt.correlation.attempt_number != 1
-            or attempt.lifecycle_state != "completed"
             for attempt in self.attempts
         ):
             msg = "result attempts must share identity and be terminal first attempts"
             raise ValueError(msg)
-        if any(
-            attempt.execution_conclusion != "succeeded"
-            or attempt.implementation_mode != "fixture"
-            or attempt.domain_outcome != "not_evaluated"
-            for attempt in self.attempts
-        ):
-            msg = "this result version records the successful four-Stage Fixture path"
-            raise ValueError(msg)
         if self.finished_at < self.started_at:
             msg = "result timestamps are not monotonic"
-            raise ValueError(msg)
-        if (
-            self.started_at != self.attempts[0].process.started_at
-            or self.finished_at != self.attempts[-1].process.finished_at
-        ):
-            msg = "result timestamps do not span its authoritative attempts"
             raise ValueError(msg)
         expected_duration = int(
             (self.finished_at - self.started_at).total_seconds() * 1000
@@ -179,8 +167,16 @@ class PipelineIntegrationResult(ContractModel):
         if self.duration_ms != expected_duration:
             msg = "result duration does not match its immutable timestamps"
             raise ValueError(msg)
-        for previous, current in zip(self.attempts, self.attempts[1:], strict=False):
-            if current.process.started_at < previous.process.finished_at:
+        processes = [attempt.process for attempt in self.attempts if attempt.process]
+        if any(
+            process.started_at < self.started_at
+            or process.finished_at > self.finished_at
+            for process in processes
+        ):
+            msg = "result timestamps do not span its authoritative process facts"
+            raise ValueError(msg)
+        for previous, current in pairwise(processes):
+            if current.started_at < previous.finished_at:
                 msg = "result attempts are not sequential"
                 raise ValueError(msg)
 
@@ -200,39 +196,80 @@ class PipelineIntegrationResult(ContractModel):
                 self.input_provenance[0].schema_version,
                 self.input_provenance[0].byte_size,
                 self.input_provenance[0].sha256,
+                None,
+                None,
             ),
             "requirements_specification": (
                 self.input_provenance[1].path,
                 self.input_provenance[1].schema_version,
                 self.input_provenance[1].byte_size,
                 self.input_provenance[1].sha256,
+                None,
+                None,
             ),
             "target_profile": (
                 self.input_provenance[2].path,
                 self.input_provenance[2].schema_version,
                 self.input_provenance[2].byte_size,
                 self.input_provenance[2].sha256,
+                None,
+                None,
             ),
         }
+        blocking_stage: StageName | None = None
         for attempt in self.attempts:
             stage = attempt.correlation.stage
+            if blocking_stage is not None:
+                if attempt.lifecycle_state != "skipped":
+                    msg = (
+                        f"{stage} must be skipped after blocking "
+                        f"{blocking_stage} outcome"
+                    )
+                    raise ValueError(msg)
+                continue
+            if attempt.lifecycle_state == "skipped":
+                if attempt.reason is None or attempt.reason.code not in {
+                    "sdi.stage.not-implemented",
+                    "sdi.dependency.fixture-evidence",
+                }:
+                    msg = f"{stage} has no typed reason for its initial skip"
+                    raise ValueError(msg)
+                blocking_stage = stage
+                continue
             if [item.slot for item in attempt.accepted_inputs] != list(
                 EXPECTED_STAGE_INPUT_SLOTS[stage]
             ):
                 msg = f"{stage} attempt inputs do not match the reviewed graph"
                 raise ValueError(msg)
             for accepted in attempt.accepted_inputs:
+                if accepted.slot not in sources:
+                    msg = f"{stage} attempt input has no accepted source"
+                    raise ValueError(msg)
                 if (
                     accepted.source_path,
                     accepted.schema_version,
                     accepted.byte_size,
                     accepted.sha256,
-                ) != sources[accepted.slot]:
+                ) != sources[accepted.slot][:4]:
                     msg = f"{stage} attempt input does not match its accepted source"
                     raise ValueError(msg)
-            expected_file_slots = [*EXPECTED_STAGE_OUTPUTS[stage], "diagnostic"]
-            if [item.slot for item in attempt.accepted_files] != expected_file_slots:
-                msg = f"{stage} attempt files do not match the reviewed profile"
+                source_mode = sources[accepted.slot][4]
+                source_outcome = sources[accepted.slot][5]
+                if (
+                    attempt.implementation_mode == "implemented"
+                    and source_mode == "fixture"
+                    and source_outcome == "not_evaluated"
+                ):
+                    msg = "implemented attempt consumed unevaluated Fixture output"
+                    raise ValueError(msg)
+            file_slots = [item.slot for item in attempt.accepted_files]
+            output_slots = list(EXPECTED_STAGE_OUTPUTS[stage])
+            if attempt.execution_conclusion == "succeeded":
+                if file_slots not in (output_slots, [*output_slots, "diagnostic"]):
+                    msg = f"{stage} attempt files do not match the reviewed profile"
+                    raise ValueError(msg)
+            elif any(item.role == "domain_output" for item in attempt.accepted_files):
+                msg = f"{stage} failed attempt cannot contribute Domain output"
                 raise ValueError(msg)
             for accepted in attempt.accepted_files:
                 if accepted.role == "domain_output":
@@ -251,10 +288,17 @@ class PipelineIntegrationResult(ContractModel):
                         accepted.schema_version,
                         accepted.byte_size,
                         accepted.sha256,
+                        attempt.implementation_mode,
+                        attempt.domain_outcome,
                     )
                 elif accepted.path != "diagnostic.txt":
                     msg = f"{stage} diagnostic does not match the reviewed profile"
                     raise ValueError(msg)
+            if (
+                attempt.execution_conclusion != "succeeded"
+                or attempt.domain_outcome == "failed"
+            ):
+                blocking_stage = stage
 
         expected_artifacts: list[tuple[object, ...]] = []
         for attempt in self.attempts:

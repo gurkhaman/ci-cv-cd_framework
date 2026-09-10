@@ -8,6 +8,8 @@ import os
 import shutil
 import stat
 import tempfile
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -29,18 +31,28 @@ from ._result_contracts import (
     archive_path,
 )
 from ._run_input import identify_committed_run
-from ._stage_contracts import ASCII_CONTROL_LIMIT, ASCII_DELETE, StageName
+from ._stage_contracts import (
+    ASCII_CONTROL_LIMIT,
+    ASCII_DELETE,
+    ImplementationMode,
+    StageName,
+    contains_sensitive_material,
+)
 from ._stage_runtime import (
     StageExecution,
     capture_tree,
     committed_stage_sources,
     execute_identified_stage,
     expected_directories,
+    load_stage_adapter,
+    skipped_stage_execution,
     validate_stage_documents,
 )
 from ._yaml_input import InputError
 
 MAX_RESULT_BYTES = 1024 * 1024
+RUN_DEADLINE_SECONDS = 90 * 60
+FINALIZATION_RESERVE_SECONDS = 2 * 60
 DESCRIPTORS: tuple[tuple[StageName, str], ...] = (
     ("composition", "deployment/jenkins/adapters/composition-fixture-v1.yaml"),
     ("image_build", "deployment/jenkins/adapters/image-build-fixture-v1.yaml"),
@@ -54,6 +66,19 @@ DOMAIN_MODELS = {
     "sdi.validation-evidence/v1": ValidationEvidence,
     "sdi.deployment-result/v1": DeploymentResult,
 }
+
+
+def _descriptor_modes(
+    repository: GitRepository,
+) -> dict[StageName, ImplementationMode]:
+    modes: dict[StageName, ImplementationMode] = {}
+    for expected_stage, descriptor_path in DESCRIPTORS:
+        descriptor, _profile = load_stage_adapter(repository, descriptor_path)
+        if descriptor.stage != expected_stage:
+            msg = "reviewed descriptor order does not match its Stage"
+            raise InputError(msg)
+        modes[expected_stage] = descriptor.implementation_mode
+    return modes
 
 
 def _canonical_json(value: object) -> bytes:
@@ -207,6 +232,9 @@ def validate_bundle(bundle_root: Path) -> None:  # noqa: C901, PLR0912, PLR0915
             ):
                 msg = f"archive diagnostic is not sanitized: {artifact.path}"
                 raise InputError(msg)
+            if contains_sensitive_material(diagnostic):
+                msg = f"archive diagnostic contains sensitive material: {artifact.path}"
+                raise InputError(msg)
     available_documents: dict[str, BaseModel] = {}
     identity = (
         result.scenario_id,
@@ -216,11 +244,19 @@ def validate_bundle(bundle_root: Path) -> None:  # noqa: C901, PLR0912, PLR0915
     )
     for attempt in result.attempts:
         stage = attempt.correlation.stage
+        if attempt.execution_conclusion != "succeeded":
+            continue
         stage_inputs = {
             accepted.slot: available_documents[accepted.slot]
             for accepted in attempt.accepted_inputs
             if accepted.slot in available_documents
         }
+        if any(
+            getattr(document, "evidence_basis", None) != attempt.implementation_mode
+            for document in domain_documents[stage].values()
+        ):
+            msg = f"{stage} archive evidence basis does not match its adapter"
+            raise InputError(msg)
         validate_stage_documents(
             stage,
             domain_documents[stage],
@@ -235,7 +271,7 @@ def validate_bundle(bundle_root: Path) -> None:  # noqa: C901, PLR0912, PLR0915
         raise InputError(msg)
 
 
-def dispatch_local(
+def dispatch_local(  # noqa: C901, PLR0912, PLR0915
     *,
     repository_path: Path,
     requested_ref: str,
@@ -244,6 +280,8 @@ def dispatch_local(
     bundle_root: Path,
 ) -> dict[str, Any]:
     """Execute and atomically publish one complete local four-Stage Fixture run."""
+    run_started_at = datetime.now(UTC)
+    run_started_monotonic = time.monotonic()
     if bundle_root.exists() or bundle_root.is_symlink():
         msg = "bundle root must not already exist"
         raise InputError(msg)
@@ -256,32 +294,75 @@ def dispatch_local(
     repository = GitRepository(repository_path, resolved_commit)
     repository.require_ref_commit(requested_ref)
     available_inputs = committed_stage_sources(repository, identified)
+    descriptor_modes = _descriptor_modes(repository)
+    run_deadline = (
+        run_started_monotonic + RUN_DEADLINE_SECONDS - FINALIZATION_RESERVE_SECONDS
+    )
 
     bundle_root.parent.mkdir(parents=True, exist_ok=True)
-    work_root = Path(
-        tempfile.mkdtemp(prefix=f".{bundle_root.name}.work-", dir=bundle_root.parent)
-    )
-    bundle_staging = Path(
-        tempfile.mkdtemp(prefix=f".{bundle_root.name}.bundle-", dir=bundle_root.parent)
-    )
+    claim_path = bundle_root.parent / f".{bundle_root.name}.claim"
+    work_root: Path | None = None
+    bundle_staging: Path | None = None
+    claim_acquired = False
     try:
-        executions: list[StageExecution] = []
-        for stage, descriptor_path in DESCRIPTORS:
-            execution = execute_identified_stage(
-                repository=repository,
-                identified=identified,
-                descriptor_path=descriptor_path,
-                attempt_root=work_root / stage,
-                available_inputs=available_inputs,
+        try:
+            claim_descriptor = os.open(
+                claim_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+                0o600,
             )
+        except FileExistsError as error:
+            msg = "bundle root is already claimed by another dispatch"
+            raise InputError(msg) from error
+        os.close(claim_descriptor)
+        claim_acquired = True
+        work_root = Path(
+            tempfile.mkdtemp(
+                prefix=f".{bundle_root.name}.work-", dir=bundle_root.parent
+            )
+        )
+        bundle_staging = Path(
+            tempfile.mkdtemp(
+                prefix=f".{bundle_root.name}.bundle-", dir=bundle_root.parent
+            )
+        )
+        executions: list[StageExecution] = []
+        blocker: StageExecution | None = None
+        for stage, descriptor_path in DESCRIPTORS:
+            if blocker is None:
+                execution = execute_identified_stage(
+                    repository=repository,
+                    identified=identified,
+                    descriptor_path=descriptor_path,
+                    attempt_root=work_root / stage,
+                    available_inputs=available_inputs,
+                    deadline_monotonic=run_deadline,
+                )
+            else:
+                blocked_stage = blocker.envelope.correlation.stage
+                execution = skipped_stage_execution(
+                    execution_id=identified["execution_id"],
+                    stage=stage,
+                    implementation_mode=descriptor_modes[stage],
+                    code="sdi.dependency.prerequisite-blocked",
+                    summary=(
+                        f"The {blocked_stage} Stage outcome blocked this "
+                        "dependent Stage."
+                    ),
+                )
             if execution.envelope.correlation.stage != stage:
                 msg = "reviewed descriptor order does not match its Stage"
                 raise InputError(msg)
-            if execution.envelope.execution_conclusion != "succeeded":
-                msg = f"{stage} Fixture did not complete successfully"
-                raise InputError(msg)
             executions.append(execution)
-            available_inputs.update(execution.outputs)
+            if (
+                execution.envelope.lifecycle_state == "skipped"
+                or execution.envelope.execution_conclusion != "succeeded"
+                or execution.envelope.domain_outcome == "failed"
+                or execution.envelope.implementation_mode == "not_implemented"
+            ):
+                blocker = blocker or execution
+            else:
+                available_inputs.update(execution.outputs)
 
         artifact_records: list[dict[str, object]] = []
         for execution in executions:
@@ -294,8 +375,7 @@ def dispatch_local(
                 record["path"] = destination
                 artifact_records.append(record)
 
-        started_at = executions[0].envelope.process.started_at
-        finished_at = executions[-1].envelope.process.finished_at
+        finished_at = datetime.now(UTC)
         result = PipelineIntegrationResult.model_validate(
             {
                 "schema_version": "sdi.pipeline-integration-result/v1",
@@ -307,11 +387,16 @@ def dispatch_local(
                 "testcase_id": identified["testcase_id"],
                 "combination_id": identified["combination_id"],
                 "profile_id": identified["profile_id"],
-                "started_at": started_at,
+                "started_at": run_started_at,
                 "finished_at": finished_at,
-                "duration_ms": int((finished_at - started_at).total_seconds() * 1000),
+                "duration_ms": int(
+                    (finished_at - run_started_at).total_seconds() * 1000
+                ),
                 "input_provenance": identified["inputs"],
-                "attempts": [item.envelope for item in executions],
+                "attempts": [
+                    item.envelope.model_dump(mode="json", exclude_none=True)
+                    for item in executions
+                ],
                 "artifacts": artifact_records,
                 "fixture_notice": FIXTURE_NOTICE,
                 "kpi_evaluation": "not_evaluated",
@@ -322,12 +407,15 @@ def dispatch_local(
         _write_file(
             bundle_staging,
             PIPELINE_RESULT_PATH,
-            _canonical_json(result.model_dump(mode="json")),
+            _canonical_json(result.model_dump(mode="json", exclude_none=True)),
         )
         validate_bundle(bundle_staging)
         bundle_staging.replace(bundle_root)
-        return result.model_dump(mode="json")
+        return result.model_dump(mode="json", exclude_none=True)
     finally:
-        shutil.rmtree(work_root, ignore_errors=True)
-        if bundle_staging.exists():
+        if work_root is not None:
+            shutil.rmtree(work_root, ignore_errors=True)
+        if bundle_staging is not None and bundle_staging.exists():
             shutil.rmtree(bundle_staging, ignore_errors=True)
+        if claim_acquired:
+            claim_path.unlink(missing_ok=True)

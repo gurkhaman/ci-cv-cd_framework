@@ -87,7 +87,10 @@
       "type": "string"
     },
     "evidence_basis": {
-      "const": "fixture",
+      "enum": [
+        "fixture",
+        "implemented"
+      ],
       "title": "Evidence Basis",
       "type": "string"
     },
