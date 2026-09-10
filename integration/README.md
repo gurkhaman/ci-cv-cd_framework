@@ -27,7 +27,7 @@ validation emits one JSON record containing a newly assigned lowercase UUIDv4
 Execution ID and exact-byte provenance. Validation failures exit with status 2,
 write no record, and assign no Execution ID.
 
-## Execute The Composition Fixture
+## Execute One Stage
 
 `execute-stage` identifies the committed run, selects its reviewed adapter
 descriptor, verifies the descriptor-bound Stage profile, and invokes the adapter
@@ -58,3 +58,35 @@ The accepted envelope records `execution_conclusion: succeeded`,
 `implementation_mode: fixture`, and `domain_outcome: not_evaluated` separately.
 The deterministic blueprint and deployment schema prove pipeline-interface
 handling only. They are not composition, deployment, Validation, or KPI evidence.
+
+## Dispatch The Four-Stage Fixture
+
+`dispatch-local` assigns one Execution ID, executes the reviewed composition,
+image-build, CV, and CD descriptors sequentially, and passes only exact accepted
+files along the least-required graph. It atomically publishes a complete archive
+candidate only after all attempts, Domain outputs, diagnostics, result metadata,
+and checksums validate:
+
+```sh
+uv run --project integration sdi-integration dispatch-local \
+  --repository . \
+  --requested-ref refs/heads/main \
+  --resolved-commit "$GITHUB_SHA" \
+  --run-request-path runs/s-04/s-04-tc-03-c-01-fixture.yaml \
+  --bundle-root artifacts/s-04-tc-03-c-01
+```
+
+The archive contains the fixed `pipeline-integration-result.json`, five small
+Domain handoff files, and four bounded diagnostics. The result is the manifest;
+its checksummed inventory covers every other archive file without a recursive
+self-digest. Revalidate the complete archive independently with:
+
+```sh
+uv run --project integration sdi-integration validate-bundle \
+  --bundle-root artifacts/s-04-tc-03-c-01
+```
+
+Every attempt remains `implementation_mode: fixture` and
+`domain_outcome: not_evaluated`; the result explicitly records
+`kpi_evaluation: not_evaluated` and contains no overall Domain or six-combination
+verdict.

@@ -6,5 +6,6 @@ success.
 
 Each case is selected by exact declared input byte sizes and SHA-256 digests. Its
 payload bytes and diagnostic are independently checked before the adapter
-publishes them. The C-01 composition case emits schema-valid contract data with
-Domain outcome `not_evaluated`.
+publishes them. The C-01 cases emit schema-valid composition, image-build, CV,
+and CD contract data with Domain outcome `not_evaluated`. Their exact bytes prove
+only the four-Stage pipeline interface and handoff graph.

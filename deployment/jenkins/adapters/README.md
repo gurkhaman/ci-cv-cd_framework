@@ -5,6 +5,7 @@ process-contract version, Stage-profile version, agent label, entry point, and
 logical secret bindings. Secret values and Jenkins credential identifiers are
 governed separately and never enter these contracts.
 
-The composition Fixture descriptor receives no secrets. Its local entry point is
-used to exercise the permanent process interface before the Jenkins deployment
-and agent images are introduced.
+The four Fixture descriptors receive no secrets and select one shared
+digest-pinned Fixture implementation through separate reviewed Stage profiles.
+Their local entry point exercises the same permanent process operation before the
+Jenkins deployment and agent images are introduced.

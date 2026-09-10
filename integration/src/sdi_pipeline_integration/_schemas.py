@@ -15,7 +15,14 @@ from ._contracts import (
     RunRequest,
     TargetExecutionProfile,
 )
-from ._domain_contracts import CompositionBlueprint, DeploymentSchema
+from ._domain_contracts import (
+    CompositionBlueprint,
+    DeploymentResult,
+    DeploymentSchema,
+    ImageBuildResult,
+    ValidationEvidence,
+)
+from ._result_contracts import PipelineIntegrationResult
 from ._stage_contracts import (
     AcceptedAttemptEnvelope,
     AdapterDescriptor,
@@ -31,7 +38,10 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "adapter-descriptor-v1.schema.json": AdapterDescriptor,
     "composition-blueprint-v1.schema.json": CompositionBlueprint,
     "deployment-schema-v1.schema.json": DeploymentSchema,
+    "deployment-result-v1.schema.json": DeploymentResult,
     "fixture-case-v1.schema.json": FixtureCase,
+    "image-build-result-v1.schema.json": ImageBuildResult,
+    "pipeline-integration-result-v1.schema.json": PipelineIntegrationResult,
     "pipeline-integration-run-request-v1.schema.json": RunRequest,
     "stage-adapter-request-v1.schema.json": AdapterRequest,
     "stage-adapter-response-v1.schema.json": AdapterResponse,
@@ -40,6 +50,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
         MobilityRequirementsSpecification
     ),
     "target-execution-profile-v1.schema.json": TargetExecutionProfile,
+    "validation-evidence-v1.schema.json": ValidationEvidence,
 }
 
 

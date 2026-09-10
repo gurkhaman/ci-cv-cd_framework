@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from ._json_input import parse_json
 from ._stage_contracts import (
     ASCII_CONTROL_LIMIT,
+    ASCII_DELETE,
     AdapterRequest,
     AdapterResponse,
     FixtureCase,
@@ -110,7 +111,8 @@ def _select_case(
     matches = [
         (case, directory)
         for case, directory in _load_cases()
-        if {item.slot: (item.byte_size, item.sha256) for item in case.match_inputs}
+        if case.stage == request.correlation.stage
+        and {item.slot: (item.byte_size, item.sha256) for item in case.match_inputs}
         == actual
     ]
     if len(matches) > 1:
@@ -178,9 +180,6 @@ def _response(  # noqa: PLR0913
 def run_adapter(*, request_path: Path, input_root: Path, output_root: Path) -> None:
     """Publish one complete candidate response after all candidate files."""
     request = _load_request(request_path)
-    if request.correlation.stage != "composition":
-        msg = "composition Fixture adapter received another Stage"
-        raise InputError(msg)
     if (
         not input_root.is_dir()
         or not output_root.is_dir()
@@ -203,9 +202,6 @@ def run_adapter(*, request_path: Path, input_root: Path, output_root: Path) -> N
         return
 
     case, case_root = selected
-    if case.stage != request.correlation.stage:
-        msg = "Fixture case Stage does not match the request"
-        raise InputError(msg)
     output_by_slot = {item.slot: item for item in request.outputs}
     if set(output_by_slot) != {item.slot for item in case.outputs}:
         msg = "Fixture outputs do not match the request grants"
@@ -235,7 +231,8 @@ def run_adapter(*, request_path: Path, input_root: Path, output_root: Path) -> N
         msg = "Fixture diagnostic is not valid UTF-8"
         raise InputError(msg) from error
     if "\0" in diagnostic_text or any(
-        ord(character) < ASCII_CONTROL_LIMIT and character not in "\t\r\n"
+        (ord(character) < ASCII_CONTROL_LIMIT and character not in "\t\r\n")
+        or ord(character) == ASCII_DELETE
         for character in diagnostic_text
     ):
         msg = "Fixture diagnostic contains unsanitized control characters"

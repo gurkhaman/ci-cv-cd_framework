@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
+from ._local_dispatch import dispatch_local, validate_bundle
 from ._run_input import identify_committed_run
 from ._schemas import check_schemas, write_schemas
 from ._stage_runtime import execute_stage
@@ -57,10 +58,24 @@ def _parser() -> argparse.ArgumentParser:
     execute.add_argument("--run-request-path", required=True)
     execute.add_argument("--descriptor-path", required=True)
     execute.add_argument("--attempt-root", type=Path, required=True)
+    dispatch = commands.add_parser(
+        "dispatch-local",
+        help="execute and assemble one local four-Stage run",
+    )
+    dispatch.add_argument("--repository", type=Path, required=True)
+    dispatch.add_argument("--requested-ref", required=True)
+    dispatch.add_argument("--resolved-commit", required=True)
+    dispatch.add_argument("--run-request-path", required=True)
+    dispatch.add_argument("--bundle-root", type=Path, required=True)
+    validate = commands.add_parser(
+        "validate-bundle",
+        help="validate one complete Pipeline integration archive candidate",
+    )
+    validate.add_argument("--bundle-root", type=Path, required=True)
     return parser
 
 
-def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911
+def main(argv: Sequence[str] | None = None) -> int:  # noqa: C901, PLR0911
     """Run the public command-line interface."""
     parser = _parser()
     arguments = parser.parse_args(argv)
@@ -105,6 +120,29 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911
         sys.stdout.write(
             f"{json.dumps(envelope, sort_keys=True, separators=(',', ':'))}\n"
         )
+        return 0
+    if arguments.command == "dispatch-local":
+        try:
+            result = dispatch_local(
+                repository_path=arguments.repository,
+                requested_ref=arguments.requested_ref,
+                resolved_commit=arguments.resolved_commit,
+                run_request_path=arguments.run_request_path,
+                bundle_root=arguments.bundle_root,
+            )
+        except (InputError, OSError, ValidationError) as error:
+            sys.stderr.write(f"sdi-integration: {error}\n")
+            return 2
+        sys.stdout.write(
+            f"{json.dumps(result, sort_keys=True, separators=(',', ':'))}\n"
+        )
+        return 0
+    if arguments.command == "validate-bundle":
+        try:
+            validate_bundle(arguments.bundle_root)
+        except (InputError, OSError, ValidationError) as error:
+            sys.stderr.write(f"sdi-integration: {error}\n")
+            return 2
         return 0
     parser.print_help()
     return 0

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated, Literal, Self, cast
 
 from pydantic import (
@@ -31,6 +32,9 @@ ACCEPTED_ATTEMPT_SCHEMA_VERSION = "sdi.accepted-attempt-envelope/v1"
 FIXTURE_CASE_SCHEMA_VERSION = "sdi.fixture-case/v1"
 PROCESS_CONTRACT_VERSION = "sdi.stage-adapter-process/v1"
 COMPOSITION_PROFILE_VERSION = "sdi.composition-stage-profile/v1"
+IMAGE_BUILD_PROFILE_VERSION = "sdi.image-build-stage-profile/v1"
+CV_PROFILE_VERSION = "sdi.cv-stage-profile/v1"
+CD_PROFILE_VERSION = "sdi.cd-stage-profile/v1"
 
 type StageName = Literal["composition", "image_build", "cv", "cd"]
 type ImplementationMode = Literal["fixture", "implemented"]
@@ -76,15 +80,15 @@ ImageReference = Annotated[
     ),
 ]
 
-COMPOSITION_INPUT_SLOTS = {
-    "run_request",
-    "requirements_specification",
-    "target_profile",
-}
-COMPOSITION_OUTPUT_SLOTS = {"composition_blueprint", "deployment_schema"}
 RESERVED_RESPONSE_PATH = "response.json"
 RESERVED_ACCEPTED_ENVELOPE_PATH = "accepted-attempt.json"
-EXPECTED_COMPOSITION_INPUTS = {
+PROFILE_VERSIONS: dict[StageName, str] = {
+    "composition": COMPOSITION_PROFILE_VERSION,
+    "image_build": IMAGE_BUILD_PROFILE_VERSION,
+    "cv": CV_PROFILE_VERSION,
+    "cd": CD_PROFILE_VERSION,
+}
+BASE_INPUT_GRANTS = {
     "run_request": (
         "run-request.yaml",
         "application/yaml",
@@ -100,18 +104,87 @@ EXPECTED_COMPOSITION_INPUTS = {
         "application/yaml",
         "sdi.target-execution-profile/v1",
     ),
-}
-EXPECTED_COMPOSITION_OUTPUTS = {
     "composition_blueprint": (
-        "outputs/composition-blueprint.json",
+        "composition-blueprint.json",
         "application/json",
         "sdi.composition-blueprint/v1",
     ),
     "deployment_schema": (
-        "outputs/deployment-schema.json",
+        "deployment-schema.json",
         "application/json",
         "sdi.deployment-schema/v1",
     ),
+    "image_build_result": (
+        "image-build-result.json",
+        "application/json",
+        "sdi.image-build-result/v1",
+    ),
+    "validation_evidence": (
+        "validation-evidence.json",
+        "application/json",
+        "sdi.validation-evidence/v1",
+    ),
+}
+EXPECTED_STAGE_INPUT_SLOTS: dict[StageName, tuple[str, ...]] = {
+    "composition": (
+        "run_request",
+        "requirements_specification",
+        "target_profile",
+    ),
+    "image_build": (
+        "target_profile",
+        "composition_blueprint",
+        "deployment_schema",
+    ),
+    "cv": (
+        "requirements_specification",
+        "target_profile",
+        "composition_blueprint",
+        "deployment_schema",
+        "image_build_result",
+    ),
+    "cd": (
+        "target_profile",
+        "composition_blueprint",
+        "deployment_schema",
+        "image_build_result",
+        "validation_evidence",
+    ),
+}
+EXPECTED_STAGE_OUTPUTS: dict[StageName, dict[str, tuple[str, str, str]]] = {
+    "composition": {
+        "composition_blueprint": (
+            "outputs/composition-blueprint.json",
+            "application/json",
+            "sdi.composition-blueprint/v1",
+        ),
+        "deployment_schema": (
+            "outputs/deployment-schema.json",
+            "application/json",
+            "sdi.deployment-schema/v1",
+        ),
+    },
+    "image_build": {
+        "image_build_result": (
+            "outputs/image-build-result.json",
+            "application/json",
+            "sdi.image-build-result/v1",
+        ),
+    },
+    "cv": {
+        "validation_evidence": (
+            "outputs/validation-evidence.json",
+            "application/json",
+            "sdi.validation-evidence/v1",
+        ),
+    },
+    "cd": {
+        "deployment_result": (
+            "outputs/deployment-result.json",
+            "application/json",
+            "sdi.deployment-result/v1",
+        ),
+    },
 }
 MAX_ARTIFACT_PATH_BYTES = 512
 MAX_ARTIFACT_COMPONENT_BYTES = 255
@@ -144,7 +217,18 @@ def _reject_null_reason(data: object) -> object:
     return cast("object", data)
 
 
-def _require_unique_paths(paths: list[str]) -> None:
+def parse_wire_datetime(value: object) -> object:
+    """Parse the RFC 3339 representation used by machine-produced JSON."""
+    if not isinstance(value, str):
+        return value
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError as error:
+        msg = "timestamp must be an RFC 3339 date-time"
+        raise ValueError(msg) from error
+
+
+def require_unique_paths(paths: list[str]) -> None:
     _require_unique(paths, "path")
     folded = [path.casefold() for path in paths]
     if len(folded) != len(set(folded)):
@@ -212,11 +296,8 @@ class AdapterDescriptor(ContractModel):
         if self.implementation_mode == "fixture" and self.secret_bindings:
             msg = "Fixture adapters cannot receive secret bindings"
             raise ValueError(msg)
-        if (
-            self.stage == "composition"
-            and self.stage_profile_version != COMPOSITION_PROFILE_VERSION
-        ):
-            msg = "composition descriptor must select the composition profile version"
+        if self.stage_profile_version != PROFILE_VERSIONS[self.stage]:
+            msg = f"{self.stage} descriptor must select its reviewed profile version"
             raise ValueError(msg)
         return self
 
@@ -281,7 +362,7 @@ class StageProfile(ContractModel):
         output_slots = [item.slot for item in self.outputs]
         _require_unique(input_slots, "input slot")
         _require_unique(output_slots, "output slot")
-        _require_unique_paths(
+        require_unique_paths(
             [
                 *(item.path for item in self.inputs),
                 *(item.path for item in self.outputs),
@@ -290,33 +371,31 @@ class StageProfile(ContractModel):
                 RESERVED_ACCEPTED_ENVELOPE_PATH,
             ]
         )
-        if self.stage == "composition":
-            if self.profile_version != COMPOSITION_PROFILE_VERSION:
-                msg = "composition profile has an unsupported profile version"
-                raise ValueError(msg)
-            if set(input_slots) != COMPOSITION_INPUT_SLOTS:
-                msg = "composition profile must grant exactly its three input slots"
-                raise ValueError(msg)
-            if set(output_slots) != COMPOSITION_OUTPUT_SLOTS:
-                msg = "composition profile must grant exactly its two output slots"
-                raise ValueError(msg)
-            if not all(output.required for output in self.outputs):
-                msg = "both composition outputs are required"
-                raise ValueError(msg)
-            actual_inputs = {
-                item.slot: (item.path, item.media_type, item.schema_version)
-                for item in self.inputs
-            }
-            actual_outputs = {
-                item.slot: (item.path, item.media_type, item.schema_version)
-                for item in self.outputs
-            }
-            if actual_inputs != EXPECTED_COMPOSITION_INPUTS:
-                msg = "composition input grants do not match the reviewed profile"
-                raise ValueError(msg)
-            if actual_outputs != EXPECTED_COMPOSITION_OUTPUTS:
-                msg = "composition output grants do not match the reviewed profile"
-                raise ValueError(msg)
+        if self.profile_version != PROFILE_VERSIONS[self.stage]:
+            msg = f"{self.stage} profile has an unsupported profile version"
+            raise ValueError(msg)
+        expected_inputs = {
+            slot: BASE_INPUT_GRANTS[slot]
+            for slot in EXPECTED_STAGE_INPUT_SLOTS[self.stage]
+        }
+        expected_outputs = EXPECTED_STAGE_OUTPUTS[self.stage]
+        actual_inputs = {
+            item.slot: (item.path, item.media_type, item.schema_version)
+            for item in self.inputs
+        }
+        actual_outputs = {
+            item.slot: (item.path, item.media_type, item.schema_version)
+            for item in self.outputs
+        }
+        if actual_inputs != expected_inputs:
+            msg = f"{self.stage} input grants do not match the reviewed profile"
+            raise ValueError(msg)
+        if actual_outputs != expected_outputs:
+            msg = f"{self.stage} output grants do not match the reviewed profile"
+            raise ValueError(msg)
+        if not all(output.required for output in self.outputs):
+            msg = f"every {self.stage} output is required"
+            raise ValueError(msg)
         return self
 
 
@@ -341,7 +420,7 @@ class AdapterRequest(ContractModel):
     def validate_request(self) -> Self:
         _require_unique([item.slot for item in self.inputs], "input slot")
         _require_unique([item.slot for item in self.outputs], "output slot")
-        _require_unique_paths(
+        require_unique_paths(
             [
                 *(item.path for item in self.inputs),
                 *(item.path for item in self.outputs),
@@ -446,6 +525,24 @@ class ProcessFacts(ContractModel):
     duration_ms: NonNegativeInt
     exit_code: Literal[0]
 
+    @field_validator("started_at", "finished_at", mode="before")
+    @classmethod
+    def parse_timestamps(cls, value: object) -> object:
+        return parse_wire_datetime(value)
+
+    @model_validator(mode="after")
+    def validate_timing(self) -> Self:
+        if self.finished_at < self.started_at:
+            msg = "process timestamps are not monotonic"
+            raise ValueError(msg)
+        expected_duration = int(
+            (self.finished_at - self.started_at).total_seconds() * 1000
+        )
+        if self.duration_ms != expected_duration:
+            msg = "process duration does not match its immutable timestamps"
+            raise ValueError(msg)
+        return self
+
 
 class AcceptedAttemptEnvelope(ContractModel):
     """Transactional record created only after whole-bundle acceptance."""
@@ -465,6 +562,17 @@ class AcceptedAttemptEnvelope(ContractModel):
     @classmethod
     def reject_explicit_absent_reason(cls, data: object) -> object:
         return _reject_null_reason(data)
+
+    @model_validator(mode="after")
+    def preserve_fixture_evidence_limits(self) -> Self:
+        if self.implementation_mode == "fixture" and (
+            self.domain_outcome != "not_evaluated"
+            or self.reason is None
+            or self.reason.category != "fixture"
+        ):
+            msg = "Fixture attempt must preserve its evidence limits"
+            raise ValueError(msg)
+        return self
 
 
 class FixtureInputMatch(ContractModel):
