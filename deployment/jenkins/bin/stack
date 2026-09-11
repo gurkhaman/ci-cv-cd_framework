@@ -447,9 +447,9 @@ host_preflight() {
     probe_network_created=true
     trap 'exit 130' HUP INT TERM
     docker run --rm --name "$probe" --network "$probe_network_id" \
-        --volume "$probe:/probe" --publish 127.0.0.1::8080 \
+        --volume "$probe:/var/jenkins_home" --publish 127.0.0.1::8080 \
         --entrypoint /bin/sh "$SDI_JENKINS_CONTROLLER_IMAGE" \
-        -c 'touch /probe/write-test' >/dev/null 2>&1 || \
+        -c 'touch /var/jenkins_home/write-test' >/dev/null 2>&1 || \
         fail 'Docker cannot run the pinned image with required host capabilities'
     docker volume rm "$probe" >/dev/null 2>&1 || \
         fail 'Docker cannot remove the preflight volume'

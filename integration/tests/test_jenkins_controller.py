@@ -763,6 +763,9 @@ def test_stack_validate_uses_compose_and_rejects_insecure_secret_files(  # noqa:
         text=True,
     )
     assert preflight.returncode == 0, preflight.stderr
+    preflight_log = docker_log.read_text()
+    assert ":/var/jenkins_home --publish 127.0.0.1::8080" in preflight_log
+    assert "-c touch /var/jenkins_home/write-test" in preflight_log
     agent_secrets["cd"].write_text("e" * 64)
     agent_secrets["cd"].chmod(0o600)
 
