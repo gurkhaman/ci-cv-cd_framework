@@ -536,6 +536,9 @@ def test_workflow_is_one_protected_main_only_handoff_job() -> None:
     assert "github-summary" in summary["run"]
     assert '--github-run-id "$GITHUB_RUN_ID"' in summary["run"]
     assert '--github-run-attempt "$GITHUB_RUN_ATTEMPT"' in summary["run"]
+    assert summary["env"]["JOB_STATUS"] == "${{ job.status }}"
+    assert "cancelled()" not in summary["env"].values()
+    assert '[ "$JOB_STATUS" = cancelled ]' in summary["run"]
     assert "$GITHUB_STEP_SUMMARY" in summary["run"]
 
 
