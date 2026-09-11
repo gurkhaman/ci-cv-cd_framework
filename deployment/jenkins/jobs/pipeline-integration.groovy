@@ -32,8 +32,14 @@ pipelineJob('pipeline-integration') {
                 git {
                     remote {
                         url(REPOSITORY_URL)
+                        refspec('+refs/heads/main:refs/remotes/origin/main')
                     }
                     branch('${RESOLVED_COMMIT_SHA}')
+                    extensions {
+                        cloneOptions {
+                            honorRefspec()
+                        }
+                    }
                 }
             }
             scriptPath('Jenkinsfile')
