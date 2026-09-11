@@ -32,6 +32,8 @@ jenkins:
   globalNodeProperties:
     - envVars:
         env:
+          - key: "SDI_REPOSITORY_URL"
+            value: "${JENKINS_REPOSITORY_URL}"
           - key: "JENKINS_PIPELINE_RUN_LIMIT_SECONDS"
             value: "${JENKINS_PIPELINE_RUN_LIMIT_SECONDS}"
           - key: "JENKINS_COMPOSITION_WORK_LIMIT_SECONDS"

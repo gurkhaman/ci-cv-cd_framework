@@ -447,6 +447,16 @@ def _check_job_config(config_xml: bytes, repository_url: str, handoff_id: str) -
         "true",
         "job SCM initial-clone refspec",
     )
+    _equal(
+        root.findtext(".//extensions/*/noTags"),
+        "true",
+        "job SCM tag retrieval",
+    )
+    _require(
+        condition=root.find(".//extensions/hudson.plugins.git.extensions.impl.WipeWorkspace")
+        is not None,
+        message="job SCM preserves its Pipeline script workspace",
+    )
     _equal(root.findtext(".//scriptPath"), "Jenkinsfile", "job pipeline source")
     _equal(root.findtext(".//lightweight"), "false", "job lightweight checkout")
 
