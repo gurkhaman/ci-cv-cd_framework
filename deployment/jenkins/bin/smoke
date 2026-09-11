@@ -55,6 +55,11 @@ printf '%s\n' \
     'JENKINS_HANDOFF_ID=smoke-github-handoff' \
     'JENKINS_REPOSITORY_URL=https://github.com/gurkhaman/ci-cv-cd_framework.git' \
     'JENKINS_AGENT_CONTROLLER_URL=http://controller:8080' \
+    'JENKINS_PIPELINE_RUN_LIMIT_SECONDS=5400' \
+    'JENKINS_COMPOSITION_WORK_LIMIT_SECONDS=600' \
+    'JENKINS_IMAGE_BUILD_WORK_LIMIT_SECONDS=1800' \
+    'JENKINS_CV_WORK_LIMIT_SECONDS=2700' \
+    'JENKINS_CD_WORK_LIMIT_SECONDS=900' \
     "JENKINS_ADMIN_PASSWORD_FILE=$admin_password" \
     "JENKINS_HANDOFF_PASSWORD_FILE=$handoff_password" \
     "JENKINS_INTEGRATION_AGENT_SECRET_FILE=$integration_agent_secret" \

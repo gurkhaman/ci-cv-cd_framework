@@ -5,7 +5,7 @@ agents. The controller runs on supported Ubuntu LTS x86_64, has no executors,
 and is started only on demand. One dedicated `integration` agent performs only
 integration work; four independently replaceable agents provide the
 `composition`, `image-build`, `cv`, and `cd` scheduling labels. The root pipeline
-arrives in its own implementation issue.
+executes one submitted Fixture chain across those five agents.
 
 The tracked authority is:
 
@@ -20,7 +20,9 @@ The tracked authority is:
   Job DSL configuration.
 - `jobs/pipeline-integration.groovy`: the fixed parameterized Pipeline SCM job.
 - `compose.yaml`: loopback-only controller publication, named controller state,
-  five agent services, and a separate internal network for each agent.
+  five agent services, and a separate egress-capable network for each agent.
+- `Jenkinsfile`: the thin repository-owned scheduler over public integration CLI
+  operations.
 - `bin/stack`: the supported validation and lifecycle interface.
 
 Jenkins Configuration as Code and Job DSL run on every controller startup. A
@@ -36,8 +38,8 @@ but they are not configuration authority.
 - Python 3 for the isolated smoke-check client.
 - `uv` for strict adapter-descriptor validation and runtime-image selection.
 - Outbound HTTPS access to Docker Hub, GHCR, the Jenkins update service during a
-  clean image build, PyPI during a clean agent build, and GitHub when the job
-  eventually checks out a revision.
+  clean image build, PyPI during a clean agent build, and GitHub for each
+  agent's independent immutable checkout.
 
 `bin/stack validate` verifies the live Docker platform, secret ownership and
 permissions, supplied values, Dockerfile syntax, and the fully interpolated
@@ -53,6 +55,10 @@ exactly `http://controller:8080` for local Compose agents and an uncredentialed
 HTTPS URL for a relocated agent. Persisted container IPs and machine names are
 not configuration. The host port, user IDs, endpoint, repository identity, and
 secret locations are local deployment settings rather than tracked topology.
+The five `*_LIMIT_SECONDS` settings are trusted deployment overrides for the
+tracked 90-minute run and 10, 30, 45, and 15 minute Stage defaults. They must be
+positive integers no greater than one day; the run limit must leave at least two
+minutes for finalization. Workflow dispatch parameters cannot change them.
 
 Create the administrator and machine-user password files outside the checkout.
 Each file must be nonempty, owned by the operator, and inaccessible to group and
@@ -66,6 +72,11 @@ job. Anonymous users receive no permissions. The administrator must later issue
 the named machine-user API token and place it in the protected GitHub environment
 defined by the handoff implementation. Password authentication is not the
 GitHub-to-Jenkins contract.
+
+JCasC owns one reviewed script-sandbox approval: reading
+`FlowInterruptedException.getCauses()` lets the thin scheduler distinguish a
+Jenkins timeout from external cancellation. No other custom signature is
+approved.
 
 JCasC creates five permanent inbound node identities. Their physical names and
 pipeline-facing labels are:
@@ -95,11 +106,12 @@ descriptors currently declare no Domain secret binding, so every agent container
 sees only its own registration file and no controller password.
 
 Each image contains an immutable role and label identity under `/etc/sdi` on its
-read-only root filesystem. The supported `sdi-integration execute-stage` command
-refuses every Domain adapter on the `integration` image and requires a Domain
-image's label to match the selected descriptor before it starts a child process.
-Job environment changes cannot alter that boundary. Local execution outside an
-agent image has no deployment role and remains available for development.
+read-only root filesystem. The supported Stage execution commands refuse every
+Domain adapter on the `integration` image and require a Domain image's label to
+match the selected descriptor before starting a child process. Integration-only
+preflight and finalization likewise reject a Domain image. Job environment
+changes cannot alter that boundary. Local execution outside an agent image has no
+deployment role and remains available for development.
 
 ## Operation
 
@@ -120,22 +132,32 @@ process health. Jenkins is available only at
 all agents connect over WebSocket. `stop` removes all containers and networks
 but retains only the `jenkins-home` named volume. Agent workspaces are separate
 tmpfs mounts, have no shared or persistent filesystem, and disappear whenever
-their container is replaced.
+their container is replaced. Their five separate networks allow GitHub checkout
+without making peer agents reachable.
 
-The smoke jobs prove the workspace substrate can be cleaned before and after
-allocations, including always-run shell cleanup. GUR-39 owns that cleanup around
-every real Pipeline allocation, including cancellation paths; this ticket does
-not add the root `Jenkinsfile` or claim job-independent cleanup policy.
+The root pipeline deletes every allocated workspace before checkout and in a
+`finally` block. Each agent independently checks out and verifies the submitted
+protected-main commit. Accepted envelopes and their declared bounded files are
+the only cross-agent Stage data, transferred through Execution-ID-qualified
+Jenkins stashes. The integration agent validates the complete bundle before
+archiving all and only its declared files from the current build.
+
+The pipeline defaults to 10, 30, 45, and 15 minute Python-owned Stage work
+limits, a 90-minute Jenkins run limit, and a two-minute finalization limit. The
+validated local deployment settings may override the Stage and run limits. A
+handled machinery failure archives its structured result before Jenkins ends in
+`FAILURE`; a contract-valid negative Domain outcome can remain `SUCCESS`.
+External cancellation propagates immediately, cleans active workspaces and
+process trees, ends as `ABORTED`, and does not manufacture a result.
 
 Each Domain service owns its descriptor-selected `RUNTIME_IMAGE` build input and
 local image tag. `bin/stack` loads each image through the integration CLI's strict
 descriptor model and injects it only into the matching Compose service. A
 reviewed descriptor image replacement followed by
 `bin/stack reconcile-agent <ci|image-build|cv|cd>` builds and replaces only the
-affected Domain agent without starting or rebuilding the controller. When its
-controller URL is remote HTTPS, the agent network permits outbound reachability;
-the node identity and scheduling label remain unchanged. Only the selected
-agent's registration secret is validated or mounted during reconciliation.
+affected Domain agent without starting or rebuilding the controller. The node
+identity and scheduling label remain unchanged. Only the selected agent's
+registration secret is validated or mounted during reconciliation.
 
 `bin/stack destroy` is the explicit destructive operation for reconstruction. It
 removes the controller and its named volume. Back up operational state first if
@@ -191,7 +213,7 @@ The agent build combines the descriptor-selected CPython 3.12.13 Fixture runtime
 with the official Jenkins inbound-agent `3391.va_37fa_a_305d6d-2` JDK 21 image
 and official `uv` 0.12.1 image. The production integration package and its exact
 dependencies are installed from `integration/uv.lock` while the image has build
-network access, so the internal-network agents need no runtime package download.
+network access, so agents need no runtime package download.
 All three image inputs are immutable multi-platform digests, and the deployment
 selects Linux/amd64. Remoting files are copied into the descriptor runtime rather
 than inherited as the final image, preventing the upstream anonymous volume

@@ -206,6 +206,13 @@ def test_compose_exposes_only_loopback_http_and_persists_only_controller_state()
     assert controller["ports"] == ["127.0.0.1:${JENKINS_HTTP_PORT}:8080"]
     assert controller["restart"] == "no"
     assert controller["volumes"] == ["jenkins-home:/var/jenkins_home"]
+    assert set(controller["environment"]) >= {
+        "JENKINS_PIPELINE_RUN_LIMIT_SECONDS",
+        "JENKINS_COMPOSITION_WORK_LIMIT_SECONDS",
+        "JENKINS_IMAGE_BUILD_WORK_LIMIT_SECONDS",
+        "JENKINS_CV_WORK_LIMIT_SECONDS",
+        "JENKINS_CD_WORK_LIMIT_SECONDS",
+    }
     assert set(controller["networks"]) == {
         "controller-egress",
         "controller-integration",
@@ -227,6 +234,34 @@ def test_jcasc_owns_zero_executor_security_and_retention_defaults() -> None:
     assert jenkins["disableRememberMe"] is True
     assert jenkins["noUsageStatistics"] is True
     assert jenkins["scmCheckoutRetryCount"] == 0
+    assert jenkins["globalNodeProperties"] == [
+        {
+            "envVars": {
+                "env": [
+                    {
+                        "key": "JENKINS_PIPELINE_RUN_LIMIT_SECONDS",
+                        "value": "${JENKINS_PIPELINE_RUN_LIMIT_SECONDS}",
+                    },
+                    {
+                        "key": "JENKINS_COMPOSITION_WORK_LIMIT_SECONDS",
+                        "value": "${JENKINS_COMPOSITION_WORK_LIMIT_SECONDS}",
+                    },
+                    {
+                        "key": "JENKINS_IMAGE_BUILD_WORK_LIMIT_SECONDS",
+                        "value": "${JENKINS_IMAGE_BUILD_WORK_LIMIT_SECONDS}",
+                    },
+                    {
+                        "key": "JENKINS_CV_WORK_LIMIT_SECONDS",
+                        "value": "${JENKINS_CV_WORK_LIMIT_SECONDS}",
+                    },
+                    {
+                        "key": "JENKINS_CD_WORK_LIMIT_SECONDS",
+                        "value": "${JENKINS_CD_WORK_LIMIT_SECONDS}",
+                    },
+                ]
+            }
+        }
+    ]
     assert jenkins["securityRealm"]["local"]["allowsSignup"] is False
     assert jenkins["authorizationStrategy"]["projectMatrix"]["entries"] == [
         {
@@ -261,6 +296,12 @@ def test_jcasc_owns_zero_executor_security_and_retention_defaults() -> None:
         "creationOfLegacyTokenEnabled": False,
         "tokenGenerationOnCreationEnabled": False,
     }
+    approved_signature = (
+        "method org.jenkinsci.plugins.workflow.steps.FlowInterruptedException getCauses"
+    )
+    assert casc["security"]["scriptApproval"] == {
+        "approvedSignatures": [approved_signature]
+    }
 
     casc_text = (JENKINS_ROOT / "casc" / "jenkins.yaml").read_text()
     assert "jenkins-admin-password" in casc_text
@@ -288,7 +329,51 @@ def test_job_dsl_defines_the_fixed_non_secret_handoff_contract() -> None:
     assert "credential" not in job_dsl.lower()
 
 
-def test_stack_validate_uses_compose_and_rejects_insecure_secret_files(
+def test_root_pipeline_is_a_thin_scheduler_over_public_cli_operations() -> None:
+    pipeline = (REPOSITORY_ROOT / "Jenkinsfile").read_text()
+
+    assert "timeout(time: runLimitSeconds, unit: 'SECONDS')" in pipeline
+    assert "timeout(time: schedulingLimitSeconds, unit: 'SECONDS')" in pipeline
+    assert "timeout(time: 120, unit: 'SECONDS')" in pipeline
+    assert (
+        "timeout(time: definition.workLimitSeconds + 60, unit: 'SECONDS')" in pipeline
+    )
+    assert "--work-limit-seconds '${definition.workLimitSeconds}'" in pipeline
+    assert "stageExecutionStatus == 3" in pipeline
+    assert "System.currentTimeMillis() < schedulingDeadlineEpochMillis" in pipeline
+    assert "TimeoutStepExecution.ExceededTimeout" in pipeline
+    assert "throw interruption" in pipeline
+    assert "refs/remotes/origin/sdi-protected-main" in pipeline
+    assert "git merge-base --is-ancestor" in pipeline
+    assert "System.currentTimeMillis() >= runDeadlineEpochMillis" in pipeline
+    assert len(re.findall(r"try \{\n\s+deleteDir\(\)", pipeline)) == 4
+    assert [
+        (label, pipeline.count(f"label: '{label}'"))
+        for label in ("composition", "image-build", "cv", "cd")
+    ] == [
+        ("composition", 1),
+        ("image-build", 1),
+        ("cv", 1),
+        ("cd", 1),
+    ]
+    assert pipeline.count("execute-jenkins-stage") == 1
+    assert "preflight-jenkins-run" in pipeline
+    assert "attempt-allows-continuation" in pipeline
+    assert "finalize-jenkins-run" in pipeline
+    assert "--run-deadline-expired" in pipeline
+    assert "bundle-conclusion" in pipeline
+    assert "stash(" in pipeline
+    assert "unstash(" in pipeline
+    assert "archiveArtifacts(" in pipeline
+    assert "deleteDir()" in pipeline
+    assert "retry(" not in pipeline
+    assert "readJSON" not in pipeline
+    assert '"execution_conclusion"' not in pipeline
+    assert '"domain_outcome"' not in pipeline
+    assert "lastBuild" not in pipeline
+
+
+def test_stack_validate_uses_compose_and_rejects_insecure_secret_files(  # noqa: PLR0915
     tmp_path: Path,
 ) -> None:
     fake_bin = tmp_path / "bin"
@@ -316,6 +401,11 @@ def test_stack_validate_uses_compose_and_rejects_insecure_secret_files(
         "JENKINS_HANDOFF_ID=github-handoff\n"
         "JENKINS_REPOSITORY_URL=https://github.com/example/repository.git\n"
         "JENKINS_AGENT_CONTROLLER_URL=http://controller:8080\n"
+        "JENKINS_PIPELINE_RUN_LIMIT_SECONDS=5400\n"
+        "JENKINS_COMPOSITION_WORK_LIMIT_SECONDS=600\n"
+        "JENKINS_IMAGE_BUILD_WORK_LIMIT_SECONDS=1800\n"
+        "JENKINS_CV_WORK_LIMIT_SECONDS=2700\n"
+        "JENKINS_CD_WORK_LIMIT_SECONDS=900\n"
         f"JENKINS_ADMIN_PASSWORD_FILE={admin_secret}\n"
         f"JENKINS_HANDOFF_PASSWORD_FILE={handoff_secret}\n"
         f"JENKINS_INTEGRATION_AGENT_SECRET_FILE={agent_secrets['integration']}\n"
@@ -368,6 +458,27 @@ def test_stack_validate_uses_compose_and_rejects_insecure_secret_files(
     assert "compose" in validation_log
     assert "config --quiet" in validation_log
     assert f"images={'|'.join(FAKE_AGENT_IMAGES)}" in validation_log
+
+    valid_config = config.read_text()
+    config.write_text(
+        valid_config.replace(
+            "JENKINS_PIPELINE_RUN_LIMIT_SECONDS=5400",
+            "JENKINS_PIPELINE_RUN_LIMIT_SECONDS=120",
+        )
+    )
+    completed = subprocess.run(
+        [JENKINS_ROOT / "bin" / "stack", "--config", config, "validate"],
+        check=False,
+        capture_output=True,
+        env={
+            "DOCKER_LOG": str(docker_log),
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        },
+        text=True,
+    )
+    assert completed.returncode == 2
+    assert "must reserve at least two minutes" in completed.stderr
+    config.write_text(valid_config)
 
     _assert_plaintext_relocated_agent_url_is_rejected(config, fake_bin, docker_log)
 

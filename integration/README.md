@@ -91,6 +91,30 @@ Every attempt remains `implementation_mode: fixture` and
 `kpi_evaluation: not_evaluated` and contains no overall Domain or six-combination
 verdict.
 
+## Jenkins Pipeline Operations
+
+The root `Jenkinsfile` composes five public CLI operations rather than parsing or
+constructing contracts in Groovy:
+
+- `preflight-jenkins-run` preserves the submitted Execution ID and revalidates
+  the seven scalar handoff values, committed inputs, all descriptors and Stage
+  profiles, settled default limits, and the allocated resource mapping.
+- `execute-jenkins-stage` reconstructs prior accepted attempts from bounded
+  Jenkins stashes, validates every transferred byte and the trusted deployment
+  work limit, and executes only the next reviewed descriptor on its matching
+  immutable agent. An expired run deadline returns control without launching an
+  adapter so integration-owned finalization can create the typed skip.
+- `attempt-allows-continuation` derives whether another Domain Stage may run.
+- `finalize-jenkins-run` creates typed downstream skips, assembles the exact
+  archive, and validates it on the integration agent.
+- `bundle-conclusion` revalidates the bundle and derives Jenkins machinery
+  success without converting a valid negative Domain outcome into machinery
+  failure.
+
+These commands are pipeline-facing primitives. Operators submit only through the
+fixed Jenkins job; they do not manually coordinate the primitives or reuse their
+temporary directories as result authority.
+
 ## Settled Failure Semantics
 
 `dispatch-local` publishes a complete contract-valid bundle whenever finalization

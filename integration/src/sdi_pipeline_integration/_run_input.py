@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 
 PROTECTED_MAIN_REF = "refs/heads/main"
 INPUT_FILE_COUNT = 3
+UUID_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -63,8 +64,9 @@ def identify_committed_run(
     requested_ref: str,
     resolved_commit: str,
     run_request_path: str,
+    execution_id: str | None = None,
 ) -> dict[str, Any]:
-    """Validate one committed request and assign identity after acceptance."""
+    """Validate one committed request and accept or assign its identity."""
     if requested_ref != PROTECTED_MAIN_REF:
         msg = f"requested ref must be {PROTECTED_MAIN_REF}"
         raise InputError(msg)
@@ -92,8 +94,24 @@ def identify_committed_run(
         _provenance(requirements_blob, REQUIREMENTS_SCHEMA_VERSION),
         _provenance(profile_blob, TARGET_PROFILE_SCHEMA_VERSION),
     ]
+    if execution_id is None:
+        accepted_execution_id = str(uuid.uuid4())
+    else:
+        try:
+            parsed_execution_id = uuid.UUID(execution_id)
+        except (ValueError, AttributeError) as error:
+            msg = "execution ID must be a lowercase UUIDv4"
+            raise InputError(msg) from error
+        if (
+            parsed_execution_id.version != UUID_VERSION
+            or str(parsed_execution_id) != execution_id
+        ):
+            msg = "execution ID must be a lowercase UUIDv4"
+            raise InputError(msg)
+        accepted_execution_id = execution_id
+
     return {
-        "execution_id": str(uuid.uuid4()),
+        "execution_id": accepted_execution_id,
         "repository": repository.identity,
         "requested_ref": requested_ref,
         "resolved_commit_sha": repository.commit_sha,
