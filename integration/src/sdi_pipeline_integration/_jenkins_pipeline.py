@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from ._git_input import GitRepository
+from ._handoff_contracts import HANDOFF_CONTRACT_VERSION
 from ._jenkins_agent_boundary import enforce_integration_execution_boundary
 from ._local_dispatch import DESCRIPTORS, assemble_bundle, validate_bundle
 from ._run_input import identify_committed_run
@@ -30,7 +31,6 @@ if TYPE_CHECKING:
     from ._stage_contracts import StageName
     from ._stage_runtime import StageInputSource
 
-HANDOFF_CONTRACT_VERSION = "sdi.github-jenkins-handoff/v1"
 EXPECTED_STAGE_CONFIGURATION = {
     "composition": ("composition", 10 * 60),
     "image_build": ("image-build", 30 * 60),

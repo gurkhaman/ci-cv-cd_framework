@@ -115,6 +115,68 @@ These commands are pipeline-facing primitives. Operators submit only through the
 fixed Jenkins job; they do not manually coordinate the primitives or reuse their
 temporary directories as result authority.
 
+## Handoff One Run To Jenkins
+
+`handoff-jenkins` is the repository-owned transport seam used by the future
+protected GitHub workflow. It revalidates an already identified committed run,
+performs an authenticated Jenkins preflight, submits the seven accepted scalar
+parameters, follows the returned queue item to its exact executable build, and
+retrieves only that build's declared archive:
+
+```sh
+uv run --project integration sdi-integration handoff-jenkins \
+  --repository . \
+  --requested-ref refs/heads/main \
+  --resolved-commit "$GITHUB_SHA" \
+  --run-request-path runs/s-04/s-04-tc-03-c-01-fixture.yaml \
+  --execution-id "$EXECUTION_ID" \
+  --github-run-id "$GITHUB_RUN_ID" \
+  --github-run-attempt "$GITHUB_RUN_ATTEMPT" \
+  --bundle-root artifacts/bundle \
+  --receipt-path artifacts/handoff-receipt.json
+```
+
+The Jenkins endpoint, fixed job, repository identity, machine username, API
+token, and safety limits are trusted environment configuration rather than
+command arguments or workflow inputs. The required settings are
+`SDI_JENKINS_BASE_URL`, `SDI_JENKINS_JOB_PATH`, `SDI_JENKINS_REPOSITORY`,
+`SDI_JENKINS_USERNAME`, and `SDI_JENKINS_API_TOKEN`. Plain HTTP is accepted only
+on loopback; relocated Jenkins endpoints require verified HTTPS. The command
+does not support passwords, crumbs, remote-trigger tokens, URL credentials, or
+redirects. Preflight verifies the authenticated machine identity and access to
+the configured fixed job before submission.
+
+The independently configurable safety settings and repository defaults are:
+
+| Setting | Default | Scope |
+| --- | ---: | --- |
+| `SDI_HANDOFF_HTTP_LIMIT_SECONDS` | 30 | One HTTP operation |
+| `SDI_HANDOFF_SUBMISSION_LIMIT_SECONDS` | 30 | Build submission |
+| `SDI_HANDOFF_QUEUE_WAIT_LIMIT_SECONDS` | 900 | Queue assignment |
+| `SDI_HANDOFF_JENKINS_EXECUTION_LIMIT_SECONDS` | 5400 | Exact build execution |
+| `SDI_HANDOFF_RETRIEVAL_LIMIT_SECONDS` | 300 | Complete artifact retrieval |
+| `SDI_HANDOFF_RUNNER_OUTER_LIMIT_SECONDS` | 6000 | Complete handoff command |
+| `SDI_HANDOFF_GITHUB_JOB_LIMIT_SECONDS` | 6600 | Enclosing GitHub job |
+
+`SDI_HANDOFF_POLL_INTERVAL_SECONDS` is an optional trusted polling control and
+defaults to two seconds. These values are safety limits, not performance claims.
+The GitHub job limit must exceed the runner outer limit so an always-run caller
+can publish available evidence.
+
+The command emits only sanitized phase transitions. It never retries a failed
+HTTP operation or reconciles an ambiguous submission, and it never consults a
+latest-build pointer. `SIGINT` or `SIGTERM` causes one bounded cancellation POST
+to the known queue item or exact build followed by a brief bounded observation
+window when possible.
+
+`handoff-receipt.json` is atomically updated outside the returned bundle as
+queue and build facts become known. It contains relative Jenkins references,
+never the private base URL or credentials. A `SUCCESS` build is accepted only
+after complete schema, Execution-ID, path, size, digest, and undeclared-file
+validation. A Jenkins `FAILURE` can still return a valid diagnostic bundle, but
+the handoff exits unsuccessfully. `ABORTED`, missing, malformed, mismatched, or
+incomplete evidence likewise fails with the available partial receipt.
+
 ## Settled Failure Semantics
 
 `dispatch-local` publishes a complete contract-valid bundle whenever finalization
