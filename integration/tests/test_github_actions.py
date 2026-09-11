@@ -557,6 +557,8 @@ def test_workflow_is_one_protected_main_only_handoff_job() -> None:
     assert "identify-run" in identify_run
     assert "handoff-jenkins" not in identify_run
     assert handoff_run.count("handoff-jenkins") == 1
+    assert "exec integration/.venv/bin/sdi-integration handoff-jenkins" in handoff_run
+    assert "uv run" not in handoff_run
     assert '> "$HANDOFF_RESULT"' in handoff_run
     assert all(
         operation not in handoff_run.casefold()
