@@ -247,7 +247,6 @@ install_service() {
             'ProtectSystem=strict' \
             'ProtectHome=read-only' \
             "ReadWritePaths=$RUNNER_HOME/_diag $RUNNER_HOME/_work" \
-            'RestrictSUIDSGID=true' \
             'LockPersonality=true' \
             'UMask=0077' \
             'UnsetEnvironment=JENKINS_HOME SDI_JENKINS_BASE_URL SDI_JENKINS_JOB_PATH SDI_JENKINS_REPOSITORY SDI_JENKINS_USERNAME SDI_JENKINS_API_TOKEN SDI_JENKINS_PASSWORD' \

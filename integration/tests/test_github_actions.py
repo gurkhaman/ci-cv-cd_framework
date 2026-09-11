@@ -825,6 +825,7 @@ def test_host_runner_interface_is_pinned_user_managed_and_handoff_only() -> None
     assert "ProtectSystem=strict" in script
     assert "ReadWritePaths=$RUNNER_HOME/_diag $RUNNER_HOME/_work" in script
     assert 'ReadWritePaths=$RUNNER_HOME"' not in script
+    assert "RestrictSUIDSGID=true" not in script
     assert script.count("$RUNNER_HOME/bin/runsvc.sh") == 2
     assert "SDI_JENKINS_API_TOKEN" in script
     assert "JENKINS_HOME" in script
