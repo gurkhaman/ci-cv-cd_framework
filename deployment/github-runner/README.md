@@ -65,8 +65,8 @@ labels are disabled. Automatic updates are disabled. The user service enables
 `NoNewPrivileges`, a read-only host filesystem with only runner diagnostics and
 job work paths writable, private devices and temporary files, and explicit
 removal of Jenkins credential and state variables from its persistent
-environment. The workflow places uv's cache and managed Python installation
-under the writable runner temporary directory.
+environment. The workflow places uv's cache, managed Python installation, and
+Zig's global build cache under the writable runner temporary directory.
 
 GitHub personal accounts do not provide workflow-restricted runner groups. This
 repository therefore treats the runner label as an operational selector, not an

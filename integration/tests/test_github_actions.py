@@ -568,6 +568,7 @@ def test_workflow_is_one_protected_main_only_handoff_job() -> None:
     for step in (steps[1], steps[2], steps[3], steps[5]):
         assert step["env"]["UV_CACHE_DIR"] == "${{ runner.temp }}/uv-cache"
         assert step["env"]["UV_PYTHON_INSTALL_DIR"] == ("${{ runner.temp }}/uv-python")
+        assert step["env"]["ZIG_GLOBAL_CACHE_DIR"] == ("${{ runner.temp }}/zig-cache")
 
     publication = steps[4]
     assert publication["id"] == "publication"
