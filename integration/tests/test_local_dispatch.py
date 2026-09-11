@@ -14,12 +14,70 @@ from typing import cast
 import pytest
 
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
-RUN_REQUEST_PATH = "runs/s-04/s-04-tc-03-c-01-fixture.yaml"
+S04_COMBINATION_EXPECTATIONS: dict[str, dict[str, str]] = {
+    "C-01": {
+        "run_request_path": "runs/s-04/s-04-tc-03-c-01-fixture.yaml",
+        "profile_id": "waffle-native-arm64",
+        "architecture": "arm64",
+        "resource_id": "waffle-native-system",
+        "location_id": "waffle-native",
+        "tier": "mobility",
+    },
+    "C-02": {
+        "run_request_path": "runs/s-04/s-04-tc-03-c-02-fixture.yaml",
+        "profile_id": "waffle-xycar-amd64",
+        "architecture": "amd64",
+        "resource_id": "xycar",
+        "location_id": "waffle-xycar",
+        "tier": "mobility",
+    },
+    "C-03": {
+        "run_request_path": "runs/s-04/s-04-tc-03-c-03-fixture.yaml",
+        "profile_id": "burger-native-arm64",
+        "architecture": "arm64",
+        "resource_id": "burger-native-system",
+        "location_id": "burger-native",
+        "tier": "mobility",
+    },
+    "C-04": {
+        "run_request_path": "runs/s-04/s-04-tc-03-c-04-fixture.yaml",
+        "profile_id": "burger-xycar-amd64",
+        "architecture": "amd64",
+        "resource_id": "xycar",
+        "location_id": "burger-xycar",
+        "tier": "mobility",
+    },
+    "C-05": {
+        "run_request_path": "runs/s-04/s-04-tc-03-c-05-fixture.yaml",
+        "profile_id": "waffle-jetson-arm64",
+        "architecture": "arm64",
+        "resource_id": "jetson-nano",
+        "location_id": "waffle-jetson",
+        "tier": "edge",
+    },
+    "C-06": {
+        "run_request_path": "runs/s-04/s-04-tc-03-c-06-fixture.yaml",
+        "profile_id": "burger-jetson-arm64",
+        "architecture": "arm64",
+        "resource_id": "jetson-nano",
+        "location_id": "burger-jetson",
+        "tier": "edge",
+    },
+}
+S04_RUN_REQUEST_PATHS = tuple(
+    expected["run_request_path"] for expected in S04_COMBINATION_EXPECTATIONS.values()
+)
+RUN_REQUEST_PATH = S04_RUN_REQUEST_PATHS[0]
 STAGES = ["composition", "image_build", "cv", "cd"]
 COMMITTED_FILES = (
-    RUN_REQUEST_PATH,
+    *S04_RUN_REQUEST_PATHS,
     "requirements/s-04/deliver-book-to-joe.yaml",
     "profiles/s-04/waffle-native-arm64.yaml",
+    "profiles/s-04/waffle-xycar-amd64.yaml",
+    "profiles/s-04/burger-native-arm64.yaml",
+    "profiles/s-04/burger-xycar-amd64.yaml",
+    "profiles/s-04/waffle-jetson-arm64.yaml",
+    "profiles/s-04/burger-jetson-arm64.yaml",
     "integration/stage-profiles/composition-v1.yaml",
     "integration/stage-profiles/image-build-v1.yaml",
     "integration/stage-profiles/cv-v1.yaml",
@@ -197,15 +255,19 @@ def _configure_composition(
     return _git(repository, "rev-parse", "HEAD")
 
 
+@pytest.mark.parametrize("combination_id", S04_COMBINATION_EXPECTATIONS)
 def test_dispatches_a_contract_valid_deterministic_four_stage_fixture(
-    tmp_path: Path,
+    tmp_path: Path, combination_id: str
 ) -> None:
+    expected = S04_COMBINATION_EXPECTATIONS[combination_id]
     repository, commit_sha = _commit_fixture_repository(tmp_path)
     first_root = tmp_path / "first-bundle"
     second_root = tmp_path / "second-bundle"
 
-    first = _dispatch(repository, commit_sha, first_root)
-    second = _dispatch(repository, commit_sha, second_root)
+    first = _dispatch(repository, commit_sha, first_root, expected["run_request_path"])
+    second = _dispatch(
+        repository, commit_sha, second_root, expected["run_request_path"]
+    )
 
     assert first.returncode == second.returncode == 0, first.stderr + second.stderr
     first_result = json.loads(first.stdout)
@@ -216,6 +278,8 @@ def test_dispatches_a_contract_valid_deterministic_four_stage_fixture(
     assert first_result["execution_id"] != second_result["execution_id"]
     assert _contract_semantics(first_result) == _contract_semantics(second_result)
     assert first_result["kpi_evaluation"] == "not_evaluated"
+    assert first_result["combination_id"] == combination_id
+    assert first_result["profile_id"] == expected["profile_id"]
     assert "domain_outcome" not in first_result
     assert "overall_verdict" not in first_result
     assert [
@@ -263,6 +327,32 @@ def test_dispatches_a_contract_valid_deterministic_four_stage_fixture(
     }
     assert actual_paths == expected_paths
     assert len(first_result["artifacts"]) == 9
+    deployment_artifact = next(
+        artifact
+        for artifact in first_result["artifacts"]
+        if artifact["slot"] == "deployment_schema"
+    )
+    deployment = json.loads(
+        (first_root / deployment_artifact["path"]).read_text(encoding="utf-8")
+    )
+    assert deployment["locations"] == [
+        {
+            "location_id": expected["location_id"],
+            "resource_id": expected["resource_id"],
+            "tier": expected["tier"],
+        }
+    ]
+    image_artifact = next(
+        artifact
+        for artifact in first_result["artifacts"]
+        if artifact["slot"] == "image_build_result"
+    )
+    image_build = json.loads(
+        (first_root / image_artifact["path"]).read_text(encoding="utf-8")
+    )
+    assert {image["architecture"] for image in image_build["images"]} == {
+        expected["architecture"]
+    }
     for artifact in first_result["artifacts"]:
         first_bytes = (first_root / artifact["path"]).read_bytes()
         second_bytes = (second_root / artifact["path"]).read_bytes()
