@@ -117,8 +117,8 @@ temporary directories as result authority.
 
 ## Handoff One Run To Jenkins
 
-`handoff-jenkins` is the repository-owned transport seam used by the future
-protected GitHub workflow. It revalidates an already identified committed run,
+`handoff-jenkins` is the repository-owned transport seam used by the protected
+GitHub workflow. It revalidates an already identified committed run,
 performs an authenticated Jenkins preflight, submits the seven accepted scalar
 parameters, follows the returned queue item to its exact executable build, and
 retrieves only that build's declared archive:
@@ -176,6 +176,31 @@ after complete schema, Execution-ID, path, size, digest, and undeclared-file
 validation. A Jenkins `FAILURE` can still return a valid diagnostic bundle, but
 the handoff exits unsuccessfully. `ABORTED`, missing, malformed, mismatched, or
 incomplete evidence likewise fails with the available partial receipt.
+
+The workflow captures the command's result record rather than printing it into
+live logs, so the visible handoff output remains the native sanitized phase
+sequence. Its always-run publication step uploads the validated bundle and
+available receipt as the sole 90-day artifact named
+`pipeline-integration-<execution_id>`.
+
+After publication, `github-summary` independently validates the receipt and any
+returned bundle, incorporates GitHub's handoff and publication outcomes, renders
+the status-first summary, and returns the final machinery conclusion. It never
+derives an aggregate Domain verdict. A result-less failed or cancelled handoff
+is summarized from its receipt without promising Stage evidence.
+
+Authenticated operators can submit the reviewed six S-04 request paths
+sequentially through the same workflow with:
+
+```sh
+uv run --frozen --project integration sdi-integration dispatch-s-04 \
+  --repository gurkhaman/ci-cv-cd_framework
+```
+
+The helper prints each exact run URL before waiting and stops on failed or
+cancelled integration. It does not introduce a batch record or KPI
+interpretation. See `docs/pipeline-integration-trigger.md` for all UI, CLI, and
+REST trigger and retrieval procedures.
 
 ## Settled Failure Semantics
 

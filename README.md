@@ -6,8 +6,10 @@ interfaces for Software-Defined Mobility while keeping those Domain capabilities
 independently replaceable.
 
 The current scaffold validates and identifies committed inputs and executes one
-deterministic four-Stage Fixture run locally or through the five-agent Jenkins
-pipeline. Both paths use the permanent Stage-adapter process interface and
+deterministic four-Stage Fixture run locally or through the protected GitHub
+workflow and private five-agent Jenkins pipeline. GitHub is the external
+trigger, progress, summary, and artifact-retrieval surface. Both execution paths
+use the permanent Stage-adapter process interface and
 validate the complete archive candidate. Fixture output is not Validation
 evidence, Domain success, KPI evidence, or proof that a real composition, build,
 simulation, or deployment capability exists.
@@ -46,8 +48,9 @@ uv run --project integration sdi-integration --help
 - `deployment/jenkins/`: the pinned zero-executor Jenkins controller, five
   isolated inbound agents, exact plugin lock, configuration, fixed job, and
   lifecycle interface.
-- `.github/workflows/`: protected workflow configuration added by the handoff
-  implementation.
+- `deployment/github-runner/`: the pinned low-privilege user-service interface
+  for the handoff-only self-hosted runner.
+- `.github/workflows/`: the protected path-only Pipeline integration workflow.
 - `docs/`: role-neutral setup, operation, maintenance, and readiness guidance.
 - `CV/gazebo/`: retained Gazebo source assets. They are not connected to the
   integration scaffold.

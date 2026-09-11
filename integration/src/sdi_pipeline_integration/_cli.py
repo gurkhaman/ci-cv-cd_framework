@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Any, cast
 
 from pydantic import ValidationError
 
+from ._github_actions import render_github_summary
+from ._github_dispatch import GitHubDispatchError, dispatch_s04
 from ._jenkins_handoff import HandoffError, handoff_jenkins
 from ._jenkins_pipeline import (
     RunDeadlineExpiredError,
@@ -166,6 +168,33 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         help="validate one complete Pipeline integration archive candidate",
     )
     validate.add_argument("--bundle-root", type=Path, required=True)
+    summary = commands.add_parser(
+        "github-summary",
+        help="validate published evidence and render the final GitHub summary",
+    )
+    summary.add_argument("--execution-id", required=True)
+    summary.add_argument("--github-run-id", type=int, required=True)
+    summary.add_argument("--github-run-attempt", type=int, required=True)
+    summary.add_argument("--receipt-path", type=Path, required=True)
+    summary.add_argument("--bundle-root", type=Path, required=True)
+    summary.add_argument(
+        "--handoff-outcome",
+        choices=("success", "failure", "cancelled", "skipped"),
+        required=True,
+    )
+    summary.add_argument(
+        "--publication-outcome",
+        choices=("success", "failure", "cancelled", "skipped"),
+        required=True,
+    )
+    summary.add_argument("--artifact-name", required=True)
+    summary.add_argument("--artifact-url", default="")
+    summary.add_argument("--workflow-cancelled", action="store_true")
+    s04 = commands.add_parser(
+        "dispatch-s-04",
+        help="sequentially dispatch the six reviewed S-04 Fixture requests",
+    )
+    s04.add_argument("--repository", required=True)
     return parser
 
 
@@ -443,5 +472,38 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
             sys.stderr.write(f"sdi-integration: {error}\n")
             return 2
         return 0
+    if arguments.command == "github-summary":
+        try:
+            summary, succeeded = render_github_summary(
+                execution_id=arguments.execution_id,
+                github_run_id=arguments.github_run_id,
+                github_run_attempt=arguments.github_run_attempt,
+                receipt_path=arguments.receipt_path,
+                bundle_root=arguments.bundle_root,
+                handoff_outcome=arguments.handoff_outcome,
+                publication_outcome=arguments.publication_outcome,
+                artifact_name=arguments.artifact_name,
+                artifact_url=arguments.artifact_url,
+                workflow_cancelled=arguments.workflow_cancelled,
+            )
+        except (InputError, OSError, ValidationError) as error:
+            sys.stderr.write(f"sdi-integration: {error}\n")
+            return 2
+        sys.stdout.write(summary)
+        return 0 if succeeded else 1
+    if arguments.command == "dispatch-s-04":
+        try:
+            succeeded = dispatch_s04(
+                arguments.repository,
+                url_output=sys.stdout,
+                diagnostics=sys.stderr,
+            )
+        except GitHubDispatchError as error:
+            sys.stderr.write(f"sdi-integration: {error}\n")
+            return 1
+        except InputError as error:
+            sys.stderr.write(f"sdi-integration: {error}\n")
+            return 2
+        return 0 if succeeded else 1
     parser.print_help()
     return 0
