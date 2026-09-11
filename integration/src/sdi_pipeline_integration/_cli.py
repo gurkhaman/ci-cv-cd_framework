@@ -27,6 +27,10 @@ from ._jenkins_pipeline import (
     preflight_jenkins_run,
 )
 from ._local_dispatch import dispatch_local, validate_bundle
+from ._recovery_contracts import (
+    load_installation_authority,
+    validate_repository_authority,
+)
 from ._run_input import identify_committed_run
 from ._schemas import check_schemas, write_schemas
 from ._stage_contracts import AdapterDescriptor
@@ -80,6 +84,12 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     schema_action.add_argument("--check", action="store_true")
     schema_action.add_argument("--write", action="store_true")
     schemas.add_argument("--directory", type=Path, default=Path("schemas"))
+    installation = commands.add_parser(
+        "validate-installation",
+        help="validate every tracked source against the installation authority",
+    )
+    installation.add_argument("--repository", type=Path, required=True)
+    installation.add_argument("--installation", type=Path, required=True)
     adapter_image = commands.add_parser(
         "adapter-image",
         help="print the immutable runtime image selected by an adapter descriptor",
@@ -260,6 +270,14 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
             else:
                 check_schemas(arguments.directory)
         except (InputError, OSError) as error:
+            sys.stderr.write(f"sdi-integration: {error}\n")
+            return 2
+        return 0
+    if arguments.command == "validate-installation":
+        try:
+            authority = load_installation_authority(arguments.installation)
+            validate_repository_authority(arguments.repository, authority)
+        except (OSError, ValueError, ValidationError) as error:
             sys.stderr.write(f"sdi-integration: {error}\n")
             return 2
         return 0

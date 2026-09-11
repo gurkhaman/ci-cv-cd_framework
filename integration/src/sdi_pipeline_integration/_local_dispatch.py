@@ -36,6 +36,7 @@ from ._stage_contracts import (
     ASCII_DELETE,
     ImplementationMode,
     StageName,
+    contains_sensitive_contract_material,
     contains_sensitive_material,
 )
 from ._stage_runtime import (
@@ -214,7 +215,7 @@ def validate_bundle(  # noqa: C901, PLR0912, PLR0915
                 msg = f"archive artifact uses an unsupported schema: {artifact.path}"
                 raise InputError(msg)
             try:
-                domain_documents[artifact.stage][artifact.slot] = model.model_validate(
+                document = model.model_validate(
                     parse_json(content, artifact.path, max_bytes=artifact.byte_size),
                     strict=True,
                     extra="forbid",
@@ -222,6 +223,13 @@ def validate_bundle(  # noqa: C901, PLR0912, PLR0915
             except ValidationError as error:
                 msg = f"archive Domain output is invalid: {artifact.path}: {error}"
                 raise InputError(msg) from error
+            if contains_sensitive_contract_material(document.model_dump(mode="json")):
+                msg = (
+                    "archive Domain output contains sensitive material: "
+                    f"{artifact.path}"
+                )
+                raise InputError(msg)
+            domain_documents[artifact.stage][artifact.slot] = document
         else:
             try:
                 diagnostic = content.decode("utf-8", errors="strict")

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
 import threading
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -37,6 +39,7 @@ FAKE_AGENT_IMAGES = (
     "docker.io/example/cv@sha256:" + "3" * 64,
     "docker.io/example/cd@sha256:" + "4" * 64,
 )
+SMOKE_CHECK = JENKINS_ROOT / "bin" / "smoke-check"
 
 
 def _load_yaml(path: Path) -> Mapping[str, Any]:
@@ -93,7 +96,7 @@ def _write_fake_deployment_tools(fake_bin: Path) -> None:
         f"printf '{FAKE_AGENT_IMAGES[1]}\\n' ;;\n"
         f"  *cv-fixture-v1.yaml) printf '{FAKE_AGENT_IMAGES[2]}\\n' ;;\n"
         f"  *cd-fixture-v1.yaml) printf '{FAKE_AGENT_IMAGES[3]}\\n' ;;\n"
-        "  *sdi_pipeline_integration._recovery_contracts*authority*) exit 0 ;;\n"
+        "  *sdi-integration*validate-installation*) exit 0 ;;\n"
         "  *) exit 2 ;;\n"
         "esac\n"
     )
@@ -207,22 +210,23 @@ def _assert_single_agent_reconciliation(
         )
     )
     try:
-        subprocess.run(
-            [
-                JENKINS_ROOT / "bin" / "stack",
-                "--config",
-                config,
-                "reconcile-agent",
-                "cv",
-            ],
-            check=True,
-            capture_output=True,
-            env={
-                "DOCKER_LOG": str(docker_log),
-                "PATH": f"{fake_bin}:{os.environ['PATH']}",
-            },
-            text=True,
-        )
+        for agent in ("ci", "image-build", "cv", "cd"):
+            subprocess.run(
+                [
+                    JENKINS_ROOT / "bin" / "stack",
+                    "--config",
+                    config,
+                    "reconcile-agent",
+                    agent,
+                ],
+                check=True,
+                capture_output=True,
+                env={
+                    "DOCKER_LOG": str(docker_log),
+                    "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                },
+                text=True,
+            )
     finally:
         config.write_text(original_config)
         server.shutdown()
@@ -230,12 +234,14 @@ def _assert_single_agent_reconciliation(
         server.server_close()
     reconcile_log = docker_log.read_text()
 
-    assert "build cv" in reconcile_log
-    assert (
-        "up --no-build --no-deps --detach --wait --wait-timeout 240 cv" in reconcile_log
-    )
+    for agent in ("ci", "image-build", "cv", "cd"):
+        assert f"build {agent}" in reconcile_log
+        assert (
+            f"up --no-build --no-deps --detach --wait --wait-timeout 240 {agent}"
+            in reconcile_log
+        )
     assert "--tag sdi-jenkins-controller" not in reconcile_log
-    assert reconcile_log.count("image inspect --format {{json .Config.Volumes}}") == 1
+    assert reconcile_log.count("image inspect --format {{json .Config.Volumes}}") == 4
 
 
 def _assert_stack_lifecycle_log(lifecycle_log: str) -> None:
@@ -447,6 +453,210 @@ def test_root_pipeline_is_a_thin_scheduler_over_public_cli_operations() -> None:
     assert "lastBuild" not in pipeline
 
 
+def test_live_check_compiles_the_tracked_jenkinsfile_with_workflow_cps(  # noqa: C901
+    tmp_path: Path,
+) -> None:
+    requests: list[tuple[str, str]] = []
+    compile_response: dict[str, object] = {
+        "status": "success",
+        "message": "",
+        "line": 0,
+        "column": 0,
+    }
+    agent_labels = {
+        "integration": "integration",
+        "ci": "composition",
+        "image-build": "image-build",
+        "cv": "cv",
+        "cd": "cd",
+    }
+
+    class JenkinsHandler(BaseHTTPRequestHandler):
+        def _respond(
+            self,
+            status: int,
+            body: bytes,
+            content_type: str = "application/json",
+        ) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("X-Jenkins", "2.568.3")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self) -> None:
+            requests.append(("GET", self.path))
+            if self.path == "/crumbIssuer/api/json":
+                body = b'{"crumbRequestField":"Jenkins-Crumb","crumb":"test"}'
+            elif self.path.startswith("/api/json?tree=numExecutors"):
+                body = b'{"numExecutors":0,"slaveAgentPort":-1}'
+            elif self.path.startswith("/computer/api/json"):
+                computers = [
+                    {
+                        "displayName": "Built-In Node",
+                        "numExecutors": 0,
+                        "offline": False,
+                        "temporarilyOffline": False,
+                        "idle": True,
+                    },
+                    *(
+                        {
+                            "displayName": name,
+                            "numExecutors": 1,
+                            "offline": False,
+                            "temporarilyOffline": False,
+                            "idle": True,
+                        }
+                        for name in agent_labels
+                    ),
+                ]
+                body = json.dumps({"computer": computers}).encode()
+            elif self.path.startswith("/computer/"):
+                name = urllib.parse.unquote(self.path.split("/")[2])
+                body = f"<slave><label>{agent_labels[name]}</label></slave>".encode()
+                self._respond(200, body, "application/xml")
+                return
+            elif self.path.startswith("/pluginManager/api/json"):
+                body = json.dumps(
+                    {
+                        "plugins": [
+                            {
+                                "shortName": "workflow-cps",
+                                "version": "4378.v7a_08f1b_b_f8f4",
+                                "active": True,
+                                "enabled": True,
+                            }
+                        ]
+                    }
+                ).encode()
+            elif self.path == "/job/pipeline-integration/config.xml":
+                parameters = "".join(
+                    "<hudson.model.StringParameterDefinition>"
+                    f"<name>{name}</name>"
+                    "</hudson.model.StringParameterDefinition>"
+                    for name in EXPECTED_HANDOFF_PARAMETERS
+                )
+                permissions = "".join(
+                    f"<permission>{permission}</permission>"
+                    for permission in (
+                        "USER:hudson.model.Item.Read:github-handoff",
+                        "USER:hudson.model.Item.Build:github-handoff",
+                        "USER:hudson.model.Item.Cancel:github-handoff",
+                    )
+                )
+                body = (
+                    "<flow-definition><properties>"
+                    "<org.jenkinsci.plugins.workflow.job.properties."
+                    "DisableConcurrentBuildsJobProperty/>"
+                    "<hudson.model.ParametersDefinitionProperty>"
+                    f"<parameterDefinitions>{parameters}</parameterDefinitions>"
+                    "</hudson.model.ParametersDefinitionProperty>"
+                    "</properties><logRotator><daysToKeep>90</daysToKeep>"
+                    "<artifactDaysToKeep>90</artifactDaysToKeep></logRotator>"
+                    "<definition><scm><userRemoteConfigs><hudson.plugins.git."
+                    "UserRemoteConfig><url>https://github.com/example/repository.git</url>"
+                    "</hudson.plugins.git.UserRemoteConfig></userRemoteConfigs>"
+                    "<branches><hudson.plugins.git.BranchSpec>"
+                    "<name>${RESOLVED_COMMIT_SHA}</name>"
+                    "</hudson.plugins.git.BranchSpec></branches></scm>"
+                    "<scriptPath>Jenkinsfile</scriptPath></definition>"
+                    f"<authorizationMatrixProperty>{permissions}"
+                    "</authorizationMatrixProperty></flow-definition>"
+                ).encode()
+                self._respond(200, body, "application/xml")
+                return
+            elif self.path == "/job/pipeline-integration/api/json":
+                body = b"{}"
+            elif self.path == "/script":
+                self._respond(403, b"")
+                return
+            else:
+                self._respond(404, b"")
+                return
+            self._respond(200, body)
+
+        def do_POST(self) -> None:
+            requests.append(("POST", self.path))
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length)
+            if self.path == "/configuration-as-code/check":
+                self._respond(200, b"[]")
+            elif self.path.endswith("/checkScriptCompile"):
+                assert urllib.parse.parse_qs(body.decode())["value"] == [
+                    (REPOSITORY_ROOT / "Jenkinsfile").read_text(encoding="utf-8")
+                ]
+                self._respond(200, json.dumps(compile_response).encode())
+            elif self.path == "/scriptText":
+                self._respond(
+                    200,
+                    (
+                        b"method org.jenkinsci.plugins.workflow.steps."
+                        b"FlowInterruptedException getCauses\n"
+                    ),
+                    "text/plain",
+                )
+            else:
+                self._respond(404, b"")
+
+        def log_message(self, format: str, *arguments: object) -> None:  # noqa: A002
+            del format, arguments
+
+    admin_password = tmp_path / "admin-password"
+    handoff_password = tmp_path / "handoff-password"
+    plugin_lock = tmp_path / "plugins.txt"
+    casc = tmp_path / "jenkins.yaml"
+    admin_password.write_text("admin-password\n", encoding="utf-8")
+    handoff_password.write_text("handoff-password\n", encoding="utf-8")
+    plugin_lock.write_text("workflow-cps:4378.v7a_08f1b_b_f8f4\n", encoding="utf-8")
+    casc.write_text("jenkins: {}\n", encoding="utf-8")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), JenkinsHandler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    command = [
+        SMOKE_CHECK,
+        "check",
+        "--url",
+        f"http://127.0.0.1:{server.server_port}",
+        "--admin-id",
+        "administrator",
+        "--admin-password-file",
+        admin_password,
+        "--handoff-id",
+        "github-handoff",
+        "--handoff-password-file",
+        handoff_password,
+        "--repository-url",
+        "https://github.com/example/repository.git",
+        "--plugin-lock",
+        plugin_lock,
+        "--casc",
+        casc,
+        "--jenkinsfile",
+        REPOSITORY_ROOT / "Jenkinsfile",
+    ]
+    try:
+        accepted = subprocess.run(command, check=False, capture_output=True, text=True)
+        compile_response.update(
+            {
+                "status": "fail",
+                "message": "unexpected token",
+                "line": 7,
+                "column": 3,
+            }
+        )
+        rejected = subprocess.run(command, check=False, capture_output=True, text=True)
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+    assert accepted.returncode == 0, accepted.stderr
+    assert any(path.endswith("/checkScriptCompile") for _method, path in requests)
+    assert rejected.returncode == 1
+    assert "Jenkinsfile compilation failed at line 7, column 3" in rejected.stderr
+
+
 def test_stack_validate_uses_compose_and_rejects_insecure_secret_files(  # noqa: PLR0915
     tmp_path: Path,
 ) -> None:
@@ -469,6 +679,14 @@ def test_stack_validate_uses_compose_and_rejects_insecure_secret_files(  # noqa:
         secret.write_text(f"{index:x}" * 64)
         secret.chmod(0o600)
     config = tmp_path / "controller.env"
+    setup = subprocess.run(
+        [JENKINS_ROOT / "bin" / "stack", "--config", config, "setup"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert setup.returncode == 0, setup.stderr
+    assert config.stat().st_mode & 0o777 == 0o600
     config.write_text(
         "JENKINS_HTTP_PORT=8080\n"
         "JENKINS_ADMIN_ID=administrator\n"
@@ -647,7 +865,7 @@ def test_stack_validate_uses_compose_and_rejects_insecure_secret_files(  # noqa:
         config,
         fake_bin,
         docker_log,
-        agent_secrets["ci"],
+        agent_secrets["integration"],
     )
 
     config.write_text("NOT_A_CONTROLLER_SETTING=value\n")

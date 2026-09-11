@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import subprocess
 from pathlib import Path
@@ -288,6 +289,54 @@ def test_completed_published_bundle_renders_status_first_summary(
     assert "aggregate Domain verdict" not in completed.stdout
 
 
+@pytest.mark.parametrize(
+    "artifact_url",
+    [
+        "https://10.0.0.8/private/artifact",
+        "https://github.com/example/sdi-fixture/actions/runs/999/artifacts/2000",
+        "https://user:token@github.com/example/sdi-fixture/actions/runs/1000/artifacts/2000",
+    ],
+)
+def test_summary_rejects_private_or_mismatched_artifact_urls(
+    tmp_path: Path, artifact_url: str
+) -> None:
+    bundle_root, result = _bundle(tmp_path)
+    execution_id = str(result["execution_id"])
+    receipt_path = tmp_path / "handoff-receipt.json"
+    _write_completed_receipt(receipt_path, execution_id)
+
+    completed = subprocess.run(
+        [
+            "sdi-integration",
+            "github-summary",
+            "--execution-id",
+            execution_id,
+            "--github-run-id",
+            "1000",
+            "--github-run-attempt",
+            "1",
+            "--receipt-path",
+            str(receipt_path),
+            "--bundle-root",
+            str(bundle_root),
+            "--handoff-outcome",
+            "success",
+            "--publication-outcome",
+            "success",
+            "--artifact-name",
+            f"pipeline-integration-{execution_id}",
+            "--artifact-url",
+            artifact_url,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+
+
 def test_artifact_publication_failure_keeps_valid_result_red(tmp_path: Path) -> None:
     bundle_root, result = _bundle(tmp_path)
     execution_id = str(result["execution_id"])
@@ -475,6 +524,11 @@ def test_workflow_is_one_protected_main_only_handoff_job() -> None:
     assert job["timeout-minutes"] == 110
 
     steps = job["steps"]
+    assert all(
+        re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}", step["uses"])
+        for step in steps
+        if "uses" in step
+    )
     assert [step["name"] for step in steps] == [
         "Check out immutable protected revision",
         "Set up locked Python environment",
@@ -662,8 +716,15 @@ def test_summary_rejects_receipt_from_a_different_github_run(tmp_path: Path) -> 
     assert "Receipt: `identity mismatch`" in completed.stdout
 
 
+@pytest.mark.parametrize(
+    ("failure_run_id", "expected_count", "expected_returncode"),
+    [(None, 6, 0), (1001, 2, 1)],
+)
 def test_s04_helper_prints_exact_urls_waits_sequentially_and_stops_on_failure(
     tmp_path: Path,
+    failure_run_id: int | None,
+    expected_count: int,
+    expected_returncode: int,
 ) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -692,7 +753,8 @@ if arguments[:2] == ["run", "watch"]:
     run_id = int(arguments[2])
     entries.append({"operation": "watch", "run_id": run_id})
     log_path.write_text(json.dumps(entries))
-    raise SystemExit(1 if run_id == 1001 else 0)
+    failure_run_id = os.environ.get("FAKE_FAILURE_RUN_ID")
+    raise SystemExit(1 if failure_run_id == str(run_id) else 0)
 raise SystemExit(2)
 """,
         encoding="utf-8",
@@ -710,6 +772,7 @@ raise SystemExit(2)
         check=False,
         capture_output=True,
         env=os.environ
+        | ({"FAKE_FAILURE_RUN_ID": str(failure_run_id)} if failure_run_id else {})
         | {
             "FAKE_GH_LOG": str(log_path),
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
@@ -717,25 +780,24 @@ raise SystemExit(2)
         text=True,
     )
 
-    assert completed.returncode == 1
+    assert completed.returncode == expected_returncode
     assert completed.stdout.splitlines() == [
-        "https://github.com/example/repository/actions/runs/1000",
-        "https://github.com/example/repository/actions/runs/1001",
+        f"https://github.com/example/repository/actions/runs/{1000 + index}"
+        for index in range(expected_count)
     ]
     entries = json.loads(log_path.read_text())
     assert [entry["operation"] for entry in entries] == [
-        "dispatch",
-        "watch",
-        "dispatch",
-        "watch",
+        operation
+        for _index in range(expected_count)
+        for operation in ("dispatch", "watch")
     ]
     assert [
         entry["request"]["inputs"]["run_request_path"]
         for entry in entries
         if entry["operation"] == "dispatch"
     ] == [
-        "runs/s-04/s-04-tc-03-c-01-fixture.yaml",
-        "runs/s-04/s-04-tc-03-c-02-fixture.yaml",
+        f"runs/s-04/s-04-tc-03-c-{index:02d}-fixture.yaml"
+        for index in range(1, expected_count + 1)
     ]
     assert all(
         entry["request"].get("ref") == "main"

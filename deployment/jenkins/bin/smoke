@@ -71,15 +71,11 @@ printf '%s\n' \
 "$stack" --config "$config" --project-name "$project_name" destroy
 
 check() {
-    "$checker" check \
-        --url "http://127.0.0.1:$port" \
-        --admin-id smoke-administrator \
-        --admin-password-file "$admin_password" \
-        --handoff-id smoke-github-handoff \
-        --handoff-password-file "$handoff_password" \
-        --repository-url https://github.com/gurkhaman/ci-cv-cd_framework.git \
-        --plugin-lock "$root/controller/plugins.txt" \
-        --casc "$root/casc/jenkins.yaml"
+    "$stack" --config "$config" --project-name "$project_name" verify-live
+}
+
+exercise() {
+    "$stack" --config "$config" --project-name "$project_name" exercise-live
 }
 
 "$stack" --config "$config" --project-name "$project_name" start-controller
@@ -90,10 +86,11 @@ check() {
     --agent-secret-directory "$temporary"
 "$stack" --config "$config" --project-name "$project_name" start
 check
-"$checker" exercise-agents \
-    --url "http://127.0.0.1:$port" \
-    --admin-id smoke-administrator \
-    --admin-password-file "$admin_password"
+"$stack" --config "$config" --project-name "$project_name" status >/dev/null
+"$stack" --config "$config" --project-name "$project_name" logs >/dev/null
+"$stack" --config "$config" --project-name "$project_name" quiesce
+"$stack" --config "$config" --project-name "$project_name" resume
+exercise
 
 historical=$temporary/historical-agent-secrets
 mkdir -m 700 "$historical"
@@ -123,10 +120,7 @@ for name in integration ci image-build cv cd; do
 done
 "$stack" --config "$config" --project-name "$project_name" start
 check
-"$checker" exercise-agents \
-    --url "http://127.0.0.1:$port" \
-    --admin-id smoke-administrator \
-    --admin-password-file "$admin_password"
+exercise
 
 "$checker" drift \
     --url "http://127.0.0.1:$port" \

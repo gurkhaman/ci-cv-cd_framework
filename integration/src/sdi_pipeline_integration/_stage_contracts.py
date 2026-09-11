@@ -197,6 +197,14 @@ IPV4_PATTERN = re.compile(r"(?<![0-9.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9.])")
 IPV6_PATTERN = re.compile(
     r"(?<![0-9a-f:])[0-9a-f]*:[0-9a-f:.]+(?![0-9a-f:])", re.IGNORECASE
 )
+POSIX_MACHINE_PATH_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9._-])/(?:home|Users|tmp|private|mnt|media|var|etc|opt|srv|run|root|usr/local|workspace|workspaces)(?:/[^\s]*)?"
+)
+WINDOWS_MACHINE_PATH_PATTERN = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/]")
+PRIVATE_HOSTNAME_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9.-])(?:[A-Za-z0-9-]+\.)+(?:internal|local|localhost)(?![A-Za-z0-9.-])",
+    re.IGNORECASE,
+)
 
 
 def contains_sensitive_material(text: str) -> bool:
@@ -224,6 +232,12 @@ def contains_sensitive_material(text: str) -> bool:
         )
     ):
         return True
+    if (
+        POSIX_MACHINE_PATH_PATTERN.search(text)
+        or WINDOWS_MACHINE_PATH_PATTERN.search(text)
+        or PRIVATE_HOSTNAME_PATTERN.search(text)
+    ):
+        return True
     for candidate in [*IPV4_PATTERN.findall(text), *IPV6_PATTERN.findall(text)]:
         try:
             address = ipaddress.ip_address(candidate)
@@ -231,6 +245,21 @@ def contains_sensitive_material(text: str) -> bool:
             continue
         if address.is_private or address.is_loopback or address.is_link_local:
             return True
+    return False
+
+
+def contains_sensitive_contract_material(value: object) -> bool:
+    """Recursively inspect one parsed JSON contract for forbidden strings."""
+    if isinstance(value, str):
+        return contains_sensitive_material(value)
+    if isinstance(value, dict):
+        mapping = cast("dict[object, object]", value)
+        return any(
+            contains_sensitive_contract_material(item) for item in mapping.values()
+        )
+    if isinstance(value, list):
+        sequence = cast("list[object]", value)
+        return any(contains_sensitive_contract_material(item) for item in sequence)
     return False
 
 
@@ -541,6 +570,11 @@ class AcceptedInput(ContractModel):
     schema_version: NonBlank
     byte_size: NonNegativeInt
     sha256: Sha256
+
+    @field_validator("source_path")
+    @classmethod
+    def validate_source_path(cls, path: str) -> str:
+        return _validate_confined_path(path)
 
 
 class AcceptedDomainFile(ContractModel):

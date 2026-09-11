@@ -1010,7 +1010,7 @@ def _retrieve_bundle(  # noqa: C901
     client: _JenkinsClient,
     build_number: int,
     raw_artifacts: list[object],
-    expected_execution_id: str,
+    identified: Mapping[str, object],
     bundle_root: Path,
 ) -> tuple[PipelineIntegrationResult, JsonObject]:
     retrieval_started = time.monotonic()
@@ -1028,7 +1028,19 @@ def _retrieve_bundle(  # noqa: C901
         result = parse_pipeline_result(result_content)
     except (InputError, ValidationError) as error:
         raise _failure("invalid_artifact", "retrieving") from error
-    if result.execution_id != expected_execution_id:
+    returned_identity: dict[str, object] = {
+        "execution_id": result.execution_id,
+        "repository": result.repository,
+        "requested_ref": result.requested_ref,
+        "resolved_commit_sha": result.resolved_commit_sha,
+        "scenario_id": result.scenario_id,
+        "testcase_id": result.testcase_id,
+        "combination_id": result.combination_id,
+        "profile_id": result.profile_id,
+        "inputs": [item.model_dump(mode="json") for item in result.input_provenance],
+    }
+    expected_identity = {key: identified[key] for key in returned_identity}
+    if returned_identity != expected_identity:
         raise _failure("identity_mismatch", "retrieving")
     expected_paths = {PIPELINE_RESULT_PATH, *(item.path for item in result.artifacts)}
     if remote_paths != expected_paths:
@@ -1056,7 +1068,7 @@ def _retrieve_bundle(  # noqa: C901
             validated = validate_bundle(staging)
         except (InputError, ValidationError, OSError) as error:
             raise _failure("invalid_artifact", "retrieving") from error
-        if validated.execution_id != expected_execution_id:
+        if validated.execution_id != identified["execution_id"]:
             raise _failure("identity_mismatch", "retrieving")
         _ = staging.replace(bundle_root)
     finally:
@@ -1220,7 +1232,7 @@ def handoff_jenkins(  # noqa: C901, PLR0913, PLR0915
             client,
             build_number,
             raw_artifacts,
-            execution_id,
+            identified,
             bundle_root,
         )
         if jenkins_result == "FAILURE":

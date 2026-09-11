@@ -95,8 +95,8 @@ command -v git >/dev/null 2>&1 || fail 'Git is required'
 command -v uv >/dev/null 2>&1 || fail 'uv is required'
 
 authority() {
-    uv run --project "$repository_root/integration" --frozen python -m \
-        sdi_pipeline_integration._recovery_contracts authority \
+    uv run --project "$repository_root/integration" --frozen \
+        sdi-integration validate-installation \
         --repository "$repository_root" --installation "$installation" \
         2>/dev/null || \
         fail 'reviewed installation authority validation failed'

@@ -59,7 +59,7 @@ enable a host-boot service.
 Run the scaffold-only setup and complete host preflight from the approved
 protected-main checkout:
 
-```sh
+```sh acceptance=stack-setup-preflight
 deployment/jenkins/bin/stack setup
 deployment/jenkins/bin/stack preflight
 ```
@@ -156,7 +156,7 @@ deployment role and remains available for development.
 
 Run from any directory:
 
-```sh
+```sh acceptance=stack-lifecycle
 deployment/jenkins/bin/stack validate
 deployment/jenkins/bin/stack start
 deployment/jenkins/bin/stack status
@@ -208,7 +208,7 @@ it must be retained.
 Prevent new protected-environment delivery and stop the dedicated GitHub runner
 before shutdown. Then quiesce Jenkins and stop the stack:
 
-```sh
+```sh acceptance=stack-safe-shutdown
 deployment/jenkins/bin/stack quiesce
 deployment/jenkins/bin/stack stop
 ```
@@ -227,7 +227,7 @@ Snapshots are manual, cold, and sensitive. Select an operator-encrypted
 destination outside both the checkout and Docker volume, stop the runner and
 protected-environment handoff, and run:
 
-```sh
+```sh acceptance=recovery-snapshot
 deployment/jenkins/bin/recovery snapshot \
   --destination /operator/encrypted/off-host-location \
   --encrypted-destination \
@@ -245,7 +245,7 @@ scheduler, retention service, upload service, RPO, or RTO.
 
 Verify an archive without changing Docker state:
 
-```sh
+```sh acceptance=recovery-verify
 deployment/jenkins/bin/recovery verify \
   --archive /operator/encrypted/off-host-location/jenkins-home-....tar.gz \
   --manifest /operator/encrypted/off-host-location/jenkins-home-....manifest.json
@@ -260,7 +260,7 @@ touching the target volume. The acknowledgement flag records the explicit
 operator decision to replace the archived credentials; it is not a scheduler or
 general credential-rotation service:
 
-```sh
+```sh acceptance=recovery-restore
 deployment/jenkins/bin/recovery restore \
   --archive /operator/encrypted/off-host-location/jenkins-home-....tar.gz \
   --manifest /operator/encrypted/off-host-location/jenkins-home-....manifest.json \
@@ -362,7 +362,7 @@ Jenkins console output as evidence.
 
 Run the empty-state runtime acceptance check with:
 
-```sh
+```sh acceptance=stack-smoke
 deployment/jenkins/bin/stack smoke
 ```
 

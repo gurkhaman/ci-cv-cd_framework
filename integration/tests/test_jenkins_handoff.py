@@ -717,6 +717,7 @@ def test_handoff_preserves_typed_terminal_jenkins_failure(
         ("size_mismatch", "invalid_artifact"),
         ("unsafe_path", "invalid_artifact"),
         ("identity_mismatch", "identity_mismatch"),
+        ("returned_run_mismatch", "identity_mismatch"),
     ],
 )
 def test_handoff_rejects_incomplete_or_invalid_exact_build_artifacts(
@@ -747,6 +748,12 @@ def test_handoff_rejects_incomplete_or_invalid_exact_build_artifacts(
         artifacts[path] = artifacts[path] + b"x"
     elif mutation == "unsafe_path":
         artifacts["../outside"] = b"not accepted\n"
+    elif mutation == "returned_run_mismatch":
+        result = json.loads(artifacts["pipeline-integration-result.json"])
+        result["repository"] = "github.com/example/another-repository"
+        artifacts["pipeline-integration-result.json"] = (
+            json.dumps(result, separators=(",", ":")).encode() + b"\n"
+        )
     else:
         submitted_execution_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
     fake = FakeJenkins(artifacts, mode=mode)
