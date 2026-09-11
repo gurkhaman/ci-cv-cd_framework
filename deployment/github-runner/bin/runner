@@ -217,7 +217,7 @@ configure_runner() {
 install_service() {
     load_installation
     check_host
-    [ -x "$RUNNER_HOME/runsvc.sh" ] || fail "install the pinned runner first"
+    [ -x "$RUNNER_HOME/bin/runsvc.sh" ] || fail "install the pinned runner first"
     [ -f "$RUNNER_HOME/.runner" ] || fail "configure the runner first"
     mkdir -p -m 700 "$RUNNER_HOME/_diag" "$RUNNER_HOME/_work"
     mkdir -p -m 700 "$SERVICE_DIRECTORY"
@@ -234,7 +234,7 @@ install_service() {
             '[Service]' \
             'Type=simple' \
             "WorkingDirectory=$RUNNER_HOME" \
-            "ExecStart=$RUNNER_HOME/runsvc.sh" \
+            "ExecStart=$RUNNER_HOME/bin/runsvc.sh" \
             'Restart=always' \
             'RestartSec=5' \
             'KillMode=mixed' \
