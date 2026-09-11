@@ -448,6 +448,7 @@ def _check_job_config(config_xml: bytes, repository_url: str, handoff_id: str) -
         "job SCM initial-clone refspec",
     )
     _equal(root.findtext(".//scriptPath"), "Jenkinsfile", "job pipeline source")
+    _equal(root.findtext(".//lightweight"), "false", "job lightweight checkout")
 
     permissions = {element.text for element in root.findall(".//permission")}
     _equal(
