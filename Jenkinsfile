@@ -2,8 +2,7 @@ import org.jenkinsci.plugins.workflow.steps.FlowInterruptedException
 import org.jenkinsci.plugins.workflow.steps.TimeoutStepExecution
 
 
-def readPositiveSeconds = { name ->
-    def raw = env[name]
+def readPositiveSeconds = { name, raw ->
     if (raw == null || !(raw ==~ /[1-9][0-9]*/)) {
         error("${name} must be a positive integer")
     }
@@ -14,7 +13,10 @@ def readPositiveSeconds = { name ->
     value
 }
 
-def runLimitSeconds = readPositiveSeconds('JENKINS_PIPELINE_RUN_LIMIT_SECONDS')
+def runLimitSeconds = readPositiveSeconds(
+    'JENKINS_PIPELINE_RUN_LIMIT_SECONDS',
+    env.JENKINS_PIPELINE_RUN_LIMIT_SECONDS,
+)
 if (runLimitSeconds < 180) {
     error('JENKINS_PIPELINE_RUN_LIMIT_SECONDS must reserve finalization time')
 }
@@ -22,16 +24,20 @@ if (runLimitSeconds < 180) {
 def stages = [
     [name: 'Composition', stage: 'composition', label: 'composition',
      descriptor: 'deployment/jenkins/adapters/composition-fixture-v1.yaml',
-     workLimitSeconds: readPositiveSeconds('JENKINS_COMPOSITION_WORK_LIMIT_SECONDS')],
+     workLimitSeconds: readPositiveSeconds(
+         'JENKINS_COMPOSITION_WORK_LIMIT_SECONDS', env.JENKINS_COMPOSITION_WORK_LIMIT_SECONDS)],
     [name: 'Image build', stage: 'image_build', label: 'image-build',
      descriptor: 'deployment/jenkins/adapters/image-build-fixture-v1.yaml',
-     workLimitSeconds: readPositiveSeconds('JENKINS_IMAGE_BUILD_WORK_LIMIT_SECONDS')],
+     workLimitSeconds: readPositiveSeconds(
+         'JENKINS_IMAGE_BUILD_WORK_LIMIT_SECONDS', env.JENKINS_IMAGE_BUILD_WORK_LIMIT_SECONDS)],
     [name: 'Continuous Validation', stage: 'cv', label: 'cv',
      descriptor: 'deployment/jenkins/adapters/cv-fixture-v1.yaml',
-     workLimitSeconds: readPositiveSeconds('JENKINS_CV_WORK_LIMIT_SECONDS')],
+     workLimitSeconds: readPositiveSeconds(
+         'JENKINS_CV_WORK_LIMIT_SECONDS', env.JENKINS_CV_WORK_LIMIT_SECONDS)],
     [name: 'Continuous Deployment', stage: 'cd', label: 'cd',
      descriptor: 'deployment/jenkins/adapters/cd-fixture-v1.yaml',
-     workLimitSeconds: readPositiveSeconds('JENKINS_CD_WORK_LIMIT_SECONDS')],
+     workLimitSeconds: readPositiveSeconds(
+         'JENKINS_CD_WORK_LIMIT_SECONDS', env.JENKINS_CD_WORK_LIMIT_SECONDS)],
 ]
 
 def isTimeoutInterruption = { interruption ->

@@ -404,6 +404,8 @@ def test_job_dsl_defines_the_fixed_non_secret_handoff_contract() -> None:
     assert "branch('${RESOLVED_COMMIT_SHA}')" in job_dsl
     assert "honorRefspec()" in job_dsl
     assert "scriptPath('Jenkinsfile')" in job_dsl
+    assert "lightweight(false)" in job_dsl
+    assert "lightweight(true)" not in job_dsl
     assert "hudson.model.Item.Read" in job_dsl
     assert "hudson.model.Item.Build" in job_dsl
     assert "hudson.model.Item.Cancel" in job_dsl
@@ -414,6 +416,8 @@ def test_job_dsl_defines_the_fixed_non_secret_handoff_contract() -> None:
 def test_root_pipeline_is_a_thin_scheduler_over_public_cli_operations() -> None:
     pipeline = (REPOSITORY_ROOT / "Jenkinsfile").read_text()
 
+    assert "env[name]" not in pipeline
+    assert "env.JENKINS_PIPELINE_RUN_LIMIT_SECONDS" in pipeline
     assert "timeout(time: runLimitSeconds, unit: 'SECONDS')" in pipeline
     assert "timeout(time: schedulingLimitSeconds, unit: 'SECONDS')" in pipeline
     assert "timeout(time: 120, unit: 'SECONDS')" in pipeline
@@ -567,7 +571,8 @@ def test_live_check_compiles_the_tracked_jenkinsfile_with_workflow_cps(  # noqa:
                     "<honorRefspec>true</honorRefspec>"
                     "</hudson.plugins.git.extensions.impl.CloneOption>"
                     "</extensions></scm>"
-                    "<scriptPath>Jenkinsfile</scriptPath></definition>"
+                    "<scriptPath>Jenkinsfile</scriptPath>"
+                    "<lightweight>false</lightweight></definition>"
                     f"<authorizationMatrixProperty>{permissions}"
                     "</authorizationMatrixProperty></flow-definition>"
                 ).encode()

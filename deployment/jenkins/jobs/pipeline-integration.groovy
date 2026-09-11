@@ -43,7 +43,7 @@ pipelineJob('pipeline-integration') {
                 }
             }
             scriptPath('Jenkinsfile')
-            lightweight(true)
+            lightweight(false)
         }
     }
 }
