@@ -69,9 +69,14 @@ JCasC creates the two local identities from those bootstrap files. The
 administrator has `Overall/Administer`. The handoff machine user has only
 `Overall/Read` globally and `Job/Read`, `Job/Build`, and `Job/Cancel` on the fixed
 job. Anonymous users receive no permissions. The administrator must later issue
-the named machine-user API token and place it in the protected GitHub environment
-defined by the handoff implementation. Password authentication is not the
-GitHub-to-Jenkins contract.
+the named machine-user API token and place it only in the protected
+`pipeline-integration-jenkins` GitHub environment. Password authentication is
+not the GitHub-to-Jenkins contract.
+
+The dedicated GitHub runner uses the host interface under
+`deployment/github-runner/`. It is a separate low-privilege user service with no
+Docker socket or Jenkins-state access. The service environment never persists
+this API token; GitHub releases it only to the protected handoff job.
 
 JCasC owns one reviewed script-sandbox approval: reading
 `FlowInterruptedException.getCauses()` lets the thin scheduler distinguish a

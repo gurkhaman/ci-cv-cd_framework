@@ -1,0 +1,185 @@
+#!/bin/sh
+set -eu
+
+RUNNER_VERSION="2.337.0"
+RUNNER_SHA256="70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613"
+RUNNER_ARCHIVE="actions-runner-linux-x64-$RUNNER_VERSION.tar.gz"
+RUNNER_URL="https://github.com/actions/runner/releases/download/v$RUNNER_VERSION/$RUNNER_ARCHIVE"
+RUNNER_HOME="$HOME/.local/share/sdi-github-runner"
+SERVICE_DIRECTORY="$HOME/.config/systemd/user"
+SERVICE_PATH="$SERVICE_DIRECTORY/sdi-github-runner.service"
+
+fail() {
+    printf 'github-runner: %s\n' "$1" >&2
+    exit 1
+}
+
+usage() {
+    printf '%s\n' "usage: $0 <install|configure|install-service|start|stop|status>"
+}
+
+check_host() {
+    [ "$(id -u)" -ne 0 ] || fail "the runner account must not be root"
+    case "$HOME" in
+        "" | *[!A-Za-z0-9_./-]*) fail "the runner account home path is unsupported" ;;
+    esac
+    for group in $(id -nG); do
+        case "$group" in
+            sudo | wheel | docker)
+                fail "the runner account must not belong to $group"
+                ;;
+        esac
+    done
+    if [ -r /var/run/docker.sock ] || [ -w /var/run/docker.sock ]; then
+        fail "the runner account must not have Docker socket access"
+    fi
+    for name in \
+        JENKINS_HOME \
+        SDI_JENKINS_API_TOKEN \
+        SDI_JENKINS_PASSWORD; do
+        if printenv "$name" >/dev/null 2>&1; then
+            fail "$name must not be present while managing the runner service"
+        fi
+    done
+}
+
+install_runner() {
+    check_host
+    [ ! -e "$RUNNER_HOME" ] || fail "runner installation already exists"
+    parent=$(dirname "$RUNNER_HOME")
+    mkdir -p -m 700 "$parent"
+    staging=$(mktemp -d "$parent/.sdi-github-runner.XXXXXX")
+    archive="$staging/$RUNNER_ARCHIVE"
+    trap 'rm -rf "$staging"' EXIT HUP INT TERM
+    curl --fail --location --proto '=https' --tlsv1.2 \
+        --output "$archive" "$RUNNER_URL"
+    printf '%s  %s\n' "$RUNNER_SHA256" "$RUNNER_ARCHIVE" \
+        | (cd "$staging" && sha256sum --check -)
+    mkdir "$staging/runner"
+    tar --extract --gzip --file "$archive" --directory "$staging/runner"
+    rm "$archive"
+    mv "$staging/runner" "$RUNNER_HOME"
+    chmod 700 "$RUNNER_HOME"
+    trap - EXIT HUP INT TERM
+    rmdir "$staging"
+}
+
+configure_runner() {
+    check_host
+    [ -x "$RUNNER_HOME/config.sh" ] || fail "install the pinned runner first"
+    [ ! -e "$RUNNER_HOME/.runner" ] || fail "runner is already configured"
+    repository_url=${SDI_GITHUB_RUNNER_REPOSITORY-}
+    runner_name=${SDI_GITHUB_RUNNER_NAME-}
+    registration_token=${SDI_GITHUB_RUNNER_REGISTRATION_TOKEN-}
+    case "$repository_url" in
+        https://github.com/*/*) ;;
+        *) fail "SDI_GITHUB_RUNNER_REPOSITORY must be an HTTPS GitHub repository URL" ;;
+    esac
+    repository=${repository_url#https://github.com/}
+    owner=${repository%%/*}
+    name=${repository#*/}
+    case "$owner" in
+        "" | *[!A-Za-z0-9_.-]*)
+            fail "runner repository owner contains unsupported material"
+            ;;
+    esac
+    case "$name" in
+        "" | */* | *\?* | *\#* | *@* | *[!A-Za-z0-9_.-]*)
+            fail "runner repository name contains unsupported material"
+            ;;
+    esac
+    case "$runner_name" in
+        "" | *[!A-Za-z0-9_.-]*) fail "SDI_GITHUB_RUNNER_NAME is invalid" ;;
+    esac
+    [ -n "$registration_token" ] \
+        || fail "SDI_GITHUB_RUNNER_REGISTRATION_TOKEN is required"
+    (
+        cd "$RUNNER_HOME"
+        ./config.sh \
+            --unattended \
+            --url "$repository_url" \
+            --token "$registration_token" \
+            --name "$runner_name" \
+            --labels sdi-jenkins-handoff \
+            --no-default-labels \
+            --work _work \
+            --disableupdate
+    )
+    unset registration_token SDI_GITHUB_RUNNER_REGISTRATION_TOKEN
+}
+
+install_service() {
+    check_host
+    [ -x "$RUNNER_HOME/runsvc.sh" ] || fail "install the pinned runner first"
+    [ -f "$RUNNER_HOME/.runner" ] || fail "configure the runner first"
+    mkdir -p -m 700 "$RUNNER_HOME/_diag" "$RUNNER_HOME/_work"
+    mkdir -p -m 700 "$SERVICE_DIRECTORY"
+    temporary="$SERVICE_PATH.tmp.$$"
+    trap 'rm -f "$temporary"' EXIT HUP INT TERM
+    umask 077
+    {
+        printf '%s\n' \
+            '[Unit]' \
+            'Description=SDI GitHub Actions Jenkins handoff runner' \
+            'After=network-online.target' \
+            'Wants=network-online.target' \
+            '' \
+            '[Service]' \
+            'Type=simple' \
+            "WorkingDirectory=$RUNNER_HOME" \
+            "ExecStart=$RUNNER_HOME/runsvc.sh" \
+            'Restart=always' \
+            'RestartSec=5' \
+            'KillMode=mixed' \
+            'NoNewPrivileges=true' \
+            'PrivateDevices=true' \
+            'PrivateTmp=true' \
+            'ProtectControlGroups=true' \
+            'ProtectKernelModules=true' \
+            'ProtectKernelTunables=true' \
+            'ProtectSystem=strict' \
+            'ProtectHome=read-only' \
+            "ReadWritePaths=$RUNNER_HOME/_diag $RUNNER_HOME/_work" \
+            'RestrictSUIDSGID=true' \
+            'LockPersonality=true' \
+            'UMask=0077' \
+            'UnsetEnvironment=JENKINS_HOME SDI_JENKINS_BASE_URL SDI_JENKINS_JOB_PATH SDI_JENKINS_REPOSITORY SDI_JENKINS_USERNAME SDI_JENKINS_API_TOKEN SDI_JENKINS_PASSWORD' \
+            '' \
+            '[Install]' \
+            'WantedBy=default.target'
+    } > "$temporary"
+    mv "$temporary" "$SERVICE_PATH"
+    trap - EXIT HUP INT TERM
+    systemctl --user daemon-reload
+    systemctl --user enable sdi-github-runner.service
+}
+
+command=${1-}
+case "$command" in
+    install)
+        install_runner
+        ;;
+    configure)
+        configure_runner
+        ;;
+    install-service)
+        install_service
+        ;;
+    start)
+        check_host
+        systemctl --user start sdi-github-runner.service
+        ;;
+    stop)
+        systemctl --user stop sdi-github-runner.service
+        ;;
+    status)
+        systemctl --user status sdi-github-runner.service
+        ;;
+    -h | --help | help)
+        usage
+        ;;
+    *)
+        usage >&2
+        exit 2
+        ;;
+esac
