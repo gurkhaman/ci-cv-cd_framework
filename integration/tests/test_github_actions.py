@@ -284,6 +284,8 @@ def test_completed_published_bundle_renders_status_first_summary(
     )
     assert "`bundle/pipeline-integration-result.json`" in completed.stdout
     assert "`handoff-receipt.json`" in completed.stdout
+    assert "- Combination: `C-01`" in completed.stdout
+    assert "Supported combination" not in completed.stdout
     assert "KPI evaluation: `not evaluated`" in completed.stdout
     assert "Fixture warning" in completed.stdout
     assert "aggregate Domain verdict" not in completed.stdout

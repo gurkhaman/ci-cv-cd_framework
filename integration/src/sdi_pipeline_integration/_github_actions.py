@@ -223,7 +223,7 @@ def render_github_summary(  # noqa: C901, PLR0912, PLR0913, PLR0915
             [
                 f"- Scenario: {_code(result.scenario_id)}",
                 f"- Testcase: {_code(result.testcase_id)}",
-                f"- Supported combination: {_code(result.combination_id)}",
+                f"- Combination: {_code(result.combination_id)}",
                 f"- Target execution profile: {_code(result.profile_id)}",
                 f"- Repository: {_code(result.repository)}",
                 f"- Requested ref: {_code(result.requested_ref)}",
