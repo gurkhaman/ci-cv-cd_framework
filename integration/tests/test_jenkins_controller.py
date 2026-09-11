@@ -319,6 +319,10 @@ def test_jcasc_owns_zero_executor_security_and_retention_defaults() -> None:
             "envVars": {
                 "env": [
                     {
+                        "key": "SDI_REPOSITORY_URL",
+                        "value": "${JENKINS_REPOSITORY_URL}",
+                    },
+                    {
                         "key": "JENKINS_PIPELINE_RUN_LIMIT_SECONDS",
                         "value": "${JENKINS_PIPELINE_RUN_LIMIT_SECONDS}",
                     },
@@ -403,6 +407,8 @@ def test_job_dsl_defines_the_fixed_non_secret_handoff_contract() -> None:
     assert "refspec('+refs/heads/main:refs/remotes/origin/main')" in job_dsl
     assert "branch('${RESOLVED_COMMIT_SHA}')" in job_dsl
     assert "honorRefspec()" in job_dsl
+    assert "noTags()" in job_dsl
+    assert "wipeOutWorkspace()" in job_dsl
     assert "scriptPath('Jenkinsfile')" in job_dsl
     assert "lightweight(false)" in job_dsl
     assert "lightweight(true)" not in job_dsl
@@ -417,6 +423,12 @@ def test_root_pipeline_is_a_thin_scheduler_over_public_cli_operations() -> None:
     pipeline = (REPOSITORY_ROOT / "Jenkinsfile").read_text()
 
     assert "env[name]" not in pipeline
+    assert "checkout scm" not in pipeline
+    assert "$class: 'GitSCM'" in pipeline
+    assert "branches: [[name: env.RESOLVED_COMMIT_SHA]]" in pipeline
+    assert "honorRefspec: true" in pipeline
+    assert "noTags: true" in pipeline
+    assert "url: env.SDI_REPOSITORY_URL" in pipeline
     assert "env.JENKINS_PIPELINE_RUN_LIMIT_SECONDS" in pipeline
     assert "timeout(time: runLimitSeconds, unit: 'SECONDS')" in pipeline
     assert "timeout(time: schedulingLimitSeconds, unit: 'SECONDS')" in pipeline
@@ -569,7 +581,9 @@ def test_live_check_compiles_the_tracked_jenkinsfile_with_workflow_cps(  # noqa:
                     "</hudson.plugins.git.BranchSpec></branches><extensions>"
                     "<hudson.plugins.git.extensions.impl.CloneOption>"
                     "<honorRefspec>true</honorRefspec>"
+                    "<noTags>true</noTags>"
                     "</hudson.plugins.git.extensions.impl.CloneOption>"
+                    "<hudson.plugins.git.extensions.impl.WipeWorkspace/>"
                     "</extensions></scm>"
                     "<scriptPath>Jenkinsfile</scriptPath>"
                     "<lightweight>false</lightweight></definition>"

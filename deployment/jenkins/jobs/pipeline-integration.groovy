@@ -38,7 +38,9 @@ pipelineJob('pipeline-integration') {
                     extensions {
                         cloneOptions {
                             honorRefspec()
+                            noTags()
                         }
+                        wipeOutWorkspace()
                     }
                 }
             }

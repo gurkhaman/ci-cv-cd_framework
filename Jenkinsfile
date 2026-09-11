@@ -47,7 +47,15 @@ def isTimeoutInterruption = { interruption ->
 }
 
 def checkoutSubmittedCommit = {
-    checkout scm
+    checkout([
+        $class: 'GitSCM',
+        branches: [[name: env.RESOLVED_COMMIT_SHA]],
+        extensions: [[$class: 'CloneOption', honorRefspec: true, noTags: true]],
+        userRemoteConfigs: [[
+            refspec: '+refs/heads/main:refs/remotes/origin/main',
+            url: env.SDI_REPOSITORY_URL,
+        ]],
+    ])
     sh '''set -eu
 test "$(git rev-parse HEAD)" = "$RESOLVED_COMMIT_SHA"
 git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/sdi-protected-main'
