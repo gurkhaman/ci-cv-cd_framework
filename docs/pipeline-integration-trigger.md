@@ -55,7 +55,7 @@ other ref creates no handoff job.
 
 ### GitHub CLI
 
-```sh
+```sh acceptance=github-cli-dispatch
 gh workflow run pipeline-integration.yml \
   --ref main \
   --field run_request_path=runs/s-04/s-04-tc-03-c-01-fixture.yaml
@@ -67,7 +67,7 @@ search for the latest run.
 
 ### GitHub REST
 
-```sh
+```sh acceptance=github-rest-dispatch
 curl --fail-with-body \
   --request POST \
   --header 'Accept: application/vnd.github+json' \
@@ -94,7 +94,7 @@ The reviewed request paths, in sequential helper order, are:
 
 Run all six through the same workflow contract:
 
-```sh
+```sh acceptance=s04-dispatch
 uv run --frozen --project integration sdi-integration dispatch-s-04 \
   --repository gurkhaman/ci-cv-cd_framework
 ```
@@ -113,7 +113,7 @@ handoff step reaches its `submitting` phase.
 
 Observe the exact run:
 
-```sh
+```sh acceptance=github-observe
 gh run watch <workflow-run-id> \
   --repo gurkhaman/ci-cv-cd_framework \
   --exit-status
@@ -124,7 +124,7 @@ gh run view <workflow-run-id> \
 
 After the summary reports the Execution ID, retrieve its one artifact:
 
-```sh
+```sh acceptance=github-download
 gh run download <workflow-run-id> \
   --repo gurkhaman/ci-cv-cd_framework \
   --name pipeline-integration-<execution-id> \
@@ -140,7 +140,7 @@ receipt-only artifact under the same Execution-ID-qualified name.
 
 Revalidate a downloaded complete bundle independently:
 
-```sh
+```sh acceptance=downloaded-bundle-validation
 uv run --frozen --project integration sdi-integration validate-bundle \
   --bundle-root artifacts/pipeline-integration-<execution-id>/bundle
 ```
@@ -160,7 +160,7 @@ typed receipt remains authoritative for the red handoff status.
 
 Cancel only the exact GitHub run:
 
-```sh
+```sh acceptance=github-cancel
 gh run cancel <workflow-run-id> --repo gurkhaman/ci-cv-cd_framework
 ```
 

@@ -25,6 +25,8 @@ sdi-fixture-adapter = "sdi_pipeline_integration._fixture_adapter:main"
 [dependency-groups]
 dev = [
     "basedpyright==1.40.0",
+    "check-jsonschema==0.38.0",
+    "markdown-it-py==4.0.0",
     "pytest==9.1.1",
     "ruff==0.16.6",
 ]

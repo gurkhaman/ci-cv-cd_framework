@@ -65,6 +65,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--repository-url")
     parser.add_argument("--plugin-lock", type=Path)
     parser.add_argument("--casc", type=Path)
+    parser.add_argument("--jenkinsfile", type=Path)
     parser.add_argument("--inventory", type=Path)
     parser.add_argument("--agent-secret-directory", type=Path)
     return parser
@@ -450,6 +451,36 @@ def _check_job_config(config_xml: bytes, repository_url: str, handoff_id: str) -
     )
 
 
+def _check_jenkinsfile(admin: _JenkinsClient, path: Path | None) -> None:
+    if path is None or not path.is_file() or path.is_symlink():
+        raise ValueError("--jenkinsfile must name the tracked regular Jenkinsfile")
+    data = urllib.parse.urlencode({"value": path.read_text(encoding="utf-8")}).encode()
+    status, body, _ = admin.post_with_crumb(
+        "/job/pipeline-integration/descriptorByName/"
+        "org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition/checkScriptCompile",
+        data=data,
+        content_type="application/x-www-form-urlencoded",
+    )
+    _equal(
+        status,
+        HTTP_OK,
+        f"Jenkinsfile compiler status ({body.decode(errors='replace')})",
+    )
+    response = json.loads(body)
+    if isinstance(response, dict) and response.get("status") == "success":
+        return
+    failures = response if isinstance(response, list) else [response]
+    first = failures[0] if failures else {}
+    if not isinstance(first, dict):
+        raise TypeError("Jenkinsfile compiler returned an invalid response")
+    line = first.get("line", "unknown")
+    column = first.get("column", "unknown")
+    message = first.get("message", "no diagnostic returned")
+    raise RuntimeError(
+        f"Jenkinsfile compilation failed at line {line}, column {column}: {message}"
+    )
+
+
 def _check(args: argparse.Namespace) -> None:
     admin = _JenkinsClient(args.url, args.admin_id, _password(args.admin_password_file))
     status, root, headers = admin.json("/api/json?tree=numExecutors,slaveAgentPort")
@@ -481,6 +512,7 @@ def _check(args: argparse.Namespace) -> None:
     status, config_xml, _ = admin.request("/job/pipeline-integration/config.xml")
     _equal(status, HTTP_OK, "job configuration status")
     _check_job_config(config_xml, args.repository_url, args.handoff_id)
+    _check_jenkinsfile(admin, args.jenkinsfile)
 
     casc_bytes = args.casc.read_bytes()
     status, body, _ = admin.post_with_crumb(

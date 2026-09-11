@@ -9,6 +9,7 @@ import signal
 import subprocess
 import time
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -40,6 +41,21 @@ COMMITTED_FILES = (
     "runs/conformance/composition-response-mismatch.yaml",
     "runs/conformance/composition-schema-mismatch.yaml",
 )
+VOLATILE_RESULT_FIELDS = {"execution_id", "started_at", "finished_at", "duration_ms"}
+
+
+def _contract_semantics(value: object) -> object:
+    if isinstance(value, dict):
+        mapping = cast("dict[str, object]", value)
+        return {
+            key: _contract_semantics(nested)
+            for key, nested in mapping.items()
+            if key not in VOLATILE_RESULT_FIELDS
+        }
+    if isinstance(value, list):
+        sequence = cast("list[object]", value)
+        return [_contract_semantics(nested) for nested in sequence]
+    return value
 
 
 def _git(repository: Path, *arguments: str) -> str:
@@ -198,6 +214,7 @@ def test_dispatches_a_contract_valid_deterministic_four_stage_fixture(
         (first_root / "pipeline-integration-result.json").read_text()
     )
     assert first_result["execution_id"] != second_result["execution_id"]
+    assert _contract_semantics(first_result) == _contract_semantics(second_result)
     assert first_result["kpi_evaluation"] == "not_evaluated"
     assert "domain_outcome" not in first_result
     assert "overall_verdict" not in first_result
@@ -761,10 +778,21 @@ os.kill(os.getpid(), signal.SIGKILL)
     assert attempt["adapter_response_accepted"] is False
 
 
-def test_sensitive_diagnostic_is_not_accepted_or_archived(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "sentinel",
+    [
+        "https://10.0.0.8/private?token=credential",
+        "/home/acceptance-user/private/controller.log",
+        "/var/lib/jenkins/secrets/controller.log",
+        r"C:\Users\acceptance-user\private\controller.log",
+        "jenkins.internal",
+    ],
+)
+def test_sensitive_diagnostic_is_not_accepted_or_archived(
+    tmp_path: Path, sentinel: str
+) -> None:
     repository, _ = _commit_fixture_repository(tmp_path)
     adapter = tmp_path / "sensitive-diagnostic-adapter"
-    sentinel = "https://10.0.0.8/private?token=credential"
     _write_composition_adapter(
         adapter,
         f"""
@@ -787,6 +815,71 @@ response = {{
 """,
     )
     commit_sha = _select_adapter(repository, adapter)
+    bundle_root = tmp_path / "bundle"
+
+    completed = _dispatch(repository, commit_sha, bundle_root)
+
+    assert completed.returncode == 1, completed.stderr
+    result = json.loads(completed.stdout)
+    assert result["attempts"][0]["adapter_response_accepted"] is False
+    assert result["artifacts"] == []
+    assert (
+        sentinel not in (bundle_root / "pipeline-integration-result.json").read_text()
+    )
+
+
+@pytest.mark.parametrize(
+    "sentinel",
+    ["password=acceptance-sentinel", "/var/lib/jenkins/config.xml", "jenkins.internal"],
+)
+def test_sensitive_domain_output_is_not_accepted_or_archived(
+    tmp_path: Path, sentinel: str
+) -> None:
+    repository, _ = _commit_fixture_repository(tmp_path)
+    adapter = tmp_path / "sensitive-domain-output-adapter"
+    blueprint = (
+        (
+            SOURCE_ROOT
+            / "integration/fixtures/cases/composition-s-04-tc-03-c-01"
+            / "composition-blueprint.json"
+        )
+        .read_text()
+        .replace('"evidence_basis": "fixture"', '"evidence_basis": "implemented"')
+        .replace('"version": "1"', f'"version": "{sentinel}"', 1)
+    )
+    deployment = (
+        (
+            SOURCE_ROOT
+            / "integration/fixtures/cases/composition-s-04-tc-03-c-01"
+            / "deployment-schema.json"
+        )
+        .read_text()
+        .replace('"evidence_basis": "fixture"', '"evidence_basis": "implemented"')
+    )
+    _write_composition_adapter(
+        adapter,
+        f"""
+(output / "outputs").mkdir()
+(output / "outputs/composition-blueprint.json").write_text({blueprint!r})
+(output / "outputs/deployment-schema.json").write_text({deployment!r})
+response = {{
+    "schema_version": "sdi.stage-adapter-response/v1",
+    "correlation": request["correlation"],
+    "execution_conclusion": "succeeded",
+    "domain_outcome": "failed",
+    "reason": {{
+        "category": "domain",
+        "code": "sdi.domain.requirement-unsatisfied",
+        "summary": "The evaluated requirement was not satisfied.",
+    }},
+    "consumed_inputs": [item["slot"] for item in request["inputs"]],
+    "produced_outputs": ["composition_blueprint", "deployment_schema"],
+    "diagnostic": {{"present": False, "truncated": False}},
+}}
+(output / "response.json").write_text(json.dumps(response))
+""",
+    )
+    commit_sha = _select_adapter(repository, adapter, mode="implemented")
     bundle_root = tmp_path / "bundle"
 
     completed = _dispatch(repository, commit_sha, bundle_root)
@@ -885,6 +978,118 @@ def test_bundle_validation_rejects_unbounded_artifact_grants(tmp_path: Path) -> 
 
     assert validated.returncode == 2
     assert "less than or equal to 32768" in validated.stderr
+
+
+def test_bundle_validation_rejects_machine_specific_provenance_paths(
+    tmp_path: Path,
+) -> None:
+    repository, commit_sha = _commit_fixture_repository(tmp_path)
+    bundle_root = tmp_path / "bundle"
+    dispatched = _dispatch(repository, commit_sha, bundle_root)
+    assert dispatched.returncode == 0, dispatched.stderr
+    result_path = bundle_root / "pipeline-integration-result.json"
+    result = json.loads(result_path.read_text())
+    original = result["input_provenance"][0]["path"]
+    machine_path = "/home/acceptance-user/request.yaml"
+    result["input_provenance"][0]["path"] = machine_path
+    for attempt in result["attempts"]:
+        for accepted_input in attempt["accepted_inputs"]:
+            if accepted_input["source_path"] == original:
+                accepted_input["source_path"] = machine_path
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+
+    validated = subprocess.run(
+        [
+            "sdi-integration",
+            "validate-bundle",
+            "--bundle-root",
+            str(bundle_root),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert validated.returncode == 2
+    assert validated.stdout == ""
+    assert "repository-relative" in validated.stderr
+
+
+@pytest.mark.parametrize(
+    "repository_identity",
+    ["jenkins.internal/repository", "buildhost/repository"],
+)
+def test_bundle_validation_rejects_a_private_repository_identity(
+    tmp_path: Path, repository_identity: str
+) -> None:
+    repository, commit_sha = _commit_fixture_repository(tmp_path)
+    bundle_root = tmp_path / "bundle"
+    dispatched = _dispatch(repository, commit_sha, bundle_root)
+    assert dispatched.returncode == 0, dispatched.stderr
+    result_path = bundle_root / "pipeline-integration-result.json"
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    result["repository"] = repository_identity
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+
+    validated = subprocess.run(
+        [
+            "sdi-integration",
+            "validate-bundle",
+            "--bundle-root",
+            str(bundle_root),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert validated.returncode == 2
+    assert "repository" in validated.stderr
+
+
+def test_bundle_validation_rejects_sensitive_domain_content(tmp_path: Path) -> None:
+    repository, commit_sha = _commit_fixture_repository(tmp_path)
+    bundle_root = tmp_path / "bundle"
+    dispatched = _dispatch(repository, commit_sha, bundle_root)
+    assert dispatched.returncode == 0, dispatched.stderr
+    artifact_path = bundle_root / "stages/composition/composition-blueprint.json"
+    document = json.loads(artifact_path.read_text(encoding="utf-8"))
+    document["services"][0]["version"] = "jenkins.internal"
+    content = (
+        json.dumps(document, separators=(",", ":"), sort_keys=True) + "\n"
+    ).encode()
+    artifact_path.write_bytes(content)
+    result_path = bundle_root / "pipeline-integration-result.json"
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    for artifact in result["artifacts"]:
+        if artifact["path"] == "stages/composition/composition-blueprint.json":
+            artifact["byte_size"] = len(content)
+            artifact["sha256"] = hashlib.sha256(content).hexdigest()
+    for attempt in result["attempts"]:
+        for accepted in attempt["accepted_files"]:
+            if accepted.get("slot") == "composition_blueprint":
+                accepted["byte_size"] = len(content)
+                accepted["sha256"] = hashlib.sha256(content).hexdigest()
+        for accepted in attempt["accepted_inputs"]:
+            if accepted["slot"] == "composition_blueprint":
+                accepted["byte_size"] = len(content)
+                accepted["sha256"] = hashlib.sha256(content).hexdigest()
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+
+    validated = subprocess.run(
+        [
+            "sdi-integration",
+            "validate-bundle",
+            "--bundle-root",
+            str(bundle_root),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert validated.returncode == 2
+    assert "sensitive material" in validated.stderr
 
 
 def test_bundle_validation_rejects_a_stage_output_under_the_wrong_schema(

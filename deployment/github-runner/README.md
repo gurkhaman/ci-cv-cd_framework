@@ -27,7 +27,7 @@ the dedicated account and use `systemctl --user`.
 
 From the repository checkout, run:
 
-```sh
+```sh acceptance=runner-install
 deployment/github-runner/bin/runner preflight
 deployment/github-runner/bin/runner install
 ```
@@ -48,7 +48,7 @@ and installs into `~/.local/share/sdi-github-runner`.
 Create a short-lived repository runner registration token, then configure the
 installation once:
 
-```sh
+```sh acceptance=runner-configure-start
 SDI_GITHUB_RUNNER_REPOSITORY=https://github.com/gurkhaman/ci-cv-cd_framework \
 SDI_GITHUB_RUNNER_NAME=jenkins-handoff-host \
 SDI_GITHUB_RUNNER_REGISTRATION_TOKEN='<short-lived-registration-token>' \
@@ -78,7 +78,7 @@ workflow-restricted runner group instead if those assumptions change.
 
 Stop the service without removing registration or work state with:
 
-```sh
+```sh acceptance=runner-stop
 deployment/github-runner/bin/runner stop
 ```
 
@@ -86,7 +86,7 @@ For permanent removal, first confirm no workflow is queued or running and stop
 the service. Create a short-lived removal token, then unregister before removing
 the service and installation:
 
-```sh
+```sh acceptance=runner-remove
 SDI_GITHUB_HANDOFF_QUIESCED=true \
 SDI_GITHUB_RUNNER_REMOVAL_TOKEN='<short-lived-removal-token>' \
   deployment/github-runner/bin/runner unregister

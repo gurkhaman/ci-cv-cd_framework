@@ -393,8 +393,8 @@ host_preflight() {
         IFS=,
     done
     IFS=$old_ifs
-    uv run --project "$repository_root/integration" --frozen python -m \
-        sdi_pipeline_integration._recovery_contracts authority \
+    uv run --project "$repository_root/integration" --frozen \
+        sdi-integration validate-installation \
         --repository "$repository_root" --installation "$installation" \
         2>/dev/null || \
         fail 'tracked sources do not match the reviewed installation authority'
@@ -608,8 +608,8 @@ export JENKINS_AGENT_NETWORK_INTERNAL
 
 validate() {
     load_installation
-    uv run --project "$repository_root/integration" --frozen python -m \
-        sdi_pipeline_integration._recovery_contracts authority \
+    uv run --project "$repository_root/integration" --frozen \
+        sdi-integration validate-installation \
         --repository "$repository_root" --installation "$installation" \
         2>/dev/null || fail 'tracked sources do not match the reviewed installation authority'
     expected_image=$SDI_JENKINS_CONTROLLER_IMAGE
@@ -743,7 +743,8 @@ case "$action" in
             --handoff-password-file "$JENKINS_HANDOFF_PASSWORD_FILE" \
             --repository-url "$JENKINS_REPOSITORY_URL" \
             --plugin-lock "$root/controller/plugins.txt" \
-            --casc "$root/casc/jenkins.yaml"
+            --casc "$root/casc/jenkins.yaml" \
+            --jenkinsfile "$repository_root/Jenkinsfile"
         ;;
     exercise-live)
         validate

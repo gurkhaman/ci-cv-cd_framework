@@ -132,15 +132,8 @@ def _write_fresh_credential_config(tmp_path: Path, manifest: Path) -> Path:
 def test_reviewed_installation_authority_matches_all_pinned_sources() -> None:
     completed = subprocess.run(
         [
-            "uv",
-            "run",
-            "--project",
-            REPOSITORY_ROOT / "integration",
-            "--frozen",
-            "python",
-            "-m",
-            "sdi_pipeline_integration._recovery_contracts",
-            "authority",
+            "sdi-integration",
+            "validate-installation",
             "--repository",
             REPOSITORY_ROOT,
             "--installation",
@@ -187,15 +180,8 @@ def test_authority_rejects_shadowed_active_pin_assignments(tmp_path: Path) -> No
     )
 
     command = [
-        "uv",
-        "run",
-        "--project",
-        REPOSITORY_ROOT / "integration",
-        "--frozen",
-        "python",
-        "-m",
-        "sdi_pipeline_integration._recovery_contracts",
-        "authority",
+        "sdi-integration",
+        "validate-installation",
         "--repository",
         repository,
         "--installation",
@@ -337,6 +323,16 @@ def test_restore_verifies_before_writing_an_empty_volume(tmp_path: Path) -> None
     )
     assert snapshot.returncode == 0, snapshot.stderr
     archive, manifest = snapshot.stdout.splitlines()
+    verified = _run_recovery(
+        fake_bin,
+        tmp_path / "verify.log",
+        "verify",
+        "--archive",
+        archive,
+        "--manifest",
+        manifest,
+    )
+    assert verified.returncode == 0, verified.stderr
     config = _write_fresh_credential_config(tmp_path, Path(manifest))
     first_credential = Path(config.read_text().splitlines()[0].partition("=")[2])
     os.utime(first_credential, (0, 0))

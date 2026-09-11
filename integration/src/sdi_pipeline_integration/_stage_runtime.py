@@ -48,6 +48,7 @@ from ._stage_contracts import (
     ImplementationMode,
     StageName,
     StageProfile,
+    contains_sensitive_contract_material,
     contains_sensitive_material,
     require_unique_paths,
 )
@@ -397,6 +398,14 @@ def _capture_candidate(  # noqa: C901, PLR0912, PLR0913, PLR0915, PLR0917
         except ValidationError as error:
             msg = f"candidate output contract validation failed: {slot}: {error}"
             raise InputError(msg) from error
+        if contains_sensitive_contract_material(
+            validated_outputs[slot].model_dump(mode="json")
+        ):
+            msg = (
+                f"candidate output contains credentials, private endpoints, or "
+                f"machine-specific values: {slot}"
+            )
+            raise InputError(msg)
     if any(
         getattr(output, "evidence_basis", None) != implementation_mode
         for output in validated_outputs.values()
@@ -1059,6 +1068,9 @@ def load_stage_execution(  # noqa: C901, PLR0912, PLR0915
             producer_domain_outcome=envelope.domain_outcome,
         )
         validated = _validate_source_model(model, source)
+        if contains_sensitive_contract_material(validated.model_dump(mode="json")):
+            msg = "accepted attempt output contains sensitive material"
+            raise InputError(msg)
         if getattr(validated, "evidence_basis", None) != envelope.implementation_mode:
             msg = "accepted attempt evidence basis does not match its envelope"
             raise InputError(msg)

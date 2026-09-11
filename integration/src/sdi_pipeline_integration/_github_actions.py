@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import html
+import re
 from typing import TYPE_CHECKING, Literal
+from urllib.parse import urlsplit
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -18,6 +20,10 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 MAX_RECEIPT_BYTES = 64 * 1024
+GITHUB_ARTIFACT_PATH = re.compile(
+    r"^/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/runs/"
+    r"(?P<run_id>[1-9][0-9]*)/artifacts/[1-9][0-9]*$"
+)
 type StepOutcome = Literal["success", "failure", "cancelled", "skipped"]
 
 
@@ -56,6 +62,26 @@ def _evidence_paths(result: PipelineIntegrationResult, stage: str) -> str:
     return "<br>".join(_code(path) for path in paths)
 
 
+def _validate_artifact_url(artifact_url: str, github_run_id: int) -> None:
+    if not artifact_url:
+        return
+    parsed = urlsplit(artifact_url)
+    path_match = GITHUB_ARTIFACT_PATH.fullmatch(parsed.path)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "github.com"
+        or parsed.port is not None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or path_match is None
+        or int(path_match.group("run_id")) != github_run_id
+    ):
+        msg = "artifact URL must identify this exact GitHub Actions run"
+        raise InputError(msg)
+
+
 def render_github_summary(  # noqa: C901, PLR0912, PLR0913, PLR0915
     *,
     execution_id: str,
@@ -78,6 +104,7 @@ def render_github_summary(  # noqa: C901, PLR0912, PLR0913, PLR0915
     if github_run_id <= 0 or github_run_attempt <= 0:
         msg = "GitHub run ID and attempt must be positive integers"
         raise InputError(msg)
+    _validate_artifact_url(artifact_url, github_run_id)
     expected_artifact_name = f"pipeline-integration-{execution_id}"
     if artifact_name != expected_artifact_name:
         msg = "GitHub artifact name does not match the Execution ID"

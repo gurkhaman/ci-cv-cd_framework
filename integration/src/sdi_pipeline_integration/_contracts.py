@@ -24,6 +24,7 @@ REPOSITORY_PATH_SCHEMA_PATTERN = (
     r"^(?!/)(?![A-Za-z]:/)(?!.*(?:^|/)\.{1,2}(?:/|$))(?!.*//)(?!.*\\)"
     r"(?!.*[\x00-\x1f\x7f]).*[^/]$"
 )
+GITHUB_REPOSITORY_IDENTITY_PATTERN = r"^github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
 
 NonBlank = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 Slug = Annotated[
@@ -41,6 +42,10 @@ RepositoryPath = Annotated[
     str,
     StringConstraints(strict=True, min_length=1),
     Field(json_schema_extra={"pattern": REPOSITORY_PATH_SCHEMA_PATTERN}),
+]
+RepositoryIdentity = Annotated[
+    str,
+    StringConstraints(strict=True, pattern=GITHUB_REPOSITORY_IDENTITY_PATTERN),
 ]
 type Quantity = StrictInt | StrictFloat
 type PositiveQuantity = (

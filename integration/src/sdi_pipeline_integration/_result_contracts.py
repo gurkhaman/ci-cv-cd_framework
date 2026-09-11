@@ -18,6 +18,7 @@ from ._contracts import (
     CombinationId,
     ContractModel,
     NonBlank,
+    RepositoryIdentity,
     RepositoryPath,
     ScenarioId,
     Slug,
@@ -65,6 +66,12 @@ class ResultInputProvenance(ContractModel):
     schema_version: NonBlank
     byte_size: NonNegativeInt
     sha256: Sha256
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, path: str) -> str:
+        validate_repository_path(path)
+        return path
 
 
 class BundleDomainArtifact(ContractModel):
@@ -116,7 +123,7 @@ class PipelineIntegrationResult(ContractModel):
 
     schema_version: Literal["sdi.pipeline-integration-result/v1"]
     execution_id: ExecutionId
-    repository: NonBlank
+    repository: RepositoryIdentity
     requested_ref: Literal["refs/heads/main"]
     resolved_commit_sha: GitCommitSha
     scenario_id: ScenarioId
