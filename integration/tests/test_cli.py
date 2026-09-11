@@ -31,6 +31,24 @@ def test_installed_cli_exposes_help() -> None:
     assert completed.stdout.startswith("usage: sdi-integration")
 
 
+def test_handoff_cli_exposes_only_non_secret_run_and_output_arguments() -> None:
+    completed = subprocess.run(
+        ["sdi-integration", "handoff-jenkins", "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "--github-run-id" in completed.stdout
+    assert "--github-run-attempt" in completed.stdout
+    assert "--bundle-root" in completed.stdout
+    assert "--receipt-path" in completed.stdout
+    assert "--token" not in completed.stdout
+    assert "--username" not in completed.stdout
+    assert "--jenkins-url" not in completed.stdout
+    assert "--timeout" not in completed.stdout
+
+
 def test_cli_reads_the_descriptor_selected_agent_image() -> None:
     descriptor = (
         Path(__file__).parents[2]
@@ -84,6 +102,7 @@ def test_cli_writes_and_freshness_checks_contract_schemas(tmp_path: Path) -> Non
         "deployment-result-v1.schema.json",
         "deployment-schema-v1.schema.json",
         "fixture-case-v1.schema.json",
+        "handoff-receipt-v1.schema.json",
         "image-build-result-v1.schema.json",
         "mobility-requirements-specification-v1.schema.json",
         "pipeline-integration-result-v1.schema.json",
@@ -153,3 +172,24 @@ def test_cli_writes_and_freshness_checks_contract_schemas(tmp_path: Path) -> Non
     assert forbidden_request_fields.isdisjoint(request_schema["properties"])
     output_grant = request_schema["$defs"]["OutputGrant"]
     assert "required" in output_grant["required"]
+
+    receipt_schema = json.loads(
+        (tmp_path / "handoff-receipt-v1.schema.json").read_text()
+    )
+    assert set(receipt_schema["properties"]) == {
+        "schema_version",
+        "execution_id",
+        "github",
+        "phase",
+        "transitions",
+        "queue",
+        "build",
+        "terminal",
+    }
+    assert {
+        "jenkins_base_url",
+        "repository",
+        "pipeline_integration_result",
+        "token",
+        "username",
+    }.isdisjoint(receipt_schema["properties"])

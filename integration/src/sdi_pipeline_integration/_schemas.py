@@ -22,6 +22,7 @@ from ._domain_contracts import (
     ImageBuildResult,
     ValidationEvidence,
 )
+from ._handoff_contracts import HandoffReceipt
 from ._result_contracts import PipelineIntegrationResult
 from ._stage_contracts import (
     AcceptedAttemptEnvelope,
@@ -40,6 +41,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "deployment-schema-v1.schema.json": DeploymentSchema,
     "deployment-result-v1.schema.json": DeploymentResult,
     "fixture-case-v1.schema.json": FixtureCase,
+    "handoff-receipt-v1.schema.json": HandoffReceipt,
     "image-build-result-v1.schema.json": ImageBuildResult,
     "pipeline-integration-result-v1.schema.json": PipelineIntegrationResult,
     "pipeline-integration-run-request-v1.schema.json": RunRequest,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import signal
 import sys
@@ -14,6 +15,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from pydantic import ValidationError
 
+from ._jenkins_handoff import HandoffError, handoff_jenkins
 from ._jenkins_pipeline import (
     RunDeadlineExpiredError,
     attempt_allows_continuation,
@@ -105,6 +107,15 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     preflight.add_argument("--image-build-node", required=True)
     preflight.add_argument("--cv-node", required=True)
     preflight.add_argument("--cd-node", required=True)
+    handoff = commands.add_parser(
+        "handoff-jenkins",
+        help="submit one run and retrieve its exact validated Jenkins bundle",
+    )
+    _add_submitted_run_arguments(handoff)
+    handoff.add_argument("--github-run-id", required=True)
+    handoff.add_argument("--github-run-attempt", required=True)
+    handoff.add_argument("--bundle-root", type=Path, required=True)
+    handoff.add_argument("--receipt-path", type=Path, required=True)
     jenkins_execute = commands.add_parser(
         "execute-jenkins-stage",
         help="execute the next Stage from validated Jenkins transfers",
@@ -164,6 +175,10 @@ def _add_submitted_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--resolved-commit", required=True)
     parser.add_argument("--run-request-path", required=True)
     parser.add_argument("--execution-id", required=True)
+
+
+def _write_handoff_progress(phase: str) -> None:
+    sys.stderr.write(f"sdi-integration: handoff phase={phase}\n")
 
 
 def _has_machinery_failure(result: dict[str, object]) -> bool:
@@ -283,6 +298,38 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
             return 2
         sys.stdout.write(
             f"{json.dumps(identified, sort_keys=True, separators=(',', ':'))}\n"
+        )
+        return 0
+    if arguments.command == "handoff-jenkins":
+        try:
+            with _external_cancellation():
+                result = handoff_jenkins(
+                    repository_path=arguments.repository,
+                    requested_ref=arguments.requested_ref,
+                    resolved_commit=arguments.resolved_commit,
+                    run_request_path=arguments.run_request_path,
+                    execution_id=arguments.execution_id,
+                    github_run_id=arguments.github_run_id,
+                    github_run_attempt=arguments.github_run_attempt,
+                    bundle_root=arguments.bundle_root,
+                    receipt_path=arguments.receipt_path,
+                    environment=os.environ,
+                    progress=_write_handoff_progress,
+                )
+        except ExternalCancellation as cancellation:
+            return 128 + cancellation.signal_number
+        except HandoffError as error:
+            if error.result is not None:
+                sys.stdout.write(
+                    f"{json.dumps(error.result, sort_keys=True, separators=(',', ':'))}\n"  # noqa: E501
+                )
+            sys.stderr.write(f"sdi-integration: handoff failed: {error.code}\n")
+            return 1
+        except (InputError, OSError, ValidationError) as error:
+            sys.stderr.write(f"sdi-integration: {error}\n")
+            return 2
+        sys.stdout.write(
+            f"{json.dumps(result, sort_keys=True, separators=(',', ':'))}\n"
         )
         return 0
     if arguments.command == "execute-jenkins-stage":

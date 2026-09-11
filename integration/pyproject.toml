@@ -11,6 +11,7 @@ requires-python = ">=3.12,<3.13"
 license = "Apache-2.0"
 dependencies = [
     "pydantic==2.13.5",
+    "requests==2.34.2",
     "ruamel-yaml==0.19.0",
 ]
 

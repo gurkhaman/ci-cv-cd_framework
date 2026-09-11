@@ -163,7 +163,8 @@ def _read_initial_result(
     return content
 
 
-def _parse_result(content: bytes) -> PipelineIntegrationResult:
+def parse_pipeline_result(content: bytes) -> PipelineIntegrationResult:
+    """Parse one bounded strict Pipeline integration result."""
     try:
         return PipelineIntegrationResult.model_validate(
             parse_json(content, PIPELINE_RESULT_PATH, max_bytes=MAX_RESULT_BYTES),
@@ -185,7 +186,7 @@ def validate_bundle(  # noqa: C901, PLR0912, PLR0915
     root_metadata = bundle_root.lstat()
     root_identity = (root_metadata.st_dev, root_metadata.st_ino)
     initial_result = _read_initial_result(bundle_root, root_identity)
-    result = _parse_result(initial_result)
+    result = parse_pipeline_result(initial_result)
     grants = {PIPELINE_RESULT_PATH: MAX_RESULT_BYTES}
     grants.update({artifact.path: artifact.byte_size for artifact in result.artifacts})
     paths, captured = capture_tree(bundle_root, root_identity, grants)
