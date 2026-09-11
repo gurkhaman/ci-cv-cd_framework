@@ -433,9 +433,19 @@ def _check_job_config(config_xml: bytes, repository_url: str, handoff_id: str) -
     _equal(root.findtext(".//artifactDaysToKeep"), "90", "job artifact retention")
     _equal(root.findtext(".//userRemoteConfigs/*/url"), repository_url, "job SCM URL")
     _equal(
+        root.findtext(".//userRemoteConfigs/*/refspec"),
+        "+refs/heads/main:refs/remotes/origin/main",
+        "job SCM protected-main refspec",
+    )
+    _equal(
         root.findtext(".//branches/*/name"),
         "${RESOLVED_COMMIT_SHA}",
         "job SCM revision",
+    )
+    _equal(
+        root.findtext(".//extensions/*/honorRefspec"),
+        "true",
+        "job SCM initial-clone refspec",
     )
     _equal(root.findtext(".//scriptPath"), "Jenkinsfile", "job pipeline source")
 

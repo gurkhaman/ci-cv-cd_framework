@@ -400,7 +400,9 @@ def test_job_dsl_defines_the_fixed_non_secret_handoff_contract() -> None:
     assert "artifactDaysToKeep(90)" in job_dsl
     assert "daysToKeep(90)" in job_dsl
     assert "url(REPOSITORY_URL)" in job_dsl
+    assert "refspec('+refs/heads/main:refs/remotes/origin/main')" in job_dsl
     assert "branch('${RESOLVED_COMMIT_SHA}')" in job_dsl
+    assert "honorRefspec()" in job_dsl
     assert "scriptPath('Jenkinsfile')" in job_dsl
     assert "hudson.model.Item.Read" in job_dsl
     assert "hudson.model.Item.Build" in job_dsl
@@ -556,10 +558,15 @@ def test_live_check_compiles_the_tracked_jenkinsfile_with_workflow_cps(  # noqa:
                     "<artifactDaysToKeep>90</artifactDaysToKeep></logRotator>"
                     "<definition><scm><userRemoteConfigs><hudson.plugins.git."
                     "UserRemoteConfig><url>https://github.com/example/repository.git</url>"
+                    "<refspec>+refs/heads/main:refs/remotes/origin/main</refspec>"
                     "</hudson.plugins.git.UserRemoteConfig></userRemoteConfigs>"
                     "<branches><hudson.plugins.git.BranchSpec>"
                     "<name>${RESOLVED_COMMIT_SHA}</name>"
-                    "</hudson.plugins.git.BranchSpec></branches></scm>"
+                    "</hudson.plugins.git.BranchSpec></branches><extensions>"
+                    "<hudson.plugins.git.extensions.impl.CloneOption>"
+                    "<honorRefspec>true</honorRefspec>"
+                    "</hudson.plugins.git.extensions.impl.CloneOption>"
+                    "</extensions></scm>"
                     "<scriptPath>Jenkinsfile</scriptPath></definition>"
                     f"<authorizationMatrixProperty>{permissions}"
                     "</authorizationMatrixProperty></flow-definition>"
