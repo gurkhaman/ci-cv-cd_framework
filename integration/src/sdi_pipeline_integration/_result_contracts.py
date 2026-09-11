@@ -231,6 +231,7 @@ class PipelineIntegrationResult(ContractModel):
                 if attempt.reason is None or attempt.reason.code not in {
                     "sdi.stage.not-implemented",
                     "sdi.dependency.fixture-evidence",
+                    "sdi.run.deadline-exceeded",
                 }:
                     msg = f"{stage} has no typed reason for its initial skip"
                     raise ValueError(msg)

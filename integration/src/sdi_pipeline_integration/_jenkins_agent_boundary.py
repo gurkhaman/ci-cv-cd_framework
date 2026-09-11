@@ -8,6 +8,15 @@ _LABEL_FILE = Path("/etc/sdi/jenkins-agent-label")
 _ROLE_FILE = Path("/etc/sdi/jenkins-agent-role")
 
 
+def enforce_integration_execution_boundary() -> None:
+    """Require Jenkins-side integration work to run on its immutable agent."""
+    if not _ROLE_FILE.exists():
+        return
+    if _ROLE_FILE.read_text().strip() != "integration":
+        msg = "Jenkins integration work requires the integration agent"
+        raise InputError(msg)
+
+
 def enforce_domain_execution_boundary(*, expected_label: str | None = None) -> None:
     """Allow Domain execution only on the matching immutable agent identity."""
     if not _ROLE_FILE.exists():

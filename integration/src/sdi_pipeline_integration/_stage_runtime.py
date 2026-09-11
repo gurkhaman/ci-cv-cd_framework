@@ -38,6 +38,8 @@ from ._run_input import PROTECTED_MAIN_REF, identify_committed_run
 from ._stage_contracts import (
     ASCII_CONTROL_LIMIT,
     ASCII_DELETE,
+    EXPECTED_STAGE_INPUT_SLOTS,
+    EXPECTED_STAGE_OUTPUTS,
     AcceptedAttemptEnvelope,
     AdapterDescriptor,
     AdapterRequest,
@@ -47,6 +49,7 @@ from ._stage_contracts import (
     StageName,
     StageProfile,
     contains_sensitive_material,
+    require_unique_paths,
 )
 from ._yaml_input import InputError, parse_yaml
 
@@ -54,6 +57,9 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 MAX_RESPONSE_BYTES = 64 * 1024
+MAX_ACCEPTED_ENVELOPE_BYTES = 64 * 1024
+MAX_TRANSFER_DOMAIN_BYTES = 32 * 1024
+MAX_TRANSFER_DIAGNOSTIC_BYTES = 4 * 1024
 MAX_CANDIDATE_ENTRIES = 32
 MAX_CANDIDATE_DEPTH = 4
 ADAPTER_SHUTDOWN_GRACE_SECONDS = 10
@@ -851,6 +857,220 @@ def committed_stage_sources(
     return sources
 
 
+def _read_accepted_envelope(
+    attempt_root: Path, expected_root_identity: tuple[int, int]
+) -> bytes:
+    flags = os.O_RDONLY | os.O_CLOEXEC
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    root_descriptor = os.open(attempt_root, flags | os.O_DIRECTORY | no_follow)
+    try:
+        root_metadata = os.fstat(root_descriptor)
+        if (root_metadata.st_dev, root_metadata.st_ino) != expected_root_identity:
+            msg = "accepted attempt root was replaced"
+            raise InputError(msg)
+        envelope_descriptor = os.open(
+            "accepted-attempt.json",
+            flags | no_follow,
+            dir_fd=root_descriptor,
+        )
+        try:
+            before = os.fstat(envelope_descriptor)
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_nlink != 1
+                or before.st_dev != root_metadata.st_dev
+                or before.st_size > MAX_ACCEPTED_ENVELOPE_BYTES
+            ):
+                msg = "accepted attempt envelope is not a bounded regular file"
+                raise InputError(msg)
+            content = b""
+            while len(content) <= MAX_ACCEPTED_ENVELOPE_BYTES:
+                chunk = os.read(
+                    envelope_descriptor,
+                    min(65536, MAX_ACCEPTED_ENVELOPE_BYTES + 1 - len(content)),
+                )
+                if not chunk:
+                    break
+                content += chunk
+            after = os.fstat(envelope_descriptor)
+        finally:
+            os.close(envelope_descriptor)
+    except FileNotFoundError as error:
+        msg = "accepted attempt is missing its envelope"
+        raise InputError(msg) from error
+    finally:
+        os.close(root_descriptor)
+    stable_fields = (
+        "st_dev",
+        "st_ino",
+        "st_mode",
+        "st_nlink",
+        "st_size",
+        "st_mtime_ns",
+        "st_ctime_ns",
+    )
+    if len(content) != before.st_size or any(
+        getattr(before, field) != getattr(after, field) for field in stable_fields
+    ):
+        msg = "accepted attempt envelope changed while being read"
+        raise InputError(msg)
+    return content
+
+
+def load_stage_execution(  # noqa: C901, PLR0912, PLR0915
+    attempt_root: Path,
+    *,
+    expected_execution_id: str,
+    expected_stage: StageName,
+) -> StageExecution:
+    """Validate and reconstruct one Jenkins-transferred accepted attempt."""
+    if not attempt_root.is_dir() or attempt_root.is_symlink():
+        msg = "accepted attempt root must be a directory"
+        raise InputError(msg)
+    root_metadata = attempt_root.lstat()
+    root_identity = (root_metadata.st_dev, root_metadata.st_ino)
+    envelope_content = _read_accepted_envelope(attempt_root, root_identity)
+    try:
+        envelope = AcceptedAttemptEnvelope.model_validate(
+            parse_json(
+                envelope_content,
+                "accepted-attempt.json",
+                max_bytes=MAX_ACCEPTED_ENVELOPE_BYTES,
+            ),
+            strict=True,
+            extra="forbid",
+        )
+    except ValidationError as error:
+        msg = f"accepted attempt envelope validation failed: {error}"
+        raise InputError(msg) from error
+    if (
+        envelope.correlation.execution_id != expected_execution_id
+        or envelope.correlation.stage != expected_stage
+        or envelope.correlation.attempt_number != 1
+    ):
+        msg = "accepted attempt correlation does not match the requested transfer"
+        raise InputError(msg)
+
+    accepted_paths = [item.path for item in envelope.accepted_files]
+    try:
+        require_unique_paths(accepted_paths)
+    except ValueError as error:
+        msg = f"accepted attempt file inventory is invalid: {error}"
+        raise InputError(msg) from error
+    accepted_slots = [item.slot for item in envelope.accepted_files]
+    if len(accepted_slots) != len(set(accepted_slots)):
+        msg = "accepted attempt file slots must be unique"
+        raise InputError(msg)
+    if envelope.lifecycle_state == "completed" and [
+        item.slot for item in envelope.accepted_inputs
+    ] != list(EXPECTED_STAGE_INPUT_SLOTS[expected_stage]):
+        msg = "accepted attempt inputs do not match the reviewed Stage graph"
+        raise InputError(msg)
+    domain_files = [
+        item for item in envelope.accepted_files if item.role == "domain_output"
+    ]
+    if envelope.execution_conclusion == "succeeded":
+        expected_outputs = EXPECTED_STAGE_OUTPUTS[expected_stage]
+        if [item.slot for item in domain_files] != list(expected_outputs):
+            msg = "accepted attempt outputs do not match the reviewed Stage graph"
+            raise InputError(msg)
+        for accepted in domain_files:
+            expected_path, expected_media_type, expected_schema = expected_outputs[
+                accepted.slot
+            ]
+            if (
+                accepted.path,
+                accepted.media_type,
+                accepted.schema_version,
+            ) != (expected_path, expected_media_type, expected_schema):
+                msg = "accepted attempt output does not match the reviewed Stage grant"
+                raise InputError(msg)
+    elif domain_files:
+        msg = "unsuccessful accepted attempt cannot transfer Domain output"
+        raise InputError(msg)
+    if any(item.byte_size > MAX_TRANSFER_DOMAIN_BYTES for item in domain_files):
+        msg = "accepted attempt Domain output exceeds its transfer limit"
+        raise InputError(msg)
+    diagnostics = [
+        item for item in envelope.accepted_files if item.role == "diagnostic"
+    ]
+    if len(diagnostics) > 1 or any(
+        item.path != "diagnostic.txt" or item.byte_size > MAX_TRANSFER_DIAGNOSTIC_BYTES
+        for item in diagnostics
+    ):
+        msg = "accepted attempt diagnostic does not match its transfer grant"
+        raise InputError(msg)
+
+    grants = {"accepted-attempt.json": MAX_ACCEPTED_ENVELOPE_BYTES}
+    grants.update({item.path: item.byte_size for item in envelope.accepted_files})
+    paths, captured = capture_tree(attempt_root, root_identity, grants)
+    expected_files = {
+        "accepted-attempt.json",
+        *(item.path for item in envelope.accepted_files),
+    }
+    if paths != expected_files | expected_directories(expected_files):
+        msg = "accepted attempt inventory does not match its envelope"
+        raise InputError(msg)
+    if captured["accepted-attempt.json"] != envelope_content:
+        msg = "accepted attempt envelope changed during validation"
+        raise InputError(msg)
+
+    files: dict[str, bytes] = {}
+    outputs: dict[str, StageInputSource] = {}
+    for accepted in envelope.accepted_files:
+        content = captured[accepted.path]
+        if (
+            len(content) != accepted.byte_size
+            or hashlib.sha256(content).hexdigest() != accepted.sha256
+        ):
+            msg = f"accepted attempt file does not match its envelope: {accepted.path}"
+            raise InputError(msg)
+        files[accepted.path] = content
+        if accepted.role == "diagnostic":
+            try:
+                diagnostic = content.decode("utf-8", errors="strict")
+            except UnicodeDecodeError as error:
+                msg = "accepted attempt diagnostic is not valid UTF-8"
+                raise InputError(msg) from error
+            if "\0" in diagnostic or any(
+                (ord(character) < ASCII_CONTROL_LIMIT and character not in "\t\r\n")
+                or ord(character) == ASCII_DELETE
+                for character in diagnostic
+            ):
+                msg = "accepted attempt diagnostic is not sanitized"
+                raise InputError(msg)
+            if contains_sensitive_material(diagnostic):
+                msg = "accepted attempt diagnostic contains sensitive material"
+                raise InputError(msg)
+            continue
+        model = OUTPUT_MODELS.get(accepted.schema_version)
+        if model is None:
+            msg = "accepted attempt output uses an unsupported schema"
+            raise InputError(msg)
+        source = StageInputSource(
+            source_path=(
+                f"stages/{expected_stage.replace('_', '-')}/"
+                f"{accepted.path.removeprefix('outputs/')}"
+            ),
+            media_type=accepted.media_type,
+            schema_version=accepted.schema_version,
+            content=content,
+            producer_implementation_mode=envelope.implementation_mode,
+            producer_domain_outcome=envelope.domain_outcome,
+        )
+        validated = _validate_source_model(model, source)
+        if getattr(validated, "evidence_basis", None) != envelope.implementation_mode:
+            msg = "accepted attempt evidence basis does not match its envelope"
+            raise InputError(msg)
+        outputs[accepted.slot] = source
+
+    second_paths, second_capture = capture_tree(attempt_root, root_identity, grants)
+    if second_paths != paths or second_capture != captured:
+        msg = "accepted attempt changed after validation"
+        raise InputError(msg)
+    return StageExecution(envelope=envelope, files=files, outputs=outputs)
+
+
 def _process_group_exists(process_group: int) -> bool:
     try:
         os.killpg(process_group, 0)
@@ -999,6 +1219,7 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
     descriptor_path: str,
     attempt_root: Path,
     available_inputs: Mapping[str, StageInputSource],
+    work_limit_seconds: int | None = None,
     deadline_monotonic: float | None = None,
 ) -> StageExecution:
     """Execute one Stage while preserving an already assigned Execution ID."""
@@ -1007,6 +1228,12 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
         raise InputError(msg)
     descriptor, profile = load_stage_adapter(repository, descriptor_path)
     enforce_jenkins_agent_boundary(descriptor)
+    effective_work_limit_seconds = (
+        profile.work_limit_seconds if work_limit_seconds is None else work_limit_seconds
+    )
+    if effective_work_limit_seconds <= 0:
+        msg = "Stage work limit must be a positive integer"
+        raise InputError(msg)
 
     attempt_root.parent.mkdir(parents=True, exist_ok=True)
     if descriptor.implementation_mode == "not_implemented":
@@ -1062,7 +1289,7 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
                     "stage": descriptor.stage,
                     "attempt_number": 1,
                 },
-                "work_limit_seconds": profile.work_limit_seconds,
+                "work_limit_seconds": effective_work_limit_seconds,
                 "inputs": declared_inputs,
                 "outputs": [item.model_dump(mode="json") for item in profile.outputs],
                 "diagnostic": profile.diagnostic.model_dump(mode="json"),
@@ -1113,7 +1340,7 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
             _publish_execution(attempt_root, execution)
             return execution
         process_group = process.pid
-        timeout_seconds = float(profile.work_limit_seconds)
+        timeout_seconds = float(effective_work_limit_seconds)
         timeout_code = "sdi.stage.deadline-exceeded"
         timeout_summary = "The Stage adapter exceeded its work limit."
         if deadline_monotonic is not None:

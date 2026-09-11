@@ -5,17 +5,20 @@ under `integration/`. It will coordinate the CI, image-build, CV, and CD Stage
 interfaces for Software-Defined Mobility while keeping those Domain capabilities
 independently replaceable.
 
-The current scaffold validates and identifies committed inputs, executes one
-deterministic four-Stage Fixture run through the permanent Stage-adapter process
-interface, and validates its complete local archive candidate. Fixture output is
-not Validation evidence, Domain success, KPI evidence, or proof that a real
-composition, build, simulation, or deployment capability exists.
+The current scaffold validates and identifies committed inputs and executes one
+deterministic four-Stage Fixture run locally or through the five-agent Jenkins
+pipeline. Both paths use the permanent Stage-adapter process interface and
+validate the complete archive candidate. Fixture output is not Validation
+evidence, Domain success, KPI evidence, or proof that a real composition, build,
+simulation, or deployment capability exists.
 
 The repository also reconstructs an on-demand, zero-executor Jenkins controller
 and five isolated one-executor inbound agents from immutable image inputs,
 Configuration as Code, and Job DSL. The live smoke check proves their WebSocket
 connections, labels, isolation, disposable workspaces, and configuration
-convergence. The root Jenkins pipeline remains a later implementation issue.
+convergence. The root `Jenkinsfile` is a thin scheduler over public
+`sdi-integration` operations; Python owns all contract construction and
+interpretation.
 
 ## Development
 

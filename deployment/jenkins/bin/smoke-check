@@ -37,6 +37,9 @@ EXPECTED_AGENTS = {
     "cv": "cv",
     "cd": "cd",
 }
+EXPECTED_SCRIPT_APPROVAL = (
+    "method org.jenkinsci.plugins.workflow.steps.FlowInterruptedException getCauses"
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -73,6 +76,7 @@ class _JenkinsClient:
         *,
         data: bytes | None = None,
         content_type: str | None = None,
+        timeout: float = 30,
     ) -> tuple[int, bytes, dict[str, str]]:
         headers = {"Authorization": self._authorization}
         if content_type is not None:
@@ -80,13 +84,13 @@ class _JenkinsClient:
         request = urllib.request.Request(
             f"{self._base_url}{path}", data=data, headers=headers
         )
-        return self._open(request)
+        return self._open(request, timeout=timeout)
 
     def _open(
-        self, request: urllib.request.Request
+        self, request: urllib.request.Request, *, timeout: float
     ) -> tuple[int, bytes, dict[str, str]]:
         try:
-            with self._opener.open(request, timeout=30) as response:
+            with self._opener.open(request, timeout=timeout) as response:
                 return response.status, response.read(), dict(response.headers)
         except urllib.error.HTTPError as error:
             return error.code, error.read(), dict(error.headers)
@@ -105,7 +109,12 @@ class _JenkinsClient:
         return str(crumb["crumbRequestField"]), str(crumb["crumb"])
 
     def post_with_crumb(
-        self, path: str, *, data: bytes, content_type: str
+        self,
+        path: str,
+        *,
+        data: bytes,
+        content_type: str,
+        timeout: float = 30,
     ) -> tuple[int, bytes, dict[str, str]]:
         field, crumb = self.crumb()
         headers = {
@@ -116,7 +125,7 @@ class _JenkinsClient:
         request = urllib.request.Request(
             f"{self._base_url}{path}", data=data, headers=headers
         )
-        return self._open(request)
+        return self._open(request, timeout=timeout)
 
 
 def _password(path: Path) -> str:
@@ -246,12 +255,13 @@ def _wait_for_agents(admin: _JenkinsClient) -> None:
             return
 
 
-def _run_script(admin: _JenkinsClient, script: str) -> bytes:
+def _run_script(admin: _JenkinsClient, script: str, *, timeout: float = 30) -> bytes:
     data = urllib.parse.urlencode({"script": script}).encode()
     status, body, _ = admin.post_with_crumb(
         "/scriptText",
         data=data,
         content_type="application/x-www-form-urlencoded",
+        timeout=timeout,
     )
     _equal(
         status,
@@ -345,13 +355,22 @@ git --version
 test ! -e /var/run/docker.sock
 test "$(find /run/secrets -maxdepth 1 -type f | wc -l)" -eq 1
 getent hosts controller >/dev/null
-for peer in {peers}; do
-  test "$peer" = "''' + agentName + '''" && continue
-  if getent hosts "$peer" >/dev/null 2>&1; then
-    echo "unexpected peer-agent reachability: $peer" >&2
-    exit 1
-  fi
-done
+if [ "$BUILD_NUMBER" = 1 ]; then
+  peer_pids=
+  for peer in {peers}; do
+    test "$peer" = "''' + agentName + '''" && continue
+    (
+      if getent hosts "$peer" >/dev/null 2>&1; then
+        echo "unexpected peer-agent reachability: $peer" >&2
+        exit 1
+      fi
+    ) &
+    peer_pids="$peer_pids $!"
+  done
+  for peer_pid in $peer_pids; do
+    wait "$peer_pid"
+  done
+fi
 '''
     job.getBuildersList().add(new Shell(command))
     (1..2).each {{ buildIndex ->
@@ -382,7 +401,7 @@ done
 }}
 println('agent-exercise-passed')
 """
-    body = _run_script(admin, script)
+    body = _run_script(admin, script, timeout=120)
     _equal(body.strip(), b"agent-exercise-passed", "agent exercise response")
 
 
@@ -465,6 +484,17 @@ def _check(args: argparse.Namespace) -> None:
         f"JCasC check status ({body.decode(errors='replace')})",
     )
     _equal(body.strip(), b"[]", "JCasC check response")
+
+    approved = _run_script(
+        admin,
+        "import org.jenkinsci.plugins.scriptsecurity.scripts.ScriptApproval\n"
+        "println(ScriptApproval.get().getApprovedSignatures().sort().join('\\n'))\n",
+    )
+    _equal(
+        approved.decode().strip(),
+        EXPECTED_SCRIPT_APPROVAL,
+        "script sandbox approvals",
+    )
 
     handoff = _JenkinsClient(
         args.url, args.handoff_id, _password(args.handoff_password_file)

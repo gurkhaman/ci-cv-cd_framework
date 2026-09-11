@@ -175,7 +175,9 @@ def _parse_result(content: bytes) -> PipelineIntegrationResult:
         raise InputError(msg) from error
 
 
-def validate_bundle(bundle_root: Path) -> None:  # noqa: C901, PLR0912, PLR0915
+def validate_bundle(  # noqa: C901, PLR0912, PLR0915
+    bundle_root: Path,
+) -> PipelineIntegrationResult:
     """Validate the complete archive candidate against its authoritative result."""
     if not bundle_root.is_dir() or bundle_root.is_symlink():
         msg = "archive candidate root must be a directory"
@@ -269,9 +271,111 @@ def validate_bundle(bundle_root: Path) -> None:  # noqa: C901, PLR0912, PLR0915
     if second_paths != paths or second_capture != captured:
         msg = "archive candidate changed after validation"
         raise InputError(msg)
+    return result
 
 
-def dispatch_local(  # noqa: C901, PLR0912, PLR0915
+def _assemble_bundle_staging(
+    *,
+    identified: dict[str, Any],
+    run_started_at: datetime,
+    executions: list[StageExecution],
+    bundle_staging: Path,
+) -> dict[str, Any]:
+    artifact_records: list[dict[str, object]] = []
+    for execution in executions:
+        stage = execution.envelope.correlation.stage
+        for accepted in execution.envelope.accepted_files:
+            destination = archive_path(stage, accepted.path)
+            _write_file(bundle_staging, destination, execution.files[accepted.path])
+            record = cast("dict[str, object]", accepted.model_dump(mode="json"))
+            record["stage"] = stage
+            record["path"] = destination
+            artifact_records.append(record)
+
+    finished_at = datetime.now(UTC)
+    result = PipelineIntegrationResult.model_validate(
+        {
+            "schema_version": "sdi.pipeline-integration-result/v1",
+            "execution_id": identified["execution_id"],
+            "repository": identified["repository"],
+            "requested_ref": identified["requested_ref"],
+            "resolved_commit_sha": identified["resolved_commit_sha"],
+            "scenario_id": identified["scenario_id"],
+            "testcase_id": identified["testcase_id"],
+            "combination_id": identified["combination_id"],
+            "profile_id": identified["profile_id"],
+            "started_at": run_started_at,
+            "finished_at": finished_at,
+            "duration_ms": int((finished_at - run_started_at).total_seconds() * 1000),
+            "input_provenance": identified["inputs"],
+            "attempts": [
+                item.envelope.model_dump(mode="json", exclude_none=True)
+                for item in executions
+            ],
+            "artifacts": artifact_records,
+            "fixture_notice": FIXTURE_NOTICE,
+            "kpi_evaluation": "not_evaluated",
+        },
+        strict=True,
+        extra="forbid",
+    )
+    _write_file(
+        bundle_staging,
+        PIPELINE_RESULT_PATH,
+        _canonical_json(result.model_dump(mode="json", exclude_none=True)),
+    )
+    validate_bundle(bundle_staging)
+    return result.model_dump(mode="json", exclude_none=True)
+
+
+def assemble_bundle(
+    *,
+    identified: dict[str, Any],
+    run_started_at: datetime,
+    executions: list[StageExecution],
+    bundle_root: Path,
+) -> dict[str, Any]:
+    """Atomically assemble accepted executions into one validated result bundle."""
+    if bundle_root.exists() or bundle_root.is_symlink():
+        msg = "bundle root must not already exist"
+        raise InputError(msg)
+    bundle_root.parent.mkdir(parents=True, exist_ok=True)
+    claim_path = bundle_root.parent / f".{bundle_root.name}.claim"
+    bundle_staging: Path | None = None
+    claim_acquired = False
+    try:
+        try:
+            claim_descriptor = os.open(
+                claim_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+                0o600,
+            )
+        except FileExistsError as error:
+            msg = "bundle root is already claimed by another assembly"
+            raise InputError(msg) from error
+        os.close(claim_descriptor)
+        claim_acquired = True
+        bundle_staging = Path(
+            tempfile.mkdtemp(
+                prefix=f".{bundle_root.name}.bundle-", dir=bundle_root.parent
+            )
+        )
+        result = _assemble_bundle_staging(
+            identified=identified,
+            run_started_at=run_started_at,
+            executions=executions,
+            bundle_staging=bundle_staging,
+        )
+        bundle_staging.replace(bundle_root)
+        return result
+    finally:
+        if bundle_staging is not None and bundle_staging.exists():
+            shutil.rmtree(bundle_staging, ignore_errors=True)
+        if claim_acquired:
+            claim_path.unlink(missing_ok=True)
+
+
+def dispatch_local(  # noqa: PLR0915
     *,
     repository_path: Path,
     requested_ref: str,
@@ -364,54 +468,14 @@ def dispatch_local(  # noqa: C901, PLR0912, PLR0915
             else:
                 available_inputs.update(execution.outputs)
 
-        artifact_records: list[dict[str, object]] = []
-        for execution in executions:
-            stage = execution.envelope.correlation.stage
-            for accepted in execution.envelope.accepted_files:
-                destination = archive_path(stage, accepted.path)
-                _write_file(bundle_staging, destination, execution.files[accepted.path])
-                record = cast("dict[str, object]", accepted.model_dump(mode="json"))
-                record["stage"] = stage
-                record["path"] = destination
-                artifact_records.append(record)
-
-        finished_at = datetime.now(UTC)
-        result = PipelineIntegrationResult.model_validate(
-            {
-                "schema_version": "sdi.pipeline-integration-result/v1",
-                "execution_id": identified["execution_id"],
-                "repository": identified["repository"],
-                "requested_ref": identified["requested_ref"],
-                "resolved_commit_sha": identified["resolved_commit_sha"],
-                "scenario_id": identified["scenario_id"],
-                "testcase_id": identified["testcase_id"],
-                "combination_id": identified["combination_id"],
-                "profile_id": identified["profile_id"],
-                "started_at": run_started_at,
-                "finished_at": finished_at,
-                "duration_ms": int(
-                    (finished_at - run_started_at).total_seconds() * 1000
-                ),
-                "input_provenance": identified["inputs"],
-                "attempts": [
-                    item.envelope.model_dump(mode="json", exclude_none=True)
-                    for item in executions
-                ],
-                "artifacts": artifact_records,
-                "fixture_notice": FIXTURE_NOTICE,
-                "kpi_evaluation": "not_evaluated",
-            },
-            strict=True,
-            extra="forbid",
+        result = _assemble_bundle_staging(
+            identified=identified,
+            run_started_at=run_started_at,
+            executions=executions,
+            bundle_staging=bundle_staging,
         )
-        _write_file(
-            bundle_staging,
-            PIPELINE_RESULT_PATH,
-            _canonical_json(result.model_dump(mode="json", exclude_none=True)),
-        )
-        validate_bundle(bundle_staging)
         bundle_staging.replace(bundle_root)
-        return result.model_dump(mode="json", exclude_none=True)
+        return result
     finally:
         if work_root is not None:
             shutil.rmtree(work_root, ignore_errors=True)

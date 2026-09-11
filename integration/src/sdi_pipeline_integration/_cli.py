@@ -14,6 +14,14 @@ from typing import TYPE_CHECKING, Any, cast
 
 from pydantic import ValidationError
 
+from ._jenkins_pipeline import (
+    RunDeadlineExpiredError,
+    attempt_allows_continuation,
+    bundle_has_machinery_failure,
+    execute_jenkins_stage,
+    finalize_jenkins_run,
+    preflight_jenkins_run,
+)
 from ._local_dispatch import dispatch_local, validate_bundle
 from ._run_input import identify_committed_run
 from ._schemas import check_schemas, write_schemas
@@ -41,7 +49,7 @@ def _external_cancellation() -> Generator[None, None, None]:
             signal.signal(cancellation_signal, handler)
 
 
-def _parser() -> argparse.ArgumentParser:
+def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     parser = argparse.ArgumentParser(
         prog="sdi-integration",
         description="Validate and execute Pipeline integration run requests.",
@@ -83,6 +91,56 @@ def _parser() -> argparse.ArgumentParser:
     execute.add_argument("--run-request-path", required=True)
     execute.add_argument("--descriptor-path", required=True)
     execute.add_argument("--attempt-root", type=Path, required=True)
+    preflight = commands.add_parser(
+        "preflight-jenkins-run",
+        help="revalidate one Jenkins submission and its complete execution topology",
+    )
+    _add_submitted_run_arguments(preflight)
+    preflight.add_argument("--handoff-contract-version", required=True)
+    preflight.add_argument("--github-run-id", required=True)
+    preflight.add_argument("--github-run-attempt", required=True)
+    preflight.add_argument("--build-started-at-millis", required=True)
+    preflight.add_argument("--integration-node", required=True)
+    preflight.add_argument("--composition-node", required=True)
+    preflight.add_argument("--image-build-node", required=True)
+    preflight.add_argument("--cv-node", required=True)
+    preflight.add_argument("--cd-node", required=True)
+    jenkins_execute = commands.add_parser(
+        "execute-jenkins-stage",
+        help="execute the next Stage from validated Jenkins transfers",
+    )
+    _add_submitted_run_arguments(jenkins_execute)
+    jenkins_execute.add_argument("--descriptor-path", required=True)
+    jenkins_execute.add_argument("--attempt-root", type=Path, required=True)
+    jenkins_execute.add_argument(
+        "--prior-attempt-root", type=Path, action="append", default=[]
+    )
+    jenkins_execute.add_argument("--work-limit-seconds", type=int, required=True)
+    jenkins_execute.add_argument("--run-deadline-epoch-millis", required=True)
+    attempt_status = commands.add_parser(
+        "attempt-allows-continuation",
+        help="derive whether an accepted attempt permits the next Stage",
+    )
+    attempt_status.add_argument("--attempt-root", type=Path, required=True)
+    attempt_status.add_argument("--execution-id", required=True)
+    attempt_status.add_argument(
+        "--stage", choices=("composition", "image_build", "cv", "cd"), required=True
+    )
+    finalize = commands.add_parser(
+        "finalize-jenkins-run",
+        help="materialize skips and assemble a complete Jenkins result bundle",
+    )
+    _add_submitted_run_arguments(finalize)
+    finalize.add_argument("--build-started-at-millis", required=True)
+    finalize.add_argument("--attempt-root", type=Path, action="append", default=[])
+    finalize.add_argument("--run-deadline-expired", action="store_true")
+    finalize.add_argument("--bundle-root", type=Path, required=True)
+    conclusion = commands.add_parser(
+        "bundle-conclusion",
+        help="validate a bundle and derive its Jenkins machinery conclusion",
+    )
+    conclusion.add_argument("--bundle-root", type=Path, required=True)
+    conclusion.add_argument("--execution-id", required=True)
     dispatch = commands.add_parser(
         "dispatch-local",
         help="execute and assemble one local four-Stage run",
@@ -98,6 +156,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     validate.add_argument("--bundle-root", type=Path, required=True)
     return parser
+
+
+def _add_submitted_run_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--repository", type=Path, required=True)
+    parser.add_argument("--requested-ref", required=True)
+    parser.add_argument("--resolved-commit", required=True)
+    parser.add_argument("--run-request-path", required=True)
+    parser.add_argument("--execution-id", required=True)
 
 
 def _has_machinery_failure(result: dict[str, object]) -> bool:
@@ -116,6 +182,7 @@ def _has_machinery_failure(result: dict[str, object]) -> bool:
             if reason.get("code") in {
                 "sdi.stage.not-implemented",
                 "sdi.dependency.fixture-evidence",
+                "sdi.run.deadline-exceeded",
             }:
                 return True
     return False
@@ -191,6 +258,108 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
             f"{json.dumps(envelope, sort_keys=True, separators=(',', ':'))}\n"
         )
         return 0
+    if arguments.command == "preflight-jenkins-run":
+        try:
+            identified = preflight_jenkins_run(
+                repository_path=arguments.repository,
+                requested_ref=arguments.requested_ref,
+                resolved_commit=arguments.resolved_commit,
+                run_request_path=arguments.run_request_path,
+                execution_id=arguments.execution_id,
+                handoff_contract_version=arguments.handoff_contract_version,
+                github_run_id=arguments.github_run_id,
+                github_run_attempt=arguments.github_run_attempt,
+                build_started_at_millis=arguments.build_started_at_millis,
+                resource_nodes={
+                    "integration": arguments.integration_node,
+                    "composition": arguments.composition_node,
+                    "image_build": arguments.image_build_node,
+                    "cv": arguments.cv_node,
+                    "cd": arguments.cd_node,
+                },
+            )
+        except (InputError, OSError, ValidationError) as error:
+            sys.stderr.write(f"sdi-integration: {error}\n")
+            return 2
+        sys.stdout.write(
+            f"{json.dumps(identified, sort_keys=True, separators=(',', ':'))}\n"
+        )
+        return 0
+    if arguments.command == "execute-jenkins-stage":
+        attempt_existed = arguments.attempt_root.exists() or (
+            arguments.attempt_root.is_symlink()
+        )
+        try:
+            with _external_cancellation():
+                envelope = execute_jenkins_stage(
+                    repository_path=arguments.repository,
+                    requested_ref=arguments.requested_ref,
+                    resolved_commit=arguments.resolved_commit,
+                    run_request_path=arguments.run_request_path,
+                    execution_id=arguments.execution_id,
+                    descriptor_path=arguments.descriptor_path,
+                    attempt_root=arguments.attempt_root,
+                    prior_attempt_roots=arguments.prior_attempt_root,
+                    work_limit_seconds=arguments.work_limit_seconds,
+                    run_deadline_epoch_millis=arguments.run_deadline_epoch_millis,
+                )
+        except ExternalCancellation as cancellation:
+            if not attempt_existed:
+                if arguments.attempt_root.is_symlink():
+                    arguments.attempt_root.unlink(missing_ok=True)
+                else:
+                    shutil.rmtree(arguments.attempt_root, ignore_errors=True)
+            return 128 + cancellation.signal_number
+        except RunDeadlineExpiredError:
+            return 3
+        except (InputError, OSError, ValidationError) as error:
+            sys.stderr.write(f"sdi-integration: {error}\n")
+            return 2
+        sys.stdout.write(
+            f"{json.dumps(envelope, sort_keys=True, separators=(',', ':'))}\n"
+        )
+        return 0
+    if arguments.command == "attempt-allows-continuation":
+        try:
+            allows_continuation = attempt_allows_continuation(
+                arguments.attempt_root,
+                execution_id=arguments.execution_id,
+                stage=arguments.stage,
+            )
+        except (InputError, OSError, ValidationError) as error:
+            sys.stderr.write(f"sdi-integration: {error}\n")
+            return 2
+        return 0 if allows_continuation else 1
+    if arguments.command == "finalize-jenkins-run":
+        try:
+            result = finalize_jenkins_run(
+                repository_path=arguments.repository,
+                requested_ref=arguments.requested_ref,
+                resolved_commit=arguments.resolved_commit,
+                run_request_path=arguments.run_request_path,
+                execution_id=arguments.execution_id,
+                build_started_at_millis=arguments.build_started_at_millis,
+                attempt_roots=arguments.attempt_root,
+                run_deadline_expired=arguments.run_deadline_expired,
+                bundle_root=arguments.bundle_root,
+            )
+        except (InputError, OSError, ValidationError) as error:
+            sys.stderr.write(f"sdi-integration: {error}\n")
+            return 2
+        sys.stdout.write(
+            f"{json.dumps(result, sort_keys=True, separators=(',', ':'))}\n"
+        )
+        return 0
+    if arguments.command == "bundle-conclusion":
+        try:
+            machinery_failure = bundle_has_machinery_failure(
+                arguments.bundle_root,
+                execution_id=arguments.execution_id,
+            )
+        except (InputError, OSError, ValidationError) as error:
+            sys.stderr.write(f"sdi-integration: {error}\n")
+            return 2
+        return 1 if machinery_failure else 0
     if arguments.command == "dispatch-local":
         bundle_existed = arguments.bundle_root.exists() or (
             arguments.bundle_root.is_symlink()
@@ -217,7 +386,7 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
         sys.stdout.write(
             f"{json.dumps(result, sort_keys=True, separators=(',', ':'))}\n"
         )
-        if _has_machinery_failure(cast("dict[str, object]", result)):
+        if _has_machinery_failure(result):
             return 1
         return 0
     if arguments.command == "validate-bundle":

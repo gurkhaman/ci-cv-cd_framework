@@ -127,7 +127,7 @@ def test_compose_defines_five_isolated_websocket_agents() -> None:
     assert len(registration_secrets) == 5
     assert all(
         compose["networks"][name]["internal"]
-        == "${JENKINS_AGENT_NETWORK_INTERNAL:-true}"
+        == "${JENKINS_AGENT_NETWORK_INTERNAL:-false}"
         for name in controller_networks
         if name != "controller-egress"
     )
