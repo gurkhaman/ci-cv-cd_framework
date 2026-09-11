@@ -95,6 +95,39 @@ check
     --admin-id smoke-administrator \
     --admin-password-file "$admin_password"
 
+historical=$temporary/historical-agent-secrets
+mkdir -m 700 "$historical"
+for name in integration ci image-build cv cd; do
+    cp "$temporary/$name-agent-secret" "$historical/$name-agent-secret"
+done
+"$stack" --config "$config" --project-name "$project_name" stop
+docker run --rm --user 0:0 \
+    --volume "${project_name}_jenkins-home:/target" \
+    sdi-jenkins-controller:2.568.3 \
+    rm -f -- /target/secrets/jenkins.slaves.JnlpSlaveAgentProtocol.secret
+rm "$integration_agent_secret" "$ci_agent_secret" "$image_build_agent_secret" \
+    "$cv_agent_secret" "$cd_agent_secret"
+printf '%s\n' 'rotated-admin-password-for-controller-smoke' > "$admin_password"
+printf '%s\n' 'rotated-handoff-password-for-controller-smoke' > "$handoff_password"
+"$stack" --config "$config" --project-name "$project_name" start-controller
+"$checker" provision-secrets \
+    --url "http://127.0.0.1:$port" \
+    --admin-id smoke-administrator \
+    --admin-password-file "$admin_password" \
+    --agent-secret-directory "$temporary"
+for name in integration ci image-build cv cd; do
+    ! cmp -s "$temporary/$name-agent-secret" "$historical/$name-agent-secret" || {
+        printf 'smoke: Jenkins did not rotate the %s agent credential\n' "$name" >&2
+        exit 2
+    }
+done
+"$stack" --config "$config" --project-name "$project_name" start
+check
+"$checker" exercise-agents \
+    --url "http://127.0.0.1:$port" \
+    --admin-id smoke-administrator \
+    --admin-password-file "$admin_password"
+
 "$checker" drift \
     --url "http://127.0.0.1:$port" \
     --admin-id smoke-administrator \

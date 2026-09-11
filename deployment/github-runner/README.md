@@ -28,8 +28,17 @@ the dedicated account and use `systemctl --user`.
 From the repository checkout, run:
 
 ```sh
+deployment/github-runner/bin/runner preflight
 deployment/github-runner/bin/runner install
 ```
+
+`preflight` verifies the dedicated account boundary, supported Ubuntu LTS
+x86_64 host, Git, systemd user manager, native archive tools, writable private
+installation area, required HTTPS access, and the runner pin in the shared
+`deployment/installation.env` authority. Failures name the missing capability
+without printing account state, private paths, credentials, or tool output. A
+host administrator, not this interface, installs native dependencies and enables
+user lingering.
 
 `install` downloads exactly
 `actions-runner-linux-x64-2.337.0.tar.gz`, verifies digest
@@ -72,6 +81,48 @@ Stop the service without removing registration or work state with:
 ```sh
 deployment/github-runner/bin/runner stop
 ```
+
+For permanent removal, first confirm no workflow is queued or running and stop
+the service. Create a short-lived removal token, then unregister before removing
+the service and installation:
+
+```sh
+SDI_GITHUB_HANDOFF_QUIESCED=true \
+SDI_GITHUB_RUNNER_REMOVAL_TOKEN='<short-lived-removal-token>' \
+  deployment/github-runner/bin/runner unregister
+SDI_GITHUB_HANDOFF_QUIESCED=true deployment/github-runner/bin/runner remove-service
+SDI_GITHUB_HANDOFF_QUIESCED=true deployment/github-runner/bin/runner remove
+```
+
+The quiescence acknowledgement is required by every destructive operation; it
+does not replace checking the exact GitHub run. The removal token is never
+persisted. `remove` refuses a registered installation
+or installed service. Repository access, collaborator policy, runner
+registration/removal tokens, host accounts, native packages, firewall rules,
+SSH, and user lingering remain guided administrator work.
+
+## Replacement
+
+Replace a runner one at a time while no Pipeline integration run is active. Use
+a separate candidate low-privilege account on the same host so both installations
+remain independently manageable through this interface:
+
+1. Stop the old runner, but keep its registration, service, installation, and
+   account intact for rollback.
+2. Review and commit the new version and digest in
+   `deployment/installation.env` and this interface as one change.
+3. From the candidate account, run preflight, then install, configure, and start
+   the candidate with a distinct runner name and the same handoff-only label.
+4. Confirm exactly one online repository runner has only the
+   `sdi-jenkins-handoff` label and remains low privilege; the old runner must
+   remain offline.
+5. Run one protected-main Fixture through `Pipeline integration` and retain its
+   exact GitHub run URL.
+6. Only after validation succeeds, use the old account to unregister and remove
+   its service and files, then retire that account through guided administration.
+
+Do not run old and new runners concurrently against the handoff label. There is
+no automatic update or credential-rotation mechanism.
 
 The runner software must be reviewed and repinned within 30 days of a new
 GitHub Actions runner release. A critical security update can require an
