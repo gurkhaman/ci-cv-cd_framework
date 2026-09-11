@@ -46,7 +46,16 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "mode",
-        choices=("check", "drift", "exercise-agents", "preflight", "provision-secrets"),
+        choices=(
+            "check",
+            "drift",
+            "exercise-agents",
+            "idle",
+            "preflight",
+            "provision-secrets",
+            "quiesce",
+            "resume",
+        ),
     )
     parser.add_argument("--url")
     parser.add_argument("--admin-id")
@@ -131,7 +140,7 @@ class _JenkinsClient:
 def _password(path: Path) -> str:
     password = path.read_text().strip()
     if not password:
-        message = f"empty password file: {path}"
+        message = "a required password file is empty"
         raise ValueError(message)
     return password
 
@@ -332,7 +341,8 @@ tree="$WORKSPACE/.sdi-agent-workspace-tree"
 cleanup() {{ find "$WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {{}} +; }}
 cleanup
 test -z "$(find "$WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)"
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'exit 130' HUP INT TERM
 touch "$marker"
 mkdir "$tree"
 touch "$tree/file"
@@ -505,6 +515,57 @@ def _check(args: argparse.Namespace) -> None:
     _equal(status, HTTP_FORBIDDEN, "handoff user administration denial")
 
 
+def _assert_no_active_run(admin: _JenkinsClient) -> None:
+    status, queue, _ = admin.json("/queue/api/json?tree=items[id]")
+    _equal(status, HTTP_OK, "queue API status")
+    if queue.get("items"):
+        raise RuntimeError("active-run: Jenkins queue is not empty")
+    status, job, _ = admin.json(
+        "/job/pipeline-integration/api/json?tree=builds[number,building]"
+    )
+    _equal(status, HTTP_OK, "pipeline job API status")
+    builds = job.get("builds")
+    if not isinstance(builds, list):
+        raise TypeError("pipeline job has no build list")
+    if any(isinstance(build, dict) and build.get("building") is True for build in builds):
+        raise RuntimeError("active-run: a Pipeline integration run is building")
+
+
+def _idle(args: argparse.Namespace, *, quiesce: bool) -> None:
+    admin = _JenkinsClient(args.url, args.admin_id, _password(args.admin_password_file))
+    if quiesce:
+        status, _, _ = admin.post_with_crumb(
+            "/quietDown",
+            data=b"",
+            content_type="application/x-www-form-urlencoded",
+        )
+        _equal(status, HTTP_OK, "quiet-down status")
+    try:
+        _assert_no_active_run(admin)
+    except (OSError, RuntimeError, TypeError, ValueError, KeyError):
+        if quiesce:
+            status, _, _ = admin.post_with_crumb(
+                "/cancelQuietDown",
+                data=b"",
+                content_type="application/x-www-form-urlencoded",
+            )
+            _equal(status, HTTP_OK, "cancel quiet-down status")
+        raise
+
+
+def _resume(args: argparse.Namespace) -> None:
+    admin = _JenkinsClient(args.url, args.admin_id, _password(args.admin_password_file))
+    status, _, _ = admin.post_with_crumb(
+        "/cancelQuietDown",
+        data=b"",
+        content_type="application/x-www-form-urlencoded",
+    )
+    _equal(status, HTTP_OK, "cancel quiet-down status")
+    status, root, _ = admin.json("/api/json?tree=quietingDown")
+    _equal(status, HTTP_OK, "root API status")
+    _equal(root.get("quietingDown"), False, "Jenkins quiet mode")
+
+
 def _introduce_drift(args: argparse.Namespace) -> None:
     admin = _JenkinsClient(args.url, args.admin_id, _password(args.admin_password_file))
     script = (
@@ -555,6 +616,12 @@ def _main() -> int:
             _provision_agent_secrets(args)
         elif args.mode == "exercise-agents":
             _exercise_agents(args)
+        elif args.mode == "idle":
+            _idle(args, quiesce=False)
+        elif args.mode == "quiesce":
+            _idle(args, quiesce=True)
+        elif args.mode == "resume":
+            _resume(args)
         elif args.mode == "check":
             _check(args)
         else:

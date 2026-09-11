@@ -23,6 +23,7 @@ from ._domain_contracts import (
     ValidationEvidence,
 )
 from ._handoff_contracts import HandoffReceipt
+from ._recovery_contracts import RecoveryManifest
 from ._result_contracts import PipelineIntegrationResult
 from ._stage_contracts import (
     AcceptedAttemptEnvelope,
@@ -45,6 +46,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "image-build-result-v1.schema.json": ImageBuildResult,
     "pipeline-integration-result-v1.schema.json": PipelineIntegrationResult,
     "pipeline-integration-run-request-v1.schema.json": RunRequest,
+    "recovery-manifest-v1.schema.json": RecoveryManifest,
     "stage-adapter-request-v1.schema.json": AdapterRequest,
     "stage-adapter-response-v1.schema.json": AdapterResponse,
     "stage-profile-v1.schema.json": StageProfile,

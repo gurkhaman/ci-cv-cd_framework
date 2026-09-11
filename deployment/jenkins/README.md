@@ -24,6 +24,10 @@ The tracked authority is:
 - `Jenkinsfile`: the thin repository-owned scheduler over public integration CLI
   operations.
 - `bin/stack`: the supported validation and lifecycle interface.
+- `bin/recovery`: the supported cold snapshot, verification, and restore
+  interface.
+- `../installation.env`: reviewed non-secret host support, upstream reachability,
+  and exact-pin authority shared with the runner and recovery interfaces.
 
 Jenkins Configuration as Code and Job DSL run on every controller startup. A
 restart therefore restores tracked global and job configuration after mutable UI
@@ -41,10 +45,40 @@ but they are not configuration authority.
   clean image build, PyPI during a clean agent build, and GitHub for each
   agent's independent immutable checkout.
 
+Supported releases and minimum tool majors are explicit in
+`deployment/installation.env`. The tracked setup does not install or update the
+operating system, Docker, Compose, Git, systemd, firewall, SSH, or accounts.
+
 `bin/stack validate` verifies the live Docker platform, secret ownership and
 permissions, supplied values, Dockerfile syntax, and the fully interpolated
 Compose model. It intentionally does not install Docker, alter the firewall, or
 enable a host-boot service.
+
+## Setup And Preflight
+
+Run the scaffold-only setup and complete host preflight from the approved
+protected-main checkout:
+
+```sh
+deployment/jenkins/bin/stack setup
+deployment/jenkins/bin/stack preflight
+```
+
+`setup` creates only the private local configuration directory and a private
+copy of the tracked example when one is absent. Edit that local file, create its
+two controller password files, and select five writable future agent-secret
+paths outside the checkout before running `preflight`.
+The preflight verifies supported Ubuntu LTS x86_64, Docker Engine and Compose,
+systemd, Git, `uv`, required HTTPS access, checkout/configuration permissions,
+secret permissions, required Docker capabilities, Compose interpolation, and
+that every tracked software pin still agrees with `deployment/installation.env`.
+Diagnostics are capability-oriented and suppress raw network and tool output.
+
+Host administrators separately own OS and Docker installation, firewall and SSH
+policy, administrator and low-privilege accounts, GitHub protection and
+collaborators, Jenkins identity approval, token provisioning, and credential
+rotation decisions. The scaffold never uses privilege escalation to perform
+those tasks.
 
 ## Local Configuration
 
@@ -127,6 +161,7 @@ deployment/jenkins/bin/stack validate
 deployment/jenkins/bin/stack start
 deployment/jenkins/bin/stack status
 deployment/jenkins/bin/stack logs
+deployment/jenkins/bin/stack exercise-live
 deployment/jenkins/bin/stack stop
 ```
 
@@ -168,6 +203,161 @@ registration secret is validated or mounted during reconciliation.
 removes the controller and its named volume. Back up operational state first if
 it must be retained.
 
+## Safe Shutdown
+
+Prevent new protected-environment delivery and stop the dedicated GitHub runner
+before shutdown. Then quiesce Jenkins and stop the stack:
+
+```sh
+deployment/jenkins/bin/stack quiesce
+deployment/jenkins/bin/stack stop
+```
+
+`quiesce` asks Jenkins to stop accepting new work and refuses while the fixed
+job has queued or building work. If it observes active work, it cancels quiet
+mode and leaves the stack running. Do not use `stop` directly during an active
+run. `stop` gives every container 60 seconds to terminate, rejects a forced
+SIGKILL shutdown, and only then removes the containers. Resume an intentionally
+quiesced live controller with `stack resume`; after a full shutdown, start the
+stack and then the runner after validation.
+
+## Backup And Restore
+
+Snapshots are manual, cold, and sensitive. Select an operator-encrypted
+destination outside both the checkout and Docker volume, stop the runner and
+protected-environment handoff, and run:
+
+```sh
+deployment/jenkins/bin/recovery snapshot \
+  --destination /operator/encrypted/off-host-location \
+  --encrypted-destination \
+  --handoff-quiesced
+```
+
+The acknowledgement flags record operator decisions; the scaffold cannot prove
+storage encryption or GitHub-side quiescence. The command then quiesces Jenkins,
+refuses queued or building runs, cleanly stops all six containers, and archives
+the complete `jenkins-home` named volume with numeric ownership. It creates an
+owner-only archive and a path-free recovery manifest containing the approved
+commit, UTC timestamp, byte size, SHA-256, and every exact installation pin.
+Both outputs must remain encrypted and outside the repository. There is no
+scheduler, retention service, upload service, RPO, or RTO.
+
+Verify an archive without changing Docker state:
+
+```sh
+deployment/jenkins/bin/recovery verify \
+  --archive /operator/encrypted/off-host-location/jenkins-home-....tar.gz \
+  --manifest /operator/encrypted/off-host-location/jenkins-home-....manifest.json
+```
+
+Restore only from the exact approved commit recorded in the manifest. Stage new
+administrator and machine-user bootstrap passwords after the snapshot was
+created, and configure five distinct writable agent-secret paths outside the
+checkout. The restore interface checks the controller files' modification
+times, nonempty values, password separation, and every destination path before
+touching the target volume. The acknowledgement flag records the explicit
+operator decision to replace the archived credentials; it is not a scheduler or
+general credential-rotation service:
+
+```sh
+deployment/jenkins/bin/recovery restore \
+  --archive /operator/encrypted/off-host-location/jenkins-home-....tar.gz \
+  --manifest /operator/encrypted/off-host-location/jenkins-home-....manifest.json \
+  --fresh-credentials-ready
+```
+
+Restore verifies the manifest schema, archive size and digest, commit, and all
+pins before touching Docker. It refuses a nonempty target volume. Before the
+target restore, it creates a private disposable volume from the archive, removes
+only Jenkins's inbound-agent HMAC key there, starts the controller with the new
+identity passwords, asks Jenkins to issue five replacement registration
+secrets, and starts all agents. `verify-live` proves those successor credentials
+and repository convergence before the external files are replaced or the
+target receives the replacement HMAC key. The disposable stack is then stopped
+and removed. The target archive is restored with the proven key, the exact stack
+is started, and convergence is proved again. Archived controller and agent
+credentials therefore never become active on the target. A failed target
+extraction leaves a partial volume that must be destroyed before retrying. Keep
+the archive until restoration and the protected-main Fixture check are accepted.
+
+## Clean Reconstruction
+
+Reconstruction is distinct from restoration and starts with no controller
+history:
+
+1. Approve and check out one protected-main commit; run `stack setup` and
+   `stack preflight`.
+2. Confirm no run is active, retain any required snapshot, run `stack stop`, and
+   explicitly run `stack destroy`.
+3. Stage fresh administrator and handoff bootstrap passwords and five future
+   agent-secret paths outside the checkout.
+4. Run `stack start-controller`, provision the five fixed node registration
+   secrets, and run `stack start`.
+5. Run `stack verify-live` and `stack exercise-live` against the reconstructed
+   installation. These prove the zero-executor controller, fixed job, five
+   identities and labels, one executor per agent, clean isolated workspaces,
+   exact pins, and convergence. Run `stack smoke` separately for repository
+   acceptance; it uses an isolated ephemeral project.
+6. As the runner account, run `runner preflight`; as the GitHub/Jenkins machine
+   user, perform the documented handoff preflight without printing its token.
+7. Start the runner and execute one reviewed protected-main Fixture through the
+   GitHub workflow. Record only its exact run and artifact URLs in the readiness
+   checklist.
+
+The local smoke is not a substitute for the protected-main run. Reconstruction
+does not create host accounts, users, tokens, branch rules, environment rules,
+or firewall policy.
+
+## Maintenance And Rotation
+
+Maintain one runner, Domain agent, or credential at a time while no run is queued
+or building. Use the order provision, validate, run one immediate protected-main
+Fixture, then revoke the predecessor. `reconcile-agent` enters Jenkins quiet
+mode, refuses replacement unless the fixed queue and job are idle, and resumes
+Jenkins after replacement or failure. Stop the GitHub runner first so no handoff
+is stranded in GitHub while Jenkins is quiet. A descriptor replacement is
+valid only by changing that descriptor's immutable image digest and then
+reconciling its one matching agent.
+
+For administrator passwords and the handoff machine-user token, stage one
+successor outside the checkout, validate its least privilege and intended
+identity, prove the live Fixture, and only then revoke or remove its predecessor.
+Jenkins derives all five inbound registration secrets from one controller HMAC
+key, so they cannot truthfully be rotated independently. Replace agent
+containers one at a time with `reconcile-agent`; replace the shared registration
+key only during stopped reconstruction or the disposable recovery procedure,
+which proves all five successors before the target uses them. Never place values
+in commands, logs, manifests, readiness evidence, or repository files. No
+automatic upgrade or periodic rotation machinery is provided.
+
+## Manual Security Review
+
+Before readiness, manually confirm protected-main-only dispatch, `contents: read`
+workflow permission, protected-environment secret delivery, trusted collaborator
+and fork policy, loopback-only Jenkins publication, a least-privilege handoff
+machine user, separate administrator and agent identities, a low-privilege
+runner without Docker or Jenkins-state access, Stage-scoped secret bindings, and
+sanitized evidence. Use `docs/installation-readiness-checklist.md`; do not paste
+Jenkins console output as evidence.
+
+## Troubleshooting
+
+- Preflight failures: fix the named host capability as an administrator, then
+  rerun preflight. Do not weaken a check or add privilege escalation.
+- Offline runner: verify the user service and GitHub repository runner status;
+  an offline runner leaves workflow work queued and does not justify bypassing
+  the protected workflow.
+- Offline agent: check only the affected container and secret file, then use
+  one-at-a-time reconciliation after Jenkins is idle.
+- JCasC or Job DSL drift: stop new handoffs, restart from the approved commit,
+  and run `verify-live`; do not preserve UI drift as configuration.
+- Recovery mismatch: retain both files, reject the restore, and investigate the
+  approved commit, pin authority, size, and digest without opening or copying
+  sensitive contents into an issue.
+- Partial restore: keep Jenkins stopped, destroy only the failed empty-state
+  project volume, and retry from the verified archive.
+
 ## Verification
 
 Run the empty-state runtime acceptance check with:
@@ -194,8 +384,10 @@ controller volume, and proves JCasC and Job DSL restore repository state. Agent
 tmpfs workspaces are recreated empty. Cleanup removes the isolated smoke volume.
 
 `integration/scripts/verify` includes this smoke check after the Python package
-checks. It therefore requires the supported Docker host and network access when
-the controller image is not already cached.
+checks. The smoke also replaces the controller passwords and Jenkins inbound
+agent HMAC key, proves all five newly issued registration secrets differ, and
+reconnects every agent. It therefore requires the supported Docker host and
+network access when the controller image is not already cached.
 
 ## Pin Maintenance
 

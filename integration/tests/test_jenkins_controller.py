@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -59,6 +61,22 @@ def _write_fake_deployment_tools(fake_bin: Path) -> None:
         'case "$*" in\n'
         "  'version --format {{.Server.Os}}/{{.Server.Arch}}') "
         "printf 'linux/amd64\\n' ;;\n"
+        "  'version --format {{.Server.Version}}') printf '29.7.2\\n' ;;\n"
+        "  'compose version --short') printf '5.5.1\\n' ;;\n"
+        "  'volume inspect sdi-jenkins-'*) exit 1 ;;\n"
+        "  'network inspect sdi-jenkins-'*) exit 1 ;;\n"
+        "  'volume inspect --format '*' sdi-jenkins-'*) "
+        "for probe do :; done; printf '%s\\n' \"${probe#sdi-jenkins-}\" ;;\n"
+        "  'network create --label org.sdi.preflight='*) "
+        'for argument do case "$argument" in org.sdi.preflight=*) '
+        'printf \'%s\\n\' "${argument#*=}" > "$DOCKER_LOG.network-owner" ;; '
+        "esac; done; "
+        f"printf '%s\\n' '{'a' * 64}' ;;\n"
+        "  'network inspect --format '*) cat \"$DOCKER_LOG.network-owner\" ;;\n"
+        "  *' ps --all --quiet') "
+        "[ \"${FORCE_KILL:-}\" != 1 ] || printf 'forced-container\\n' ;;\n"
+        "  'inspect --format {{.State.ExitCode}} forced-container') "
+        "printf '137\\n' ;;\n"
         "  'image inspect --format {{json .Config.Volumes}}'*) "
         "printf 'null\\n' ;;\n"
         "esac\n"
@@ -75,10 +93,26 @@ def _write_fake_deployment_tools(fake_bin: Path) -> None:
         f"printf '{FAKE_AGENT_IMAGES[1]}\\n' ;;\n"
         f"  *cv-fixture-v1.yaml) printf '{FAKE_AGENT_IMAGES[2]}\\n' ;;\n"
         f"  *cd-fixture-v1.yaml) printf '{FAKE_AGENT_IMAGES[3]}\\n' ;;\n"
+        "  *sdi_pipeline_integration._recovery_contracts*authority*) exit 0 ;;\n"
         "  *) exit 2 ;;\n"
         "esac\n"
     )
     uv.chmod(0o755)
+
+    for name, output in (("curl", ""), ("systemctl", "systemd 259")):
+        command = fake_bin / name
+        command.write_text(f"#!/bin/sh\nprintf '%s\\n' '{output}'\n")
+        command.chmod(0o755)
+    git = fake_bin / "git"
+    git.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        "  --version) printf '%s\\n' 'git version 2.53.0' ;;\n"
+        "  *'status --porcelain=v1 --untracked-files=all') exit 0 ;;\n"
+        "  *) exit 2 ;;\n"
+        "esac\n"
+    )
+    git.chmod(0o755)
 
 
 def _assert_plaintext_relocated_agent_url_is_rejected(
@@ -132,28 +166,68 @@ def _assert_single_agent_reconciliation(
     config: Path,
     fake_bin: Path,
     docker_log: Path,
-    admin_secret: Path,
     unrelated_agent_secret: Path,
 ) -> None:
+    class IdleJenkinsHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if self.path == "/crumbIssuer/api/json":
+                body = b'{"crumbRequestField":"Jenkins-Crumb","crumb":"test"}'
+            elif self.path.startswith("/queue/api/json"):
+                body = b'{"items":[]}'
+            elif self.path.startswith("/job/pipeline-integration/api/json"):
+                body = b'{"builds":[]}'
+            elif self.path.startswith("/api/json"):
+                body = b'{"quietingDown":false}'
+            else:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, format: str, *arguments: object) -> None:  # noqa: A002
+            del format, arguments
+
     docker_log.write_text("")
-    admin_secret.chmod(0o000)
     unrelated_agent_secret.chmod(0o000)
-    subprocess.run(
-        [
-            JENKINS_ROOT / "bin" / "stack",
-            "--config",
-            config,
-            "reconcile-agent",
-            "cv",
-        ],
-        check=True,
-        capture_output=True,
-        env={
-            "DOCKER_LOG": str(docker_log),
-            "PATH": f"{fake_bin}:{os.environ['PATH']}",
-        },
-        text=True,
+    server = ThreadingHTTPServer(("127.0.0.1", 0), IdleJenkinsHandler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    original_config = config.read_text()
+    config.write_text(
+        original_config.replace(
+            "JENKINS_HTTP_PORT=8080", f"JENKINS_HTTP_PORT={server.server_port}"
+        )
     )
+    try:
+        subprocess.run(
+            [
+                JENKINS_ROOT / "bin" / "stack",
+                "--config",
+                config,
+                "reconcile-agent",
+                "cv",
+            ],
+            check=True,
+            capture_output=True,
+            env={
+                "DOCKER_LOG": str(docker_log),
+                "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            },
+            text=True,
+        )
+    finally:
+        config.write_text(original_config)
+        server.shutdown()
+        thread.join()
+        server.server_close()
     reconcile_log = docker_log.read_text()
 
     assert "build cv" in reconcile_log
@@ -459,6 +533,21 @@ def test_stack_validate_uses_compose_and_rejects_insecure_secret_files(  # noqa:
     assert "config --quiet" in validation_log
     assert f"images={'|'.join(FAKE_AGENT_IMAGES)}" in validation_log
 
+    agent_secrets["cd"].unlink()
+    preflight = subprocess.run(
+        [JENKINS_ROOT / "bin" / "stack", "--config", config, "preflight"],
+        check=False,
+        capture_output=True,
+        env={
+            "DOCKER_LOG": str(docker_log),
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        },
+        text=True,
+    )
+    assert preflight.returncode == 0, preflight.stderr
+    agent_secrets["cd"].write_text("e" * 64)
+    agent_secrets["cd"].chmod(0o600)
+
     valid_config = config.read_text()
     config.write_text(
         valid_config.replace(
@@ -520,11 +609,44 @@ def test_stack_validate_uses_compose_and_rejects_insecure_secret_files(  # noqa:
     lifecycle_log = docker_log.read_text()
     _assert_stack_lifecycle_log(lifecycle_log)
 
+    forced_stop = subprocess.run(
+        [JENKINS_ROOT / "bin" / "stack", "--config", config, "stop"],
+        check=False,
+        capture_output=True,
+        env={
+            "DOCKER_LOG": str(docker_log),
+            "FORCE_KILL": "1",
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        },
+        text=True,
+    )
+    assert forced_stop.returncode == 2
+    assert "required forced termination" in forced_stop.stderr
+
+    invalid_project = subprocess.run(
+        [
+            JENKINS_ROOT / "bin" / "stack",
+            "--project-name",
+            "INVALID",
+            "--config",
+            config,
+            "validate",
+        ],
+        check=False,
+        capture_output=True,
+        env={
+            "DOCKER_LOG": str(docker_log),
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        },
+        text=True,
+    )
+    assert invalid_project.returncode == 2
+    assert "project name must start" in invalid_project.stderr
+
     _assert_single_agent_reconciliation(
         config,
         fake_bin,
         docker_log,
-        admin_secret,
         agent_secrets["ci"],
     )
 
