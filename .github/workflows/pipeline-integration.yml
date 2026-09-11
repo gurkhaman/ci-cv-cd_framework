@@ -125,11 +125,11 @@ jobs:
           ARTIFACT_URL: ${{ steps.publication.outputs.artifact-url }}
           EXECUTION_ID: ${{ steps.identify.outputs.execution_id }}
           HANDOFF_OUTCOME: ${{ steps.handoff.outcome }}
+          JOB_STATUS: ${{ job.status }}
           OUTPUT_ROOT: ${{ steps.identify.outputs.output_root }}
           PUBLICATION_OUTCOME: ${{ steps.publication.outcome }}
           UV_CACHE_DIR: ${{ runner.temp }}/uv-cache
           UV_PYTHON_INSTALL_DIR: ${{ runner.temp }}/uv-python
-          WORKFLOW_CANCELLED: ${{ cancelled() }}
         run: |
           set -euo pipefail
           SUMMARY_ARGUMENTS=(
@@ -143,7 +143,7 @@ jobs:
             --artifact-name "pipeline-integration-$EXECUTION_ID"
             --artifact-url "$ARTIFACT_URL"
           )
-          if [ "$WORKFLOW_CANCELLED" = true ]; then
+          if [ "$JOB_STATUS" = cancelled ]; then
             SUMMARY_ARGUMENTS+=(--workflow-cancelled)
           fi
           uv run --frozen --project integration sdi-integration github-summary \
