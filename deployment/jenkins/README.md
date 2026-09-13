@@ -270,16 +270,22 @@ deployment/jenkins/bin/recovery restore \
 Restore verifies the manifest schema, archive size and digest, commit, and all
 pins before touching Docker. It refuses a nonempty target volume. Before the
 target restore, it creates a private disposable volume from the archive, removes
-only Jenkins's inbound-agent HMAC key there, starts the controller with the new
-identity passwords, asks Jenkins to issue five replacement registration
-secrets, and starts all agents. `verify-live` proves those successor credentials
-and repository convergence before the external files are replaced or the
-target receives the replacement HMAC key. The disposable stack is then stopped
-and removed. The target archive is restored with the proven key, the exact stack
-is started, and convergence is proved again. Archived controller and agent
-credentials therefore never become active on the target. A failed target
-extraction leaves a partial volume that must be destroyed before retrying. Keep
-the archive until restoration and the protected-main Fixture check are accepted.
+every archived user API token and Jenkins's inbound-agent HMAC key there, starts
+the controller with the new identity passwords, asks Jenkins to issue five
+replacement registration secrets, and starts all agents. `verify-live` proves
+those successor credentials and repository convergence before the external
+files are replaced or the target receives the replacement HMAC key. The
+disposable stack is then stopped and removed. The target archive is restored,
+its archived user API tokens are removed, and the proven replacement HMAC key is
+installed before the exact stack starts and convergence is proved again.
+Archived controller and agent credentials therefore never become active on the
+target. Before restarting the runner or protected-environment handoff, the
+administrator must issue a successor token for the handoff machine user, replace
+`SDI_JENKINS_API_TOKEN` in the protected `pipeline-integration-jenkins`
+environment, and perform the documented machine-user preflight without exposing
+the token. A failed target extraction leaves a partial volume that must be
+destroyed before retrying. Keep the archive until restoration and the
+protected-main Fixture check are accepted.
 
 ## Clean Reconstruction
 

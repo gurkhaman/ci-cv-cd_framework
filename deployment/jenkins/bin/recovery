@@ -152,6 +152,14 @@ done < "$installation"
 [ -n "$controller_image" ] || fail 'controller image is absent from the installation authority'
 volume=${project_name}_jenkins-home
 
+remove_archived_api_tokens() {
+    restored_volume=$1
+    docker run --rm --user 0:0 --volume "$restored_volume:/target" \
+        --volume "$root/libexec/RemoveArchivedApiTokens.java:/RemoveArchivedApiTokens.java:ro" \
+        "$controller_image" java /RemoveArchivedApiTokens.java \
+        /target/users || fail 'historical Jenkins API token removal failed'
+}
+
 case "$operation" in
     snapshot)
         command -v docker >/dev/null 2>&1 || fail 'Docker Engine is required'
@@ -326,6 +334,7 @@ case "$operation" in
             --volume "$staging_volume:/target" "$controller_image" \
             tar --extract --gzip --numeric-owner --directory /target --file - \
             < "$archive" || fail 'credential staging restore failed'
+        remove_archived_api_tokens "$staging_volume"
         docker run --rm --user 0:0 --volume "$staging_volume:/target" \
             "$controller_image" sh -c \
             'rm -f -- /target/secrets/jenkins.slaves.JnlpSlaveAgentProtocol.secret' || \
@@ -382,6 +391,7 @@ case "$operation" in
             "$controller_image" tar --extract --gzip --numeric-owner \
             --directory /target --file - < "$archive" || \
             fail 'controller volume restore failed; destroy the partial volume before retrying'
+        remove_archived_api_tokens "$volume"
         docker run --interactive --rm --user 0:0 --volume "$volume:/target" \
             "$controller_image" sh -c \
             'test -f /target/secrets/jenkins.slaves.JnlpSlaveAgentProtocol.secret && cat > /target/secrets/jenkins.slaves.JnlpSlaveAgentProtocol.secret && chmod 600 /target/secrets/jenkins.slaves.JnlpSlaveAgentProtocol.secret' \

@@ -16,6 +16,18 @@ INSTALLATION = REPOSITORY_ROOT / "deployment" / "installation.env"
 RECOVERY = REPOSITORY_ROOT / "deployment" / "jenkins" / "bin" / "recovery"
 RUNNER = REPOSITORY_ROOT / "deployment" / "github-runner" / "bin" / "runner"
 SMOKE_CHECK = REPOSITORY_ROOT / "deployment" / "jenkins" / "bin" / "smoke-check"
+TOKEN_REMOVER = (
+    REPOSITORY_ROOT
+    / "deployment"
+    / "jenkins"
+    / "libexec"
+    / "RemoveArchivedApiTokens.java"
+)
+CONTROLLER_IMAGE = next(
+    line.partition("=")[2]
+    for line in INSTALLATION.read_text(encoding="utf-8").splitlines()
+    if line.startswith("SDI_JENKINS_CONTROLLER_IMAGE=")
+)
 
 
 def _run_recovery(
@@ -33,6 +45,29 @@ def _run_recovery(
             "SDI_RECOVERY_STACK_COMMAND": str(fake_bin / "stack"),
             "SDI_RECOVERY_SMOKE_CHECK_COMMAND": str(fake_bin / "smoke-check"),
         },
+        text=True,
+    )
+
+
+def _run_token_remover(root: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--user",
+            "0:0",
+            "--volume",
+            f"{root}:/target",
+            "--volume",
+            f"{TOKEN_REMOVER}:/RemoveArchivedApiTokens.java:ro",
+            CONTROLLER_IMAGE,
+            "java",
+            "/RemoveArchivedApiTokens.java",
+            "/target/users",
+        ],
+        check=False,
+        capture_output=True,
         text=True,
     )
 
@@ -127,6 +162,155 @@ def _write_fresh_credential_config(tmp_path: Path, manifest: Path) -> Path:
     config = tmp_path / "controller.env"
     config.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return config
+
+
+def _assert_restore_credential_rotation_order(operations: list[str]) -> None:
+    staging_restore = next(
+        index for index, line in enumerate(operations) if "tar --extract" in line
+    )
+    key_removal = next(
+        index
+        for index, line in enumerate(operations)
+        if "rm -f -- /target/secrets/jenkins.slaves" in line
+    )
+    token_removals = [
+        (index, line)
+        for index, line in enumerate(operations)
+        if "RemoveArchivedApiTokens.java" in line
+    ]
+    assert len(token_removals) == 2
+    assert all(
+        "java /RemoveArchivedApiTokens.java" in line for _, line in token_removals
+    )
+    assert all(line.endswith("/target/users") for _, line in token_removals)
+    staging_token_removal = next(
+        index for index, line in token_removals if "sdi-recovery-credentials" in line
+    )
+    target_token_removal = next(
+        index
+        for index, line in token_removals
+        if "recovery-test_jenkins-home:/target" in line
+    )
+    staging_start = next(
+        index
+        for index, line in enumerate(operations)
+        if "sdi-recovery-credentials" in line and line.endswith(" start-controller")
+    )
+    provision = next(
+        index for index, line in enumerate(operations) if line.startswith("smoke-check")
+    )
+    staging_verify = next(
+        index
+        for index, line in enumerate(operations)
+        if "sdi-recovery-credentials" in line and "verify-live" in line
+    )
+    target_restore = max(
+        index for index, line in enumerate(operations) if "tar --extract" in line
+    )
+    key_install = next(
+        index
+        for index, line in enumerate(operations)
+        if "cat > /target/secrets/jenkins.slaves" in line
+    )
+    target_start = next(
+        index
+        for index, line in enumerate(operations)
+        if "stack --config" in line
+        and "sdi-recovery-credentials" not in line
+        and line.endswith(" start")
+    )
+    assert staging_restore < token_removals[0][0]
+    assert staging_restore < staging_token_removal < key_removal < staging_start
+    assert staging_start < provision < staging_verify
+    assert staging_verify < target_restore < target_token_removal < key_install
+    assert key_install < target_start
+
+
+def test_archived_api_tokens_are_removed_with_user_config_preserved(
+    tmp_path: Path,
+) -> None:
+    users = tmp_path / "users"
+    user = users / "archived-user"
+    user.mkdir(parents=True)
+    config = user / "config.xml"
+    config.write_text(
+        "<?xml version='1.1' encoding='UTF-8'?>\n"
+        "<user><properties>"
+        "<jenkins.security.ApiTokenProperty><tokenStore>secret</tokenStore>"
+        "</jenkins.security.ApiTokenProperty>"
+        "<example.Property><value>preserved</value></example.Property>"
+        "</properties></user>\n",
+        encoding="utf-8",
+    )
+    config.chmod(0o640)
+    original_stat = config.stat()
+    stats = user / "apiTokenStats.xml"
+    stats.write_text("<apiTokenStats/>\n", encoding="utf-8")
+
+    completed = _run_token_remover(tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    serialized = config.read_text(encoding="utf-8")
+    assert "jenkins.security.ApiTokenProperty" not in serialized
+    assert "<value>preserved</value>" in serialized
+    assert config.stat().st_mode & 0o777 == 0o640
+    assert config.stat().st_uid == original_stat.st_uid
+    assert config.stat().st_gid == original_stat.st_gid
+    assert not stats.exists()
+
+
+def test_archived_api_token_removal_fails_closed_for_invalid_xml(
+    tmp_path: Path,
+) -> None:
+    users = tmp_path / "users"
+    user = users / "archived-user"
+    user.mkdir(parents=True)
+    config = user / "config.xml"
+    invalid = "<user><jenkins.security.ApiTokenProperty></user>\n"
+    config.write_text(invalid, encoding="utf-8")
+
+    completed = _run_token_remover(tmp_path)
+
+    assert completed.returncode == 1
+    assert completed.stderr.strip() == "archived API token removal failed"
+    assert config.read_text(encoding="utf-8") == invalid
+
+
+def test_archived_api_token_removal_rejects_a_users_symlink(tmp_path: Path) -> None:
+    archived_users = tmp_path / "archived-users"
+    user = archived_users / "archived-user"
+    user.mkdir(parents=True)
+    config = user / "config.xml"
+    config.write_text(
+        "<user><properties><jenkins.security.ApiTokenProperty/></properties></user>\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "users").symlink_to(archived_users.name, target_is_directory=True)
+
+    completed = _run_token_remover(tmp_path)
+
+    assert completed.returncode == 1
+    assert completed.stderr.strip() == "archived API token removal failed"
+    assert "jenkins.security.ApiTokenProperty" in config.read_text(encoding="utf-8")
+
+
+def test_archived_api_token_removal_rejects_a_user_symlink(tmp_path: Path) -> None:
+    users = tmp_path / "users"
+    users.mkdir()
+    archived_user = tmp_path / "archived-user"
+    archived_user.mkdir()
+    config = archived_user / "config.xml"
+    config.write_text(
+        "<user><properties><jenkins.security.ApiTokenProperty/></properties></user>\n",
+        encoding="utf-8",
+    )
+    (users / "linked-user").symlink_to(archived_user, target_is_directory=True)
+
+    completed = _run_token_remover(tmp_path)
+
+    assert completed.returncode == 1
+    assert completed.stderr.strip() == "archived API token removal failed"
+    assert "jenkins.security.ApiTokenProperty" in config.read_text(encoding="utf-8")
 
 
 def test_reviewed_installation_authority_matches_all_pinned_sources() -> None:
@@ -381,39 +565,7 @@ def test_restore_verifies_before_writing_an_empty_volume(tmp_path: Path) -> None
     assert "preflight" in operations[0]
     assert "volume inspect recovery-test_jenkins-home" in operations[1]
     assert "find /target -mindepth 1 -print -quit" in operations[2]
-    staging_restore = next(
-        index for index, line in enumerate(operations) if "tar --extract" in line
-    )
-    key_removal = next(
-        index
-        for index, line in enumerate(operations)
-        if "rm -f -- /target/secrets/jenkins.slaves" in line
-    )
-    provision = next(
-        index for index, line in enumerate(operations) if line.startswith("smoke-check")
-    )
-    staging_verify = next(
-        index
-        for index, line in enumerate(operations)
-        if "sdi-recovery-credentials" in line and "verify-live" in line
-    )
-    target_restore = max(
-        index for index, line in enumerate(operations) if "tar --extract" in line
-    )
-    key_install = next(
-        index
-        for index, line in enumerate(operations)
-        if "cat > /target/secrets/jenkins.slaves" in line
-    )
-    target_start = next(
-        index
-        for index, line in enumerate(operations)
-        if "stack --config" in line
-        and "sdi-recovery-credentials" not in line
-        and line.endswith(" start")
-    )
-    assert staging_restore < key_removal < provision < staging_verify
-    assert staging_verify < target_restore < key_install < target_start
+    _assert_restore_credential_rotation_order(operations)
     config_values: dict[str, str] = {}
     for line in config.read_text().splitlines():
         key, _, value = line.partition("=")
