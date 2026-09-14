@@ -182,6 +182,15 @@ def test_github_examples_target_one_exact_run(tmp_path: Path) -> None:
     assert len(exact_run_entries) == 4
     assert all("1000" in entry for entry in exact_run_entries)
     assert any(f"pipeline-integration-{execution_id}" in entry for entry in entries)
+    repository_entries = [
+        entry
+        for entry in entries
+        if "api.github.com/repos/" in entry
+        or "--repository" in entry
+        or "--repo" in entry
+    ]
+    assert len(repository_entries) == 5
+    assert all("open-SDI/ci-cv-cd_framework" in entry for entry in repository_entries)
 
 
 def test_runner_examples_form_one_supported_lifecycle(tmp_path: Path) -> None:
@@ -232,7 +241,7 @@ def test_runner_examples_form_one_supported_lifecycle(tmp_path: Path) -> None:
         "remove",
     ]
     assert entries[2][1:3] == [
-        "https://github.com/gurkhaman/ci-cv-cd_framework",
+        "https://github.com/open-SDI/ci-cv-cd_framework",
         "jenkins-handoff-host",
     ]
     assert entries[7][3:] == ["true", "removal-token"]

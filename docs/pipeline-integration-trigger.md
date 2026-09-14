@@ -29,7 +29,7 @@ Before enabling dispatch:
 
 For the tracked local Jenkins deployment, use the loopback base URL, job path
 `pipeline-integration`, repository identity
-`github.com/gurkhaman/ci-cv-cd_framework`, and username `github-handoff`. The
+`github.com/open-SDI/ci-cv-cd_framework`, and username `github-handoff`. The
 runner must be on the Jenkins host because Jenkins is not externally published.
 
 The workflow's job-level `github.ref == 'refs/heads/main'` condition prevents a
@@ -37,13 +37,13 @@ non-`main` dispatch from being routed to the privileged runner or requesting the
 environment. The environment's protected-branch restriction is an independent
 secret-release control. The job grants only `contents: read`.
 
-The personal-account repository cannot enforce workflow-restricted runner
-groups. Its supported threat model therefore trusts every write collaborator
-and protected-main reviewer and treats the custom label as an operational
-selector. Public users cannot manually dispatch the workflow. Never approve an
-external fork workflow for this runner. Transfer the repository to an
-organization and use a workflow-restricted runner group if external
-contributions or less-trusted write access are introduced.
+The supported installation uses a repository-scoped runner even though the
+upstream repository belongs to an organization. Its threat model trusts every
+write collaborator and protected-main reviewer and treats the custom label as
+an operational selector. Public users cannot manually dispatch the workflow.
+Never approve untrusted external-fork workflow code for this runner. An
+organization workflow-restricted runner group requires a separately reviewed
+extension to the runner interface before it can replace this configuration.
 
 ## Dispatch One Request
 
@@ -73,7 +73,7 @@ curl --fail-with-body \
   --header 'Accept: application/vnd.github+json' \
   --header 'Authorization: Bearer <fine-grained-token>' \
   --header 'X-GitHub-Api-Version: 2026-03-10' \
-  https://api.github.com/repos/gurkhaman/ci-cv-cd_framework/actions/workflows/pipeline-integration.yml/dispatches \
+  https://api.github.com/repos/open-SDI/ci-cv-cd_framework/actions/workflows/pipeline-integration.yml/dispatches \
   --data '{"ref":"main","inputs":{"run_request_path":"runs/s-04/s-04-tc-03-c-01-fixture.yaml"}}'
 ```
 
@@ -96,7 +96,7 @@ Run all six through the same workflow contract:
 
 ```sh acceptance=s04-dispatch
 uv run --frozen --project integration sdi-integration dispatch-s-04 \
-  --repository gurkhaman/ci-cv-cd_framework
+  --repository open-SDI/ci-cv-cd_framework
 ```
 
 The helper uses authenticated `gh`, prints each exact returned browser URL,
@@ -115,18 +115,18 @@ Observe the exact run:
 
 ```sh acceptance=github-observe
 gh run watch <workflow-run-id> \
-  --repo gurkhaman/ci-cv-cd_framework \
+  --repo open-SDI/ci-cv-cd_framework \
   --exit-status
 
 gh run view <workflow-run-id> \
-  --repo gurkhaman/ci-cv-cd_framework
+  --repo open-SDI/ci-cv-cd_framework
 ```
 
 After the summary reports the Execution ID, retrieve its one artifact:
 
 ```sh acceptance=github-download
 gh run download <workflow-run-id> \
-  --repo gurkhaman/ci-cv-cd_framework \
+  --repo open-SDI/ci-cv-cd_framework \
   --name pipeline-integration-<execution-id> \
   --dir artifacts/pipeline-integration-<execution-id>
 ```
@@ -161,7 +161,7 @@ typed receipt remains authoritative for the red handoff status.
 Cancel only the exact GitHub run:
 
 ```sh acceptance=github-cancel
-gh run cancel <workflow-run-id> --repo gurkhaman/ci-cv-cd_framework
+gh run cancel <workflow-run-id> --repo open-SDI/ci-cv-cd_framework
 ```
 
 GitHub retains the cancelled conclusion. The foreground handoff command asks
