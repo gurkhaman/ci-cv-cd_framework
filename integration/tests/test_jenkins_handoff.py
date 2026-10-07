@@ -25,7 +25,7 @@ SOURCE_ROOT = Path(__file__).resolve().parents[2]
 RUN_REQUEST_PATH = "runs/s-04/s-04-tc-03-c-01-fixture.yaml"
 COMMITTED_FILES = (
     RUN_REQUEST_PATH,
-    "requirements/s-04/deliver-book-to-joe.yaml",
+    "requirements/s-04/deliver-book-to-joe.md",
     "profiles/s-04/waffle-native-arm64.yaml",
     "integration/stage-profiles/composition-v1.yaml",
     "integration/stage-profiles/image-build-v1.yaml",

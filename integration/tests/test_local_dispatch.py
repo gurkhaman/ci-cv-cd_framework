@@ -59,7 +59,7 @@ RUN_REQUEST_PATH = S04_RUN_REQUEST_PATHS[0]
 STAGES = ["composition", "image_build", "cv", "cd"]
 COMMITTED_FILES = (
     *S04_RUN_REQUEST_PATHS,
-    "requirements/s-04/deliver-book-to-joe.yaml",
+    "requirements/s-04/deliver-book-to-joe.md",
     "profiles/s-04/waffle-native-arm64.yaml",
     "profiles/s-04/waffle-xycar-amd64.yaml",
     "profiles/s-04/burger-native-arm64.yaml",

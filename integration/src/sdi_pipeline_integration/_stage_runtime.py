@@ -52,7 +52,7 @@ from ._stage_contracts import (
     contains_sensitive_material,
     require_unique_paths,
 )
-from ._yaml_input import InputError, parse_yaml
+from ._yaml_input import InputError, parse_front_matter, parse_yaml
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -144,6 +144,8 @@ def _validate_source_model(
     try:
         if source.media_type == "application/yaml":
             parsed = parse_yaml(source.content, source.source_path)
+        elif source.media_type == "text/markdown":
+            parsed, _body = parse_front_matter(source.content, source.source_path)
         elif source.media_type == "application/json":
             parsed = parse_json(
                 source.content,
@@ -842,7 +844,7 @@ def committed_stage_sources(
         ),
         "sdi.mobility-requirements-specification/v1": (
             "requirements_specification",
-            "application/yaml",
+            "text/markdown",
         ),
         "sdi.target-execution-profile/v1": (
             "target_profile",

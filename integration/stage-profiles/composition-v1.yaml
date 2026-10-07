@@ -8,8 +8,8 @@ inputs:
     media_type: application/yaml
     schema_version: sdi.pipeline-integration-run-request/v1
   - slot: requirements_specification
-    path: requirements-specification.yaml
-    media_type: application/yaml
+    path: requirements-specification.md
+    media_type: text/markdown
     schema_version: sdi.mobility-requirements-specification/v1
   - slot: target_profile
     path: target-profile.yaml

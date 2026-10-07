@@ -33,11 +33,11 @@
       "slot": "target_profile"
     },
     {
-      "sha256": "b9693c901b97e40056c6d2f909c53d21956c2d9fd21064dcf1f393b1ff253b2b",
+      "sha256": "9b8fd79c4b281d2cbc54fe5b17c6d5a094a3b8530ba060c4bea6274c7006a619",
       "slot": "composition_blueprint"
     },
     {
-      "sha256": "4aea65435ed187b2ef1c956b86e3cd41786d3f2e4dcff42f42cb2bf15ef10f11",
+      "sha256": "a0f661fd237abfa4d49b46f2c3e1ac48b556d3fd9e64dea4d724c592a6f09ccd",
       "slot": "deployment_schema"
     }
   ],

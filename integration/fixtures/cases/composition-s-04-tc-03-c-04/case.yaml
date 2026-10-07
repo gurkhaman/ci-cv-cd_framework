@@ -3,11 +3,11 @@ case_id: composition-s-04-tc-03-c-04
 stage: composition
 match_inputs:
   - slot: run_request
-    byte_size: 256
-    sha256: f635c7e8425efe24b1a5d57b4a725913ff8d9ec708c157a005dcdedae2be0e2d
+    byte_size: 254
+    sha256: d74a64af9244be07b66bde5d5bd1db4b77bec499dd4640979104968f78cb7115
   - slot: requirements_specification
-    byte_size: 2260
-    sha256: 01b21a6bff3f18c12015a98e42c3140c0242c7945410f30bc4cee8fc010915e5
+    byte_size: 8550
+    sha256: 852e614e8eb9795c775ce61fe55ca507c39a2e40de40be897efe0e6ce1704b55
   - slot: target_profile
     byte_size: 191
     sha256: 4e92955a79737dd5ad317c25fee8d936495f5b37b35b495e523468796c17cdec
@@ -20,12 +20,12 @@ reason:
 outputs:
   - slot: composition_blueprint
     source_path: composition-blueprint.json
-    byte_size: 1177
-    sha256: b9693c901b97e40056c6d2f909c53d21956c2d9fd21064dcf1f393b1ff253b2b
+    byte_size: 1355
+    sha256: 9b8fd79c4b281d2cbc54fe5b17c6d5a094a3b8530ba060c4bea6274c7006a619
   - slot: deployment_schema
     source_path: deployment-schema.json
     byte_size: 982
-    sha256: 4aea65435ed187b2ef1c956b86e3cd41786d3f2e4dcff42f42cb2bf15ef10f11
+    sha256: a0f661fd237abfa4d49b46f2c3e1ac48b556d3fd9e64dea4d724c592a6f09ccd
 diagnostic:
   source_path: diagnostic.txt
   byte_size: 96

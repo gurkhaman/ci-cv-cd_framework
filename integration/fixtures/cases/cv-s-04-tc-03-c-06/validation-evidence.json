@@ -11,7 +11,7 @@
   "schema_version": "sdi.validation-evidence/v1",
   "source_inputs": [
     {
-      "sha256": "01b21a6bff3f18c12015a98e42c3140c0242c7945410f30bc4cee8fc010915e5",
+      "sha256": "852e614e8eb9795c775ce61fe55ca507c39a2e40de40be897efe0e6ce1704b55",
       "slot": "requirements_specification"
     },
     {
@@ -19,15 +19,15 @@
       "slot": "target_profile"
     },
     {
-      "sha256": "12cd5ebf4ce070edcb9b0310ab1ef87e514f89c5039ac25d9598e69f68aa5d01",
+      "sha256": "2dcbce547a0ada7a08f8986b9eada4fecc70b4f46d294dab427f97c502cbb18d",
       "slot": "composition_blueprint"
     },
     {
-      "sha256": "2ec4fccb45f5951aa2c8f12f5532b4b0eed5cb30078e50a699aa378fb23f2829",
+      "sha256": "6b0b70c3760edfed1fe2a3b747393b7c2d0ad61f15ea4fe170fd4e74f63f5beb",
       "slot": "deployment_schema"
     },
     {
-      "sha256": "43b3f20bc5255ad3f534f544b3c91a3e47e083386a583f2d5355bcf13aafa6b3",
+      "sha256": "6023f722605fccdf0f6b622dabcb1a5212d7661eaa36b3922e2bcd639535a5a2",
       "slot": "image_build_result"
     }
   ],

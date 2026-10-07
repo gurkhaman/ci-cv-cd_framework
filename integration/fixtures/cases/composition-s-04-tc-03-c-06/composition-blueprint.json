@@ -4,7 +4,14 @@
   "evidence_basis": "fixture",
   "profile_id": "burger-jetson-arm64",
   "requirement_ids": [
-    "deliver-book-to-joe"
+    "secure-book",
+    "accept-spoken-request",
+    "resolve-rendezvous",
+    "navigate-to-rendezvous",
+    "verify-recipient-face",
+    "transfer-book",
+    "acknowledge-receipt",
+    "return-to-origin"
   ],
   "scenario_id": "S-04",
   "schema_version": "sdi.composition-blueprint/v1",
@@ -31,11 +38,11 @@
   ],
   "source_inputs": [
     {
-      "sha256": "095e4e8dc730edac7cb16ac92aa8218ffdb93c52afb4d957335b979956a8d668",
+      "sha256": "2af75ef28874f9833b786b26cecf59b4f343276bdfbf4da6e64f166ff0b78e71",
       "slot": "run_request"
     },
     {
-      "sha256": "01b21a6bff3f18c12015a98e42c3140c0242c7945410f30bc4cee8fc010915e5",
+      "sha256": "852e614e8eb9795c775ce61fe55ca507c39a2e40de40be897efe0e6ce1704b55",
       "slot": "requirements_specification"
     },
     {

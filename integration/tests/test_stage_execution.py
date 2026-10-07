@@ -12,7 +12,7 @@ import pytest
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
 COMMITTED_FILES = (
     "runs/s-04/s-04-tc-03-c-01-fixture.yaml",
-    "requirements/s-04/deliver-book-to-joe.yaml",
+    "requirements/s-04/deliver-book-to-joe.md",
     "profiles/s-04/waffle-native-arm64.yaml",
     "integration/stage-profiles/composition-v1.yaml",
     "deployment/jenkins/adapters/composition-fixture-v1.yaml",

@@ -98,8 +98,8 @@ BASE_INPUT_GRANTS = {
         "sdi.pipeline-integration-run-request/v1",
     ),
     "requirements_specification": (
-        "requirements-specification.yaml",
-        "application/yaml",
+        "requirements-specification.md",
+        "text/markdown",
         "sdi.mobility-requirements-specification/v1",
     ),
     "target_profile": (

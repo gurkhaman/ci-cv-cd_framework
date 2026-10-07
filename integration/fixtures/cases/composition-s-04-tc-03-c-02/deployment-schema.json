@@ -22,11 +22,11 @@
   "schema_version": "sdi.deployment-schema/v1",
   "source_inputs": [
     {
-      "sha256": "217d11ef71d1abad742670158d0714de43f8ede8234d70fe682d0dcbba0dc715",
+      "sha256": "615e81fcbc97b0778bb05a6d10b2a613f201face5cefaeae2f996b06c21033cc",
       "slot": "run_request"
     },
     {
-      "sha256": "01b21a6bff3f18c12015a98e42c3140c0242c7945410f30bc4cee8fc010915e5",
+      "sha256": "852e614e8eb9795c775ce61fe55ca507c39a2e40de40be897efe0e6ce1704b55",
       "slot": "requirements_specification"
     },
     {

@@ -20,11 +20,10 @@ from ._contracts import (
     Slug,
     reject_explicit_nulls,
 )
-from ._yaml_input import MAX_INPUT_BYTES, InputError, parse_yaml
+from ._yaml_input import InputError, parse_front_matter
 
 SERVICE_DESCRIPTION_SCHEMA_VERSION = "sdi.service-description/v1"
 DESCRIPTION_FILENAME = "SDI.md"
-FRONT_MATTER_FENCE = "---\n"
 
 type Architecture = Literal["amd64", "arm64", "noarch"]
 
@@ -158,35 +157,15 @@ class DescriptionFile:
     body: str
 
 
-def _split(raw: bytes, path: str) -> tuple[bytes, str]:
-    if len(raw) > MAX_INPUT_BYTES:
-        msg = f"{path}: file exceeds {MAX_INPUT_BYTES} bytes"
-        raise InputError(msg)
-    try:
-        text = raw.decode("utf-8", errors="strict")
-    except UnicodeDecodeError as error:
-        msg = f"{path}: file is not valid UTF-8"
-        raise InputError(msg) from error
-    end = text.find(f"\n{FRONT_MATTER_FENCE}", len(FRONT_MATTER_FENCE) - 1)
-    if not text.startswith(FRONT_MATTER_FENCE) or end == -1:
-        msg = f"{path}: expected YAML front matter between --- lines"
-        raise InputError(msg)
-    body = text[end + 1 + len(FRONT_MATTER_FENCE) :]
-    if not body.strip():
-        msg = f"{path}: Markdown body is empty"
-        raise InputError(msg)
-    return text[len(FRONT_MATTER_FENCE) : end + 1].encode(), body
-
-
 def _read(root: Path, file: Path) -> DescriptionFile:
     path = file.relative_to(root).as_posix()
     if file.is_symlink():
         msg = f"{path}: symbolic links are not read"
         raise InputError(msg)
     raw = file.read_bytes()
-    front_matter, body = _split(raw, path)
+    front_matter, body = parse_front_matter(raw, path)
     try:
-        description = ServiceDescription.model_validate(parse_yaml(front_matter, path))
+        description = ServiceDescription.model_validate(front_matter)
     except ValidationError as error:
         msg = f"{path}: contract validation failed: {error}"
         raise InputError(msg) from error

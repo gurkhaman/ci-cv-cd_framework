@@ -33,19 +33,19 @@
       "slot": "target_profile"
     },
     {
-      "sha256": "2074550e6b860c4570ea1cc8dffda90802dfe74784733234cc003c28a52f51f7",
+      "sha256": "64bc943eacce9731534beb5c9e4d7499c4e72fae4f3ce0857fbffa5908bf0e43",
       "slot": "composition_blueprint"
     },
     {
-      "sha256": "2779cc61d3e04c1aeaac2f7357f0bebdb5352898008134d53d5dd8156ab2249e",
+      "sha256": "f20f49e6456e141d997e37b33ec5530cf5f153229f945f11fa7ebbdfa7f5cade",
       "slot": "deployment_schema"
     },
     {
-      "sha256": "967165c3720bb7f43d704e5c40e7336aeb4c3b2ab161a968e8f0aaf30dd701f0",
+      "sha256": "0223c989d511a099f69c4bc19cc08f1ba60de4a822d856fd2d9bab75b7c84475",
       "slot": "image_build_result"
     },
     {
-      "sha256": "64599ac872f8c9862b5b9b7cc36320ea33a9b0100f470ef916d2ba66edaa86cb",
+      "sha256": "55198c787e85be4c8e1bc8fd914464eb934089869fa62fffe602e3cec37ac3f8",
       "slot": "validation_evidence"
     }
   ],
