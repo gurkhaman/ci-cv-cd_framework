@@ -108,6 +108,7 @@ def test_cli_writes_and_freshness_checks_contract_schemas(tmp_path: Path) -> Non
         "pipeline-integration-result-v1.schema.json",
         "pipeline-integration-run-request-v1.schema.json",
         "recovery-manifest-v1.schema.json",
+        "service-description-v1.schema.json",
         "stage-adapter-request-v1.schema.json",
         "stage-adapter-response-v1.schema.json",
         "stage-profile-v1.schema.json",

@@ -33,6 +33,7 @@ from ._recovery_contracts import (
 )
 from ._run_input import identify_committed_run
 from ._schemas import check_schemas, write_schemas
+from ._service_descriptions import read_service_repository
 from ._stage_contracts import AdapterDescriptor
 from ._stage_runtime import ExternalCancellation, execute_stage
 from ._yaml_input import InputError, parse_yaml
@@ -90,6 +91,11 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     )
     installation.add_argument("--repository", type=Path, required=True)
     installation.add_argument("--installation", type=Path, required=True)
+    services = commands.add_parser(
+        "validate-service-repository",
+        help="validate every SDI.md service description under a directory",
+    )
+    services.add_argument("--service-repository", type=Path, required=True)
     adapter_image = commands.add_parser(
         "adapter-image",
         help="print the immutable runtime image selected by an adapter descriptor",
@@ -280,6 +286,26 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
         except (OSError, ValueError, ValidationError) as error:
             sys.stderr.write(f"sdi-integration: {error}\n")
             return 2
+        return 0
+    if arguments.command == "validate-service-repository":
+        try:
+            files = read_service_repository(arguments.service_repository)
+        except (InputError, OSError) as error:
+            sys.stderr.write(f"sdi-integration: {error}\n")
+            return 2
+        listed = {
+            "services": [
+                {
+                    "path": file.path,
+                    "service_id": file.description.service_id,
+                    "sha256": file.sha256,
+                }
+                for file in files
+            ]
+        }
+        sys.stdout.write(
+            f"{json.dumps(listed, sort_keys=True, separators=(',', ':'))}\n"
+        )
         return 0
     if arguments.command == "adapter-image":
         try:

@@ -25,6 +25,7 @@ from ._domain_contracts import (
 from ._handoff_contracts import HandoffReceipt
 from ._recovery_contracts import RecoveryManifest
 from ._result_contracts import PipelineIntegrationResult
+from ._service_descriptions import ServiceDescription
 from ._stage_contracts import (
     AcceptedAttemptEnvelope,
     AdapterDescriptor,
@@ -47,6 +48,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "pipeline-integration-result-v1.schema.json": PipelineIntegrationResult,
     "pipeline-integration-run-request-v1.schema.json": RunRequest,
     "recovery-manifest-v1.schema.json": RecoveryManifest,
+    "service-description-v1.schema.json": ServiceDescription,
     "stage-adapter-request-v1.schema.json": AdapterRequest,
     "stage-adapter-response-v1.schema.json": AdapterResponse,
     "stage-profile-v1.schema.json": StageProfile,

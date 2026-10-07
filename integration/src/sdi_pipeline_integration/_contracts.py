@@ -127,7 +127,7 @@ NonNegativeWholeValueWithBasis = Annotated[
 ]
 
 
-def _reject_explicit_nulls(data: object, field_names: tuple[str, ...]) -> object:
+def reject_explicit_nulls(data: object, field_names: tuple[str, ...]) -> object:
     if isinstance(data, dict):
         values = cast("dict[object, object]", data)
         for field_name in field_names:
@@ -347,7 +347,7 @@ class ResourceCapacity(ContractModel):
     @classmethod
     def reject_explicit_unknowns(cls, data: object) -> object:
         """Require unknown quantities to be omitted rather than null."""
-        return _reject_explicit_nulls(
+        return reject_explicit_nulls(
             data,
             (
                 "cpu_cores",
@@ -389,7 +389,7 @@ class NetworkLink(ContractModel):
     @classmethod
     def reject_explicit_unknowns(cls, data: object) -> object:
         """Require unknown network quantities to be omitted rather than null."""
-        return _reject_explicit_nulls(data, ("latency_ms", "bandwidth_mbps"))
+        return reject_explicit_nulls(data, ("latency_ms", "bandwidth_mbps"))
 
     @model_validator(mode="after")
     def validate_link(self) -> Self:
@@ -419,7 +419,7 @@ class TargetExecutionProfile(ContractModel):
     @classmethod
     def reject_explicit_unknowns(cls, data: object) -> object:
         """Require absent optional sections to be omitted rather than null."""
-        return _reject_explicit_nulls(data, ("resources", "network_links"))
+        return reject_explicit_nulls(data, ("resources", "network_links"))
 
     @model_validator(mode="after")
     def validate_network_links(self) -> Self:
