@@ -12,9 +12,7 @@
     {
       "capability": "navigation",
       "depends_on": [],
-      "fixture_source": "negative-domain-conformance-fixture",
-      "service_id": "fixture-navigation",
-      "version": "1"
+      "service_id": "fixture-navigation"
     }
   ],
   "source_inputs": [
@@ -27,7 +25,7 @@
       "slot": "requirements_specification"
     },
     {
-      "sha256": "f5b84ae340f6a614780928aa8e5d5d4450236dc072e0672b494b1b84e99453f3",
+      "sha256": "84dd69df5d85c1c952e7894903ac6d42a16d1c8ae793f719c63fbd07cb0aab46",
       "slot": "target_profile"
     }
   ],

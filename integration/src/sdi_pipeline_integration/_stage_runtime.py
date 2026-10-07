@@ -509,6 +509,21 @@ def validate_stage_documents(  # noqa: C901, PLR0912, PLR0915
     }:
         msg = "deployment schema must place every accepted blueprint service once"
         raise InputError(msg)
+    profile = inputs.get("target_profile")
+    profile_hosts = (
+        profile.hosts if isinstance(profile, TargetExecutionProfile) else None
+    )
+    if profile_hosts is not None and any(
+        item.host is not None and item.host not in profile_hosts
+        for item in deployment.placements
+    ):
+        msg = "deployment schema names a host outside the target profile"
+        raise InputError(msg)
+    hosts = {
+        item.service_id: profile_hosts[item.host]
+        for item in deployment.placements
+        if profile_hosts is not None and item.host is not None
+    }
 
     if stage == "composition":
         if set(outputs) != {"composition_blueprint", "deployment_schema"}:
@@ -526,14 +541,14 @@ def validate_stage_documents(  # noqa: C901, PLR0912, PLR0915
     ):
         msg = "image-build result does not reference accepted composition outputs"
         raise InputError(msg)
-    profile = inputs.get("target_profile")
     if {item.service_id for item in image_build.images} != {
         item.service_id for item in blueprint.services
     }:
         msg = "image-build result does not cover the accepted services"
         raise InputError(msg)
-    if isinstance(profile, TargetExecutionProfile) and any(
-        item.architecture != profile.platform.architecture
+    if any(
+        item.service_id in hosts
+        and item.architecture != hosts[item.service_id].architecture
         for item in image_build.images
     ):
         msg = "image-build result does not match the accepted target architecture"
@@ -574,9 +589,8 @@ def validate_stage_documents(  # noqa: C901, PLR0912, PLR0915
         msg = "deployment result does not reference accepted prior outputs"
         raise InputError(msg)
     if {
-        (item.service_id, item.location_id)
-        for item in deployment_result.deployment_records
-    } != {(item.service_id, item.location_id) for item in deployment.placements}:
+        (item.service_id, item.host) for item in deployment_result.deployment_records
+    } != {(item.service_id, item.host) for item in deployment.placements}:
         msg = "deployment result does not cover every intended placement"
         raise InputError(msg)
 

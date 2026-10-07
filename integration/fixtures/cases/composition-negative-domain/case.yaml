@@ -9,8 +9,8 @@ match_inputs:
     byte_size: 2260
     sha256: 01b21a6bff3f18c12015a98e42c3140c0242c7945410f30bc4cee8fc010915e5
   - slot: target_profile
-    byte_size: 214
-    sha256: f5b84ae340f6a614780928aa8e5d5d4450236dc072e0672b494b1b84e99453f3
+    byte_size: 203
+    sha256: 84dd69df5d85c1c952e7894903ac6d42a16d1c8ae793f719c63fbd07cb0aab46
 behavior: response
 execution_conclusion: succeeded
 domain_outcome: failed
@@ -21,12 +21,12 @@ reason:
 outputs:
   - slot: composition_blueprint
     source_path: composition-blueprint.json
-    byte_size: 951
-    sha256: 223f83db926e9fa19aa11e2e9be549a19ab9fcfd4c63ae6d370e53a820d9da7f
+    byte_size: 866
+    sha256: 02ccfee58d3df0f6aa35015713e7b9fa14f1a9a6241b018310546a5abd540989
   - slot: deployment_schema
     source_path: deployment-schema.json
-    byte_size: 997
-    sha256: d046c59f3970577d954fddda8f40a40800d2e77a09f838b095b54ea229c38f6e
+    byte_size: 855
+    sha256: 1c350cc286b880b8dce8a14e304b1d22b5e7b2257cdb30a59a2c67b06b8fbc5d
 diagnostic:
   source_path: diagnostic.txt
   byte_size: 55

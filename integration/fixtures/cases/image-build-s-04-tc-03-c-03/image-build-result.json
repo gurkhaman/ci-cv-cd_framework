@@ -29,15 +29,15 @@
   "schema_version": "sdi.image-build-result/v1",
   "source_inputs": [
     {
-      "sha256": "a3485648fc8126551e036dd3ab2f8f59afcee0e9c084c5fa3a1347bc71144303",
+      "sha256": "1e27dc1298cbc98c7ed338df53fdbce1326225f26d0f5e76338690b1e964b788",
       "slot": "target_profile"
     },
     {
-      "sha256": "c79c8a1d9e3e35c1a298f0b199475bc1d0e419e22eb2eed796f9e973e56b938a",
+      "sha256": "7a2b605090ee4e143f3ad4e50ec5d3ea4f1eb21b50e165819ed10dff48008da0",
       "slot": "composition_blueprint"
     },
     {
-      "sha256": "ae668fc561211101e10a59894acf434f46dc6efe246f63b8d66c0b164ed9e554",
+      "sha256": "1024180c069da3188d0513a8ed0fdd1e67c82d2706c73b6eab530da936fc0bb0",
       "slot": "deployment_schema"
     }
   ],

@@ -19,49 +19,37 @@ S04_COMBINATION_EXPECTATIONS: dict[str, dict[str, str]] = {
         "run_request_path": "runs/s-04/s-04-tc-03-c-01-fixture.yaml",
         "profile_id": "waffle-native-arm64",
         "architecture": "arm64",
-        "resource_id": "waffle-native-system",
-        "location_id": "waffle-native",
-        "tier": "mobility",
+        "host": "waffle-native-system",
     },
     "C-02": {
         "run_request_path": "runs/s-04/s-04-tc-03-c-02-fixture.yaml",
         "profile_id": "waffle-xycar-amd64",
         "architecture": "amd64",
-        "resource_id": "xycar",
-        "location_id": "waffle-xycar",
-        "tier": "mobility",
+        "host": "xycar",
     },
     "C-03": {
         "run_request_path": "runs/s-04/s-04-tc-03-c-03-fixture.yaml",
         "profile_id": "burger-native-arm64",
         "architecture": "arm64",
-        "resource_id": "burger-native-system",
-        "location_id": "burger-native",
-        "tier": "mobility",
+        "host": "burger-native-system",
     },
     "C-04": {
         "run_request_path": "runs/s-04/s-04-tc-03-c-04-fixture.yaml",
         "profile_id": "burger-xycar-amd64",
         "architecture": "amd64",
-        "resource_id": "xycar",
-        "location_id": "burger-xycar",
-        "tier": "mobility",
+        "host": "xycar",
     },
     "C-05": {
         "run_request_path": "runs/s-04/s-04-tc-03-c-05-fixture.yaml",
         "profile_id": "waffle-jetson-arm64",
         "architecture": "arm64",
-        "resource_id": "jetson-nano",
-        "location_id": "waffle-jetson",
-        "tier": "edge",
+        "host": "orin",
     },
     "C-06": {
         "run_request_path": "runs/s-04/s-04-tc-03-c-06-fixture.yaml",
         "profile_id": "burger-jetson-arm64",
         "architecture": "arm64",
-        "resource_id": "jetson-nano",
-        "location_id": "burger-jetson",
-        "tier": "edge",
+        "host": "jetson-nano",
     },
 }
 S04_RUN_REQUEST_PATHS = tuple(
@@ -335,13 +323,7 @@ def test_dispatches_a_contract_valid_deterministic_four_stage_fixture(
     deployment = json.loads(
         (first_root / deployment_artifact["path"]).read_text(encoding="utf-8")
     )
-    assert deployment["locations"] == [
-        {
-            "location_id": expected["location_id"],
-            "resource_id": expected["resource_id"],
-            "tier": expected["tier"],
-        }
-    ]
+    assert {item["host"] for item in deployment["placements"]} == {expected["host"]}
     image_artifact = next(
         artifact
         for artifact in first_result["artifacts"]
@@ -935,7 +917,7 @@ def test_sensitive_domain_output_is_not_accepted_or_archived(
         )
         .read_text()
         .replace('"evidence_basis": "fixture"', '"evidence_basis": "implemented"')
-        .replace('"version": "1"', f'"version": "{sentinel}"', 1)
+        .replace('"capability": "localization"', f'"capability": "{sentinel}"', 1)
     )
     deployment = (
         (
@@ -981,6 +963,48 @@ response = {{
     assert (
         sentinel not in (bundle_root / "pipeline-integration-result.json").read_text()
     )
+
+
+def test_composition_placing_a_service_outside_the_profile_hosts_is_not_accepted(
+    tmp_path: Path,
+) -> None:
+    repository, _ = _commit_fixture_repository(tmp_path)
+    adapter = tmp_path / "unknown-host-adapter"
+    case = SOURCE_ROOT / "integration/fixtures/cases/composition-s-04-tc-03-c-01"
+    implemented = ('"evidence_basis": "fixture"', '"evidence_basis": "implemented"')
+    blueprint = (case / "composition-blueprint.json").read_text().replace(*implemented)
+    deployment = (
+        (case / "deployment-schema.json")
+        .read_text()
+        .replace(*implemented)
+        .replace('"host": "waffle-native-system"', '"host": "orin"', 1)
+    )
+    _write_composition_adapter(
+        adapter,
+        f"""
+(output / "outputs").mkdir()
+(output / "outputs/composition-blueprint.json").write_text({blueprint!r})
+(output / "outputs/deployment-schema.json").write_text({deployment!r})
+response = {{
+    "schema_version": "sdi.stage-adapter-response/v1",
+    "correlation": request["correlation"],
+    "execution_conclusion": "succeeded",
+    "domain_outcome": "succeeded",
+    "consumed_inputs": [item["slot"] for item in request["inputs"]],
+    "produced_outputs": ["composition_blueprint", "deployment_schema"],
+    "diagnostic": {{"present": False, "truncated": False}},
+}}
+(output / "response.json").write_text(json.dumps(response))
+""",
+    )
+    commit_sha = _select_adapter(repository, adapter, mode="implemented")
+
+    completed = _dispatch(repository, commit_sha, tmp_path / "bundle")
+
+    assert completed.returncode == 1, completed.stderr
+    result = json.loads(completed.stdout)
+    assert result["attempts"][0]["adapter_response_accepted"] is False
+    assert result["artifacts"] == []
 
 
 def test_bundle_validation_rejects_tampered_artifact_bytes(tmp_path: Path) -> None:
@@ -1144,7 +1168,7 @@ def test_bundle_validation_rejects_sensitive_domain_content(tmp_path: Path) -> N
     assert dispatched.returncode == 0, dispatched.stderr
     artifact_path = bundle_root / "stages/composition/composition-blueprint.json"
     document = json.loads(artifact_path.read_text(encoding="utf-8"))
-    document["services"][0]["version"] = "jenkins.internal"
+    document["services"][0]["capability"] = "jenkins.internal"
     content = (
         json.dumps(document, separators=(",", ":"), sort_keys=True) + "\n"
     ).encode()

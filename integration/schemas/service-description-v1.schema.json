@@ -47,7 +47,7 @@
           "type": "array"
         },
         "host_requirement": {
-          "$ref": "#/$defs/HostRequirement",
+          "$ref": "#/$defs/Baseline",
           "title": "Host Requirement"
         },
         "invocation": {
@@ -83,6 +83,33 @@
         "route"
       ],
       "title": "Artifact",
+      "type": "object"
+    },
+    "Baseline": {
+      "additionalProperties": false,
+      "description": "Operating system and ROS baseline of a host or required by an artifact.",
+      "properties": {
+        "jetpack": {
+          "minLength": 1,
+          "title": "Jetpack",
+          "type": "string"
+        },
+        "os": {
+          "minLength": 1,
+          "title": "Os",
+          "type": "string"
+        },
+        "ros_distro": {
+          "minLength": 1,
+          "title": "Ros Distro",
+          "type": "string"
+        }
+      },
+      "required": [
+        "os",
+        "ros_distro"
+      ],
+      "title": "Baseline",
       "type": "object"
     },
     "DeclaredProvenance": {
@@ -160,33 +187,6 @@
         }
       },
       "title": "Frames",
-      "type": "object"
-    },
-    "HostRequirement": {
-      "additionalProperties": false,
-      "description": "Baseline an artifact needs on its host.",
-      "properties": {
-        "jetpack": {
-          "minLength": 1,
-          "title": "Jetpack",
-          "type": "string"
-        },
-        "os": {
-          "minLength": 1,
-          "title": "Os",
-          "type": "string"
-        },
-        "ros_distro": {
-          "minLength": 1,
-          "title": "Ros Distro",
-          "type": "string"
-        }
-      },
-      "required": [
-        "os",
-        "ros_distro"
-      ],
-      "title": "HostRequirement",
       "type": "object"
     },
     "ImageRoute": {

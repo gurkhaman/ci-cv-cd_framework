@@ -3,24 +3,17 @@
   "combination_id": "C-05",
   "deployment_schema_id": "s-04-tc-03-c-05-deployment",
   "evidence_basis": "fixture",
-  "locations": [
-    {
-      "location_id": "waffle-jetson",
-      "resource_id": "jetson-nano",
-      "tier": "edge"
-    }
-  ],
   "placements": [
     {
-      "location_id": "waffle-jetson",
+      "host": "orin",
       "service_id": "fixture-localization"
     },
     {
-      "location_id": "waffle-jetson",
+      "host": "orin",
       "service_id": "fixture-navigation"
     },
     {
-      "location_id": "waffle-jetson",
+      "host": "orin",
       "service_id": "fixture-mission-control"
     }
   ],
@@ -37,7 +30,7 @@
       "slot": "requirements_specification"
     },
     {
-      "sha256": "d7a68cd54ddad8ccafbb0f34809faa00c84a20e7af69b34af259c99dd933faf3",
+      "sha256": "b18ef771accd5b48c7b50c2bc188fddedc0a599e5452f6d8bf40117a05983c93",
       "slot": "target_profile"
     }
   ],

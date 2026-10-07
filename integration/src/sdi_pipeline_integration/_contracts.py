@@ -48,14 +48,6 @@ RepositoryIdentity = Annotated[
     StringConstraints(strict=True, pattern=GITHUB_REPOSITORY_IDENTITY_PATTERN),
 ]
 type Quantity = StrictInt | StrictFloat
-type PositiveQuantity = (
-    Annotated[StrictInt, Field(gt=0)] | Annotated[StrictFloat, Field(gt=0)]
-)
-type NonNegativeQuantity = (
-    Annotated[StrictInt, Field(ge=0)] | Annotated[StrictFloat, Field(ge=0)]
-)
-type PositiveWholeQuantity = Annotated[StrictInt, Field(gt=0)]
-type NonNegativeWholeQuantity = Annotated[StrictInt, Field(ge=0)]
 
 
 class ContractModel(BaseModel):
@@ -99,30 +91,6 @@ class MeasuredValue[ValueT](ContractModel):
 
 ValueWithBasis = Annotated[
     PlaceholderValue[Quantity] | DeclaredValue[Quantity] | MeasuredValue[Quantity],
-    Field(discriminator="basis"),
-]
-PositiveValueWithBasis = Annotated[
-    PlaceholderValue[PositiveQuantity]
-    | DeclaredValue[PositiveQuantity]
-    | MeasuredValue[PositiveQuantity],
-    Field(discriminator="basis"),
-]
-NonNegativeValueWithBasis = Annotated[
-    PlaceholderValue[NonNegativeQuantity]
-    | DeclaredValue[NonNegativeQuantity]
-    | MeasuredValue[NonNegativeQuantity],
-    Field(discriminator="basis"),
-]
-PositiveWholeValueWithBasis = Annotated[
-    PlaceholderValue[PositiveWholeQuantity]
-    | DeclaredValue[PositiveWholeQuantity]
-    | MeasuredValue[PositiveWholeQuantity],
-    Field(discriminator="basis"),
-]
-NonNegativeWholeValueWithBasis = Annotated[
-    PlaceholderValue[NonNegativeWholeQuantity]
-    | DeclaredValue[NonNegativeWholeQuantity]
-    | MeasuredValue[NonNegativeWholeQuantity],
     Field(discriminator="basis"),
 ]
 
@@ -324,83 +292,78 @@ class MobilityTarget(ContractModel):
     kind: Literal["sdv", "sdr"]
 
 
-class ComputePlatform(ContractModel):
-    """The compute platform and CPU architecture used by a target."""
+class Baseline(ContractModel):
+    """Operating system and ROS baseline of a host or required by an artifact."""
 
-    platform_id: Slug
-    kind: Literal["native", "controller", "edge"]
+    os: NonBlank
+    ros_distro: NonBlank
+    jetpack: NonBlank | SkipJsonSchema[None] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_explicit_unknowns(cls, data: object) -> object:
+        """Require an unknown JetPack version to be omitted rather than null."""
+        return reject_explicit_nulls(data, ("jetpack",))
+
+
+class Endpoint(ContractModel):
+    """One ROS interface keyed by its exact name in a role map."""
+
+    type: NonBlank
+    reliability: Literal["reliable", "best_effort"] | SkipJsonSchema[None] = None
+    durability: Literal["volatile", "transient_local"] | SkipJsonSchema[None] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_explicit_unknowns(cls, data: object) -> object:
+        """Require undeclared QoS to be omitted rather than null."""
+        return reject_explicit_nulls(data, ("reliability", "durability"))
+
+
+type RoleMap = dict[NonBlank, Endpoint]
+ROLE_MAPS = (
+    "subscribes",
+    "publishes",
+    "service_servers",
+    "service_clients",
+    "action_servers",
+    "action_clients",
+)
+
+
+class RoleMaps(ContractModel):
+    """The six ROS role maps; an omitted map is unknown."""
+
+    subscribes: RoleMap | SkipJsonSchema[None] = None
+    publishes: RoleMap | SkipJsonSchema[None] = None
+    service_servers: RoleMap | SkipJsonSchema[None] = None
+    service_clients: RoleMap | SkipJsonSchema[None] = None
+    action_servers: RoleMap | SkipJsonSchema[None] = None
+    action_clients: RoleMap | SkipJsonSchema[None] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_explicit_unknown_role_maps(cls, data: object) -> object:
+        """Require unknown role maps to be omitted rather than null."""
+        return reject_explicit_nulls(data, ROLE_MAPS)
+
+
+class Host(ContractModel):
+    """One execution host; a declared device list is complete."""
+
+    role: Literal["native", "controller", "edge"]
     architecture: Literal["arm64", "amd64"]
-
-
-class ResourceCapacity(ContractModel):
-    """Optional known target capacity; omitted quantities are unknown."""
-
-    model_config = ConfigDict(json_schema_extra={"minProperties": 1})
-
-    cpu_cores: PositiveValueWithBasis | SkipJsonSchema[None] = None
-    memory_mib: PositiveWholeValueWithBasis | SkipJsonSchema[None] = None
-    gpu_count: NonNegativeWholeValueWithBasis | SkipJsonSchema[None] = None
-    gpu_model: NonBlank | SkipJsonSchema[None] = None
-    gpu_vram_mib: PositiveWholeValueWithBasis | SkipJsonSchema[None] = None
+    baseline: Baseline | SkipJsonSchema[None] = None
+    devices: list[NonBlank] | SkipJsonSchema[None] = None
 
     @model_validator(mode="before")
     @classmethod
     def reject_explicit_unknowns(cls, data: object) -> object:
-        """Require unknown quantities to be omitted rather than null."""
-        return reject_explicit_nulls(
-            data,
-            (
-                "cpu_cores",
-                "memory_mib",
-                "gpu_count",
-                "gpu_model",
-                "gpu_vram_mib",
-            ),
-        )
-
-    @model_validator(mode="after")
-    def require_a_capacity(self) -> Self:
-        """Reject a present but empty capacity object."""
-        if not self.model_fields_set:
-            msg = "resources must contain at least one capacity"
-            raise ValueError(msg)
-        return self
+        """Require unknown host facts to be omitted rather than null."""
+        return reject_explicit_nulls(data, ("baseline", "devices"))
 
 
-class NetworkLink(ContractModel):
-    """One directional network link under stated conditions."""
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "anyOf": [
-                {"required": ["latency_ms"]},
-                {"required": ["bandwidth_mbps"]},
-            ]
-        }
-    )
-
-    source: Slug
-    destination: Slug
-    conditions: NonBlank
-    latency_ms: NonNegativeValueWithBasis | SkipJsonSchema[None] = None
-    bandwidth_mbps: PositiveValueWithBasis | SkipJsonSchema[None] = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def reject_explicit_unknowns(cls, data: object) -> object:
-        """Require unknown network quantities to be omitted rather than null."""
-        return reject_explicit_nulls(data, ("latency_ms", "bandwidth_mbps"))
-
-    @model_validator(mode="after")
-    def validate_link(self) -> Self:
-        """Require a direction and at least one known quantity."""
-        if self.source == self.destination:
-            msg = "network link endpoints must differ"
-            raise ValueError(msg)
-        if self.latency_ms is None and self.bandwidth_mbps is None:
-            msg = "network link must contain latency_ms or bandwidth_mbps"
-            raise ValueError(msg)
-        return self
+Connection = Annotated[list[Slug], Field(min_length=2, max_length=2)]
 
 
 class TargetExecutionProfile(ContractModel):
@@ -409,30 +372,27 @@ class TargetExecutionProfile(ContractModel):
     schema_version: Literal["sdi.target-execution-profile/v1"]
     profile_id: Slug
     target: MobilityTarget
-    platform: ComputePlatform
-    resources: ResourceCapacity | SkipJsonSchema[None] = None
-    network_links: (
-        Annotated[list[NetworkLink], Field(min_length=1)] | SkipJsonSchema[None]
-    ) = None
+    hosts: Annotated[dict[Slug, Host], Field(min_length=1)]
+    connections: list[Connection] | SkipJsonSchema[None] = None
+    orchestrator_provides: RoleMaps | SkipJsonSchema[None] = None
 
     @model_validator(mode="before")
     @classmethod
     def reject_explicit_unknowns(cls, data: object) -> object:
         """Require absent optional sections to be omitted rather than null."""
-        return reject_explicit_nulls(data, ("resources", "network_links"))
+        return reject_explicit_nulls(data, ("connections", "orchestrator_provides"))
 
     @model_validator(mode="after")
-    def validate_network_links(self) -> Self:
-        """Require unique directional links between profile endpoints."""
-        links = self.network_links or []
-        endpoints = {self.target.target_id, self.platform.platform_id}
-        directions: list[tuple[str, str]] = []
-        for link in links:
-            if {link.source, link.destination} - endpoints:
-                msg = "network link endpoints must name the target or platform"
+    def validate_connections(self) -> Self:
+        """Require unordered connections between two distinct profile hosts."""
+        pairs: list[frozenset[str]] = []
+        for connection in self.connections or []:
+            pair = frozenset(connection)
+            if len(pair) != len(connection) or pair - set(self.hosts):
+                msg = "connection must name two distinct profile hosts"
                 raise ValueError(msg)
-            directions.append((link.source, link.destination))
-        if len(directions) != len(set(directions)):
-            msg = "network link directions must be unique"
+            pairs.append(pair)
+        if len(pairs) != len(set(pairs)):
+            msg = "connections must be unique"
             raise ValueError(msg)
         return self

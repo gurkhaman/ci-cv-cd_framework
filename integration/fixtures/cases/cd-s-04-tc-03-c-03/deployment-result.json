@@ -5,17 +5,17 @@
   "deployment_records": [
     {
       "application_status": "not_evaluated",
-      "location_id": "burger-native",
+      "host": "burger-native-system",
       "service_id": "fixture-localization"
     },
     {
       "application_status": "not_evaluated",
-      "location_id": "burger-native",
+      "host": "burger-native-system",
       "service_id": "fixture-navigation"
     },
     {
       "application_status": "not_evaluated",
-      "location_id": "burger-native",
+      "host": "burger-native-system",
       "service_id": "fixture-mission-control"
     }
   ],
@@ -29,23 +29,23 @@
   "schema_version": "sdi.deployment-result/v1",
   "source_inputs": [
     {
-      "sha256": "a3485648fc8126551e036dd3ab2f8f59afcee0e9c084c5fa3a1347bc71144303",
+      "sha256": "1e27dc1298cbc98c7ed338df53fdbce1326225f26d0f5e76338690b1e964b788",
       "slot": "target_profile"
     },
     {
-      "sha256": "c79c8a1d9e3e35c1a298f0b199475bc1d0e419e22eb2eed796f9e973e56b938a",
+      "sha256": "7a2b605090ee4e143f3ad4e50ec5d3ea4f1eb21b50e165819ed10dff48008da0",
       "slot": "composition_blueprint"
     },
     {
-      "sha256": "ae668fc561211101e10a59894acf434f46dc6efe246f63b8d66c0b164ed9e554",
+      "sha256": "1024180c069da3188d0513a8ed0fdd1e67c82d2706c73b6eab530da936fc0bb0",
       "slot": "deployment_schema"
     },
     {
-      "sha256": "6b95e51efe94de9bf127e616ad8ab94c991f1a23c64c84785d91a74d0ebbe8dc",
+      "sha256": "3d183ba6619628a1a1d2b86008b616066b243e2180a9662de95a3a0c687149a1",
       "slot": "image_build_result"
     },
     {
-      "sha256": "b89a9858173494ceaa786b4d400797e597997d4c203466bbae3ee3d653548670",
+      "sha256": "5f77caee44bc609181b84e40d0a44290ab0415ef6097dfe11aa28c3229f00626",
       "slot": "validation_evidence"
     }
   ],

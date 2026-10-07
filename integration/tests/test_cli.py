@@ -139,19 +139,9 @@ def test_cli_writes_and_freshness_checks_contract_schemas(tmp_path: Path) -> Non
 
     profile_schema_path = tmp_path / "target-execution-profile-v1.schema.json"
     profile_schema = json.loads(profile_schema_path.read_text())
-    resources = profile_schema["$defs"]["ResourceCapacity"]
-    assert resources["minProperties"] == 1
-    assert profile_schema["$defs"]["NetworkLink"]["anyOf"] == [
-        {"required": ["latency_ms"]},
-        {"required": ["bandwidth_mbps"]},
-    ]
-    assert profile_schema["properties"]["network_links"]["minItems"] == 1
+    assert profile_schema["properties"]["hosts"]["minProperties"] == 1
     profile_schema_text = profile_schema_path.read_text()
     assert '"type": "null"' not in profile_schema_text
-    assert '"exclusiveMinimum": 0' in profile_schema_text
-    assert '"minimum": 0' in profile_schema_text
-    assert '"gt":' not in profile_schema_text
-    assert '"ge":' not in profile_schema_text
 
     request_schema = json.loads(
         (tmp_path / "stage-adapter-request-v1.schema.json").read_text()

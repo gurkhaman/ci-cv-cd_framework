@@ -5,17 +5,17 @@
   "deployment_records": [
     {
       "application_status": "not_evaluated",
-      "location_id": "burger-xycar",
+      "host": "xycar",
       "service_id": "fixture-localization"
     },
     {
       "application_status": "not_evaluated",
-      "location_id": "burger-xycar",
+      "host": "xycar",
       "service_id": "fixture-navigation"
     },
     {
       "application_status": "not_evaluated",
-      "location_id": "burger-xycar",
+      "host": "xycar",
       "service_id": "fixture-mission-control"
     }
   ],
@@ -29,23 +29,23 @@
   "schema_version": "sdi.deployment-result/v1",
   "source_inputs": [
     {
-      "sha256": "6670debf0714bc1ae9cc4b33398f5b787df77d3f412b03a0fce499cbc3be32d6",
+      "sha256": "4e92955a79737dd5ad317c25fee8d936495f5b37b35b495e523468796c17cdec",
       "slot": "target_profile"
     },
     {
-      "sha256": "0904223c1d3a920e512a9b9b4fa6a098c6a29a9d7f668f59988e81310cca74b1",
+      "sha256": "b9693c901b97e40056c6d2f909c53d21956c2d9fd21064dcf1f393b1ff253b2b",
       "slot": "composition_blueprint"
     },
     {
-      "sha256": "9c7b2e756c1c78175446d48e7b134ea943798124e2e2a2b755b4ff7c498d1dea",
+      "sha256": "4aea65435ed187b2ef1c956b86e3cd41786d3f2e4dcff42f42cb2bf15ef10f11",
       "slot": "deployment_schema"
     },
     {
-      "sha256": "1d03c3c86fbe3b4582eabe43f0ae60392de44d4d74ff4e69aa6237ca623fb2a9",
+      "sha256": "1fccea11ff5736577359c7a589afdc3e74a16c815bd34cc18843c7939af4c8b4",
       "slot": "image_build_result"
     },
     {
-      "sha256": "58569e712d403fee9cf33caa712b800a730cfa0c3d5fe4102b3bf46bd4de1b7a",
+      "sha256": "60f2b94c98a0780f33e6f63467eeb3d8c62dfa760a409707054ff6d64f5a00a2",
       "slot": "validation_evidence"
     }
   ],

@@ -76,10 +76,10 @@ profile_id: waffle-native-arm64
 target:
   target_id: turtlebot3-waffle
   kind: sdv
-platform:
-  platform_id: waffle-native
-  kind: native
-  architecture: arm64
+hosts:
+  waffle-native:
+    role: native
+    architecture: arm64
 """
 
 
@@ -514,33 +514,29 @@ def test_rejects_non_utf8_origin_without_a_traceback(
     assert "Traceback" not in completed.stderr
 
 
-def test_accepts_a_declared_zero_gpu_capacity(
+def test_rejects_a_connection_outside_the_profile_hosts(
     committed_inputs: tuple[Path, str],
 ) -> None:
     repository, _ = committed_inputs
-    zero_gpu = (
-        f"{TARGET_PROFILE}resources:\n"
-        "  gpu_count:\n"
-        "    value: 0\n"
-        "    basis: declared\n"
-        "    source: Target operator inventory.\n"
-    )
+    unknown_host = f"{TARGET_PROFILE}connections:\n  - [waffle-native, orin]\n"
     commit_sha = _replace_and_commit(
-        repository, "profiles/waffle-native-arm64.yaml", zero_gpu
+        repository, "profiles/waffle-native-arm64.yaml", unknown_host
     )
 
     completed = _identify(repository, commit_sha)
 
-    assert completed.returncode == 0, completed.stderr
+    _assert_rejected_without_identity(
+        completed, "connection must name two distinct profile hosts"
+    )
 
 
-def test_rejects_explicit_null_for_an_unknown_capacity(
+def test_rejects_explicit_null_for_unknown_orchestrator_inputs(
     committed_inputs: tuple[Path, str],
 ) -> None:
     repository, _ = committed_inputs
-    null_capacity = f"{TARGET_PROFILE}resources:\n  cpu_cores: null\n"
+    null_inputs = f"{TARGET_PROFILE}orchestrator_provides: null\n"
     commit_sha = _replace_and_commit(
-        repository, "profiles/waffle-native-arm64.yaml", null_capacity
+        repository, "profiles/waffle-native-arm64.yaml", null_inputs
     )
 
     completed = _identify(repository, commit_sha)

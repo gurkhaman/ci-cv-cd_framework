@@ -5,17 +5,17 @@
   "deployment_records": [
     {
       "application_status": "not_evaluated",
-      "location_id": "waffle-native",
+      "host": "waffle-native-system",
       "service_id": "fixture-localization"
     },
     {
       "application_status": "not_evaluated",
-      "location_id": "waffle-native",
+      "host": "waffle-native-system",
       "service_id": "fixture-navigation"
     },
     {
       "application_status": "not_evaluated",
-      "location_id": "waffle-native",
+      "host": "waffle-native-system",
       "service_id": "fixture-mission-control"
     }
   ],
@@ -29,23 +29,23 @@
   "schema_version": "sdi.deployment-result/v1",
   "source_inputs": [
     {
-      "sha256": "f5b84ae340f6a614780928aa8e5d5d4450236dc072e0672b494b1b84e99453f3",
+      "sha256": "84dd69df5d85c1c952e7894903ac6d42a16d1c8ae793f719c63fbd07cb0aab46",
       "slot": "target_profile"
     },
     {
-      "sha256": "369ec9f0b443cb87d647380d5f60b8b8805be31759fa72c48d447f5cfdf31a17",
+      "sha256": "8574c3a7d06377ad62178ff6eea68729532af742294f2e5ca3c4fdb2904d90be",
       "slot": "composition_blueprint"
     },
     {
-      "sha256": "22ccf6a69398e10b3b025f5eeb85ae185dbfb7e33353f7e6ca9eb666d7b4d76f",
+      "sha256": "472c5a6cdbec26ea0f7bbe4a1bd02af24ef548b410765ff1478cf8e8052aeb7d",
       "slot": "deployment_schema"
     },
     {
-      "sha256": "e22d0cccb5d64e326d51fc2c6471c5b145da3e608e8cc9c370bd1024c7ad30ad",
+      "sha256": "5464f1dff143de28823e946fdd53564303be0a652b72b3a376bfff3b89b02e9c",
       "slot": "image_build_result"
     },
     {
-      "sha256": "1da10ee3d50a7d9c712deeace8f84282692dbed91bc63d9775cc3012af0eea3b",
+      "sha256": "c09cd4efc99f6eda892b8f39f340bde267e76d7bb6f2b9ded31b5a24212c8721",
       "slot": "validation_evidence"
     }
   ],

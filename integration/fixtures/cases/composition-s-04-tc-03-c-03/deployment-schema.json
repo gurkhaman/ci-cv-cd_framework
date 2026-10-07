@@ -3,24 +3,17 @@
   "combination_id": "C-03",
   "deployment_schema_id": "s-04-tc-03-c-03-deployment",
   "evidence_basis": "fixture",
-  "locations": [
-    {
-      "location_id": "burger-native",
-      "resource_id": "burger-native-system",
-      "tier": "mobility"
-    }
-  ],
   "placements": [
     {
-      "location_id": "burger-native",
+      "host": "burger-native-system",
       "service_id": "fixture-localization"
     },
     {
-      "location_id": "burger-native",
+      "host": "burger-native-system",
       "service_id": "fixture-navigation"
     },
     {
-      "location_id": "burger-native",
+      "host": "burger-native-system",
       "service_id": "fixture-mission-control"
     }
   ],
@@ -37,7 +30,7 @@
       "slot": "requirements_specification"
     },
     {
-      "sha256": "a3485648fc8126551e036dd3ab2f8f59afcee0e9c084c5fa3a1347bc71144303",
+      "sha256": "1e27dc1298cbc98c7ed338df53fdbce1326225f26d0f5e76338690b1e964b788",
       "slot": "target_profile"
     }
   ],

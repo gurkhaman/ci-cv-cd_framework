@@ -12,27 +12,21 @@
     {
       "capability": "localization",
       "depends_on": [],
-      "fixture_source": "pipeline-interface-fixture",
-      "service_id": "fixture-localization",
-      "version": "1"
+      "service_id": "fixture-localization"
     },
     {
       "capability": "navigation",
       "depends_on": [
         "fixture-localization"
       ],
-      "fixture_source": "pipeline-interface-fixture",
-      "service_id": "fixture-navigation",
-      "version": "1"
+      "service_id": "fixture-navigation"
     },
     {
       "capability": "delivery-mission-control",
       "depends_on": [
         "fixture-navigation"
       ],
-      "fixture_source": "pipeline-interface-fixture",
-      "service_id": "fixture-mission-control",
-      "version": "1"
+      "service_id": "fixture-mission-control"
     }
   ],
   "source_inputs": [
@@ -45,7 +39,7 @@
       "slot": "requirements_specification"
     },
     {
-      "sha256": "d7a68cd54ddad8ccafbb0f34809faa00c84a20e7af69b34af259c99dd933faf3",
+      "sha256": "b18ef771accd5b48c7b50c2bc188fddedc0a599e5452f6d8bf40117a05983c93",
       "slot": "target_profile"
     }
   ],

@@ -2,11 +2,10 @@
   "$defs": {
     "BlueprintService": {
       "additionalProperties": false,
-      "description": "One visibly Fixture-owned service in a composition blueprint.",
+      "description": "One selected service; capability is an unchecked assigned label.",
       "properties": {
         "capability": {
-          "maxLength": 63,
-          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+          "minLength": 1,
           "title": "Capability",
           "type": "string"
         },
@@ -19,29 +18,15 @@
           "title": "Depends On",
           "type": "array"
         },
-        "fixture_source": {
-          "maxLength": 63,
-          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
-          "title": "Fixture Source",
-          "type": "string"
-        },
         "service_id": {
           "maxLength": 63,
           "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
           "title": "Service Id",
           "type": "string"
-        },
-        "version": {
-          "maxLength": 63,
-          "minLength": 1,
-          "title": "Version",
-          "type": "string"
         }
       },
       "required": [
         "service_id",
-        "version",
-        "fixture_source",
         "capability",
         "depends_on"
       ],

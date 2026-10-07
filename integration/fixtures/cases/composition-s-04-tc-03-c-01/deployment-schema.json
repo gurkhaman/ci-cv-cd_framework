@@ -3,24 +3,17 @@
   "combination_id": "C-01",
   "deployment_schema_id": "s-04-tc-03-c-01-deployment",
   "evidence_basis": "fixture",
-  "locations": [
-    {
-      "location_id": "waffle-native",
-      "resource_id": "waffle-native-system",
-      "tier": "mobility"
-    }
-  ],
   "placements": [
     {
-      "location_id": "waffle-native",
+      "host": "waffle-native-system",
       "service_id": "fixture-localization"
     },
     {
-      "location_id": "waffle-native",
+      "host": "waffle-native-system",
       "service_id": "fixture-navigation"
     },
     {
-      "location_id": "waffle-native",
+      "host": "waffle-native-system",
       "service_id": "fixture-mission-control"
     }
   ],
@@ -37,7 +30,7 @@
       "slot": "requirements_specification"
     },
     {
-      "sha256": "f5b84ae340f6a614780928aa8e5d5d4450236dc072e0672b494b1b84e99453f3",
+      "sha256": "84dd69df5d85c1c952e7894903ac6d42a16d1c8ae793f719c63fbd07cb0aab46",
       "slot": "target_profile"
     }
   ],

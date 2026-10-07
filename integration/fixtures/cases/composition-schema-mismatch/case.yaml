@@ -9,8 +9,8 @@ match_inputs:
     byte_size: 2260
     sha256: 01b21a6bff3f18c12015a98e42c3140c0242c7945410f30bc4cee8fc010915e5
   - slot: target_profile
-    byte_size: 214
-    sha256: f5b84ae340f6a614780928aa8e5d5d4450236dc072e0672b494b1b84e99453f3
+    byte_size: 203
+    sha256: 84dd69df5d85c1c952e7894903ac6d42a16d1c8ae793f719c63fbd07cb0aab46
 behavior: schema_mismatch
 execution_conclusion: failed
 domain_outcome: not_evaluated

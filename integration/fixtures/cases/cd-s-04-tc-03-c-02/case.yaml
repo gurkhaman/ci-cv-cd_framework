@@ -3,20 +3,20 @@ case_id: cd-s-04-tc-03-c-02
 stage: cd
 match_inputs:
   - slot: target_profile
-    byte_size: 202
-    sha256: 60ca8bd502407f163481a90f77d711591a19e8d83e7dc695d0966e11c8f26666
+    byte_size: 191
+    sha256: 5199d53f33fd90de9aecb486ce2441d0ef906f2c659c9c4f5a558316ff9073bf
   - slot: composition_blueprint
-    byte_size: 1405
-    sha256: 547af8111d24019b197fdee23454faec32a2d6ff1826ac9f885d8bbafaa98bcc
+    byte_size: 1177
+    sha256: 2074550e6b860c4570ea1cc8dffda90802dfe74784733234cc003c28a52f51f7
   - slot: deployment_schema
-    byte_size: 1150
-    sha256: 55053d3f120edc5a8a924283427174d37c40202d98eb93a7100ea6cd96be2c0f
+    byte_size: 982
+    sha256: 2779cc61d3e04c1aeaac2f7357f0bebdb5352898008134d53d5dd8156ab2249e
   - slot: image_build_result
     byte_size: 1573
-    sha256: 88b3364436aceb49ced615b3073ab8c77da1f4b1742719e55500c968b84e9696
+    sha256: 967165c3720bb7f43d704e5c40e7336aeb4c3b2ab161a968e8f0aaf30dd701f0
   - slot: validation_evidence
     byte_size: 1431
-    sha256: 9d26d70da4931af3e2c20b412b9af0b91e890affbe60554b97e5a564e02ec56c
+    sha256: 64599ac872f8c9862b5b9b7cc36320ea33a9b0100f470ef916d2ba66edaa86cb
 execution_conclusion: succeeded
 domain_outcome: not_evaluated
 reason:
@@ -26,8 +26,8 @@ reason:
 outputs:
   - slot: deployment_result
     source_path: deployment-result.json
-    byte_size: 1690
-    sha256: b06e80be4c1cc76b8c173b21fed6fa6e6655f01afa4aae6383554309b7fa2952
+    byte_size: 1648
+    sha256: ca05e125caf0edc199d84d4331450a6f5e9bbb4f4e46dc3962c7e8ec6d47cda1
 diagnostic:
   source_path: diagnostic.txt
   byte_size: 87

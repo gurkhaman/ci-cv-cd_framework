@@ -12,7 +12,14 @@ from typing import Annotated, Literal
 from pydantic import Field, ValidationError, model_validator
 from pydantic.json_schema import SkipJsonSchema  # noqa: TC002
 
-from ._contracts import ContractModel, NonBlank, Slug, reject_explicit_nulls
+from ._contracts import (
+    Baseline,
+    ContractModel,
+    NonBlank,
+    RoleMaps,
+    Slug,
+    reject_explicit_nulls,
+)
 from ._yaml_input import MAX_INPUT_BYTES, InputError, parse_yaml
 
 SERVICE_DESCRIPTION_SCHEMA_VERSION = "sdi.service-description/v1"
@@ -56,20 +63,6 @@ class Implementation(ContractModel):
         return reject_explicit_nulls(data, ("version",))
 
 
-class HostRequirement(ContractModel):
-    """Baseline an artifact needs on its host."""
-
-    os: NonBlank
-    ros_distro: NonBlank
-    jetpack: NonBlank | SkipJsonSchema[None] = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def reject_explicit_unknowns(cls, data: object) -> object:
-        """Require an unknown JetPack version to be omitted rather than null."""
-        return reject_explicit_nulls(data, ("jetpack",))
-
-
 class AptRoute(ContractModel):
     """Debian packages installed with their carried version pins."""
 
@@ -99,7 +92,7 @@ class Artifact(ContractModel):
     """One fixed deployable variant of a service."""
 
     architectures: Annotated[list[Architecture], Field(min_length=1)]
-    host_requirement: HostRequirement | SkipJsonSchema[None] = None
+    host_requirement: Baseline | SkipJsonSchema[None] = None
     route: Route
     invocation: NonBlank | SkipJsonSchema[None] = None
 
@@ -108,20 +101,6 @@ class Artifact(ContractModel):
     def reject_explicit_unknowns(cls, data: object) -> object:
         """Require absent optional facts to be omitted rather than null."""
         return reject_explicit_nulls(data, ("host_requirement", "invocation"))
-
-
-class Endpoint(ContractModel):
-    """One ROS interface keyed by its exact name in a role map."""
-
-    type: NonBlank
-    reliability: Literal["reliable", "best_effort"] | SkipJsonSchema[None] = None
-    durability: Literal["volatile", "transient_local"] | SkipJsonSchema[None] = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def reject_explicit_unknowns(cls, data: object) -> object:
-        """Require undeclared QoS to be omitted rather than null."""
-        return reject_explicit_nulls(data, ("reliability", "durability"))
 
 
 class Frames(ContractModel):
@@ -138,18 +117,7 @@ class Frames(ContractModel):
         return reject_explicit_nulls(data, ("global", "odometry", "robot_base"))
 
 
-type RoleMap = dict[NonBlank, Endpoint]
-ROLE_MAPS = (
-    "subscribes",
-    "publishes",
-    "service_servers",
-    "service_clients",
-    "action_servers",
-    "action_clients",
-)
-
-
-class ServiceDescription(ContractModel):
+class ServiceDescription(RoleMaps):
     """Front matter of one mobility service description."""
 
     schema_version: Literal["sdi.service-description/v1"]
@@ -162,12 +130,6 @@ class ServiceDescription(ContractModel):
     artifacts: (
         Annotated[dict[Slug, Artifact], Field(min_length=1)] | SkipJsonSchema[None]
     ) = None
-    subscribes: RoleMap | SkipJsonSchema[None] = None
-    publishes: RoleMap | SkipJsonSchema[None] = None
-    service_servers: RoleMap | SkipJsonSchema[None] = None
-    service_clients: RoleMap | SkipJsonSchema[None] = None
-    action_servers: RoleMap | SkipJsonSchema[None] = None
-    action_clients: RoleMap | SkipJsonSchema[None] = None
     frames: Frames | SkipJsonSchema[None] = None
 
     @model_validator(mode="before")
@@ -181,7 +143,6 @@ class ServiceDescription(ContractModel):
                 "devices",
                 "depends_on",
                 "artifacts",
-                *ROLE_MAPS,
                 "frames",
             ),
         )

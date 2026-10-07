@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Annotated, Literal, Self
 
-from pydantic import Field, StringConstraints, model_validator
+from pydantic import Field, model_validator
+from pydantic.json_schema import SkipJsonSchema  # noqa: TC002
 
 from ._contracts import (
     CombinationId,
@@ -13,6 +14,7 @@ from ._contracts import (
     ScenarioId,
     Slug,
     TestcaseId,
+    reject_explicit_nulls,
 )
 from ._stage_contracts import ImageReference, Sha256, SlotName  # noqa: TC001
 
@@ -21,10 +23,6 @@ DEPLOYMENT_SCHEMA_VERSION = "sdi.deployment-schema/v1"
 IMAGE_BUILD_RESULT_SCHEMA_VERSION = "sdi.image-build-result/v1"
 VALIDATION_EVIDENCE_SCHEMA_VERSION = "sdi.validation-evidence/v1"
 DEPLOYMENT_RESULT_SCHEMA_VERSION = "sdi.deployment-result/v1"
-ServiceVersion = Annotated[
-    str,
-    StringConstraints(strict=True, strip_whitespace=True, min_length=1, max_length=63),
-]
 
 
 def _require_unique(values: list[str], field_name: str) -> None:
@@ -41,12 +39,10 @@ class SourceInputDigest(ContractModel):
 
 
 class BlueprintService(ContractModel):
-    """One visibly Fixture-owned service in a composition blueprint."""
+    """One selected service; capability is an unchecked assigned label."""
 
     service_id: Slug
-    version: ServiceVersion
-    fixture_source: Slug
-    capability: Slug
+    capability: NonBlank
     depends_on: list[Slug]
 
 
@@ -65,57 +61,27 @@ class CompositionBlueprint(ContractModel):
     services: Annotated[list[BlueprintService], Field(min_length=1)]
 
     @model_validator(mode="after")
-    def validate_graph(self) -> Self:
+    def validate_services(self) -> Self:
         _require_unique([item.slot for item in self.source_inputs], "source input slot")
         _require_unique(self.requirement_ids, "requirement_id")
-        service_ids = [item.service_id for item in self.services]
-        _require_unique(service_ids, "service_id")
-        service_set = set(service_ids)
-        dependencies: dict[str, set[str]] = {}
+        _require_unique([item.service_id for item in self.services], "service_id")
         for service in self.services:
             _require_unique(service.depends_on, "depends_on")
-            if service.service_id in service.depends_on:
-                msg = f"service {service.service_id} depends on itself"
-                raise ValueError(msg)
-            unknown = set(service.depends_on) - service_set
-            if unknown:
-                msg = f"unknown service dependencies: {sorted(unknown)}"
-                raise ValueError(msg)
-            dependencies[service.service_id] = set(service.depends_on)
-
-        visiting: set[str] = set()
-        visited: set[str] = set()
-
-        def visit(service_id: str) -> None:
-            if service_id in visiting:
-                msg = "service dependency graph must be acyclic"
-                raise ValueError(msg)
-            if service_id in visited:
-                return
-            visiting.add(service_id)
-            for dependency in dependencies[service_id]:
-                visit(dependency)
-            visiting.remove(service_id)
-            visited.add(service_id)
-
-        for service_id in service_ids:
-            visit(service_id)
         return self
 
 
-class DeploymentLocation(ContractModel):
-    """One intended mobility or SDI execution location."""
-
-    location_id: Slug
-    tier: Literal["mobility", "edge", "fog", "cloud"]
-    resource_id: Slug
-
-
 class ServicePlacement(ContractModel):
-    """One service-to-location mapping."""
+    """One service placed as a chosen artifact on a profile host."""
 
     service_id: Slug
-    location_id: Slug
+    artifact_id: Slug | SkipJsonSchema[None] = None
+    host: Slug | SkipJsonSchema[None] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_explicit_unknowns(cls, data: object) -> object:
+        """Require an unresolved artifact or host to be omitted rather than null."""
+        return reject_explicit_nulls(data, ("artifact_id", "host"))
 
 
 class DeploymentSchema(ContractModel):
@@ -130,20 +96,14 @@ class DeploymentSchema(ContractModel):
     combination_id: CombinationId
     profile_id: Slug
     source_inputs: Annotated[list[SourceInputDigest], Field(min_length=3, max_length=3)]
-    locations: Annotated[list[DeploymentLocation], Field(min_length=1)]
     placements: Annotated[list[ServicePlacement], Field(min_length=1)]
 
     @model_validator(mode="after")
     def validate_references(self) -> Self:
         _require_unique([item.slot for item in self.source_inputs], "source input slot")
-        location_ids = [item.location_id for item in self.locations]
-        _require_unique(location_ids, "location_id")
-        placement_services = [item.service_id for item in self.placements]
-        _require_unique(placement_services, "placed service_id")
-        unknown = {item.location_id for item in self.placements} - set(location_ids)
-        if unknown:
-            msg = f"unknown placement locations: {sorted(unknown)}"
-            raise ValueError(msg)
+        _require_unique(
+            [item.service_id for item in self.placements], "placed service_id"
+        )
         return self
 
 
@@ -218,8 +178,14 @@ class FixtureDeploymentRecord(ContractModel):
     """One intended placement that was deliberately not applied."""
 
     service_id: Slug
-    location_id: Slug
+    host: Slug | SkipJsonSchema[None] = None
     application_status: Literal["not_evaluated"]
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_explicit_unknowns(cls, data: object) -> object:
+        """Require an unresolved host to be omitted rather than null."""
+        return reject_explicit_nulls(data, ("host",))
 
 
 class DeploymentResult(ContractModel):
