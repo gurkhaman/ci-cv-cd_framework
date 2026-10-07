@@ -49,7 +49,7 @@ Create a short-lived repository runner registration token, then configure the
 installation once:
 
 ```sh acceptance=runner-configure-start
-SDI_GITHUB_RUNNER_REPOSITORY=https://github.com/gurkhaman/ci-cv-cd_framework \
+SDI_GITHUB_RUNNER_REPOSITORY=https://github.com/open-SDI/ci-cv-cd_framework \
 SDI_GITHUB_RUNNER_NAME=jenkins-handoff-host \
 SDI_GITHUB_RUNNER_REGISTRATION_TOKEN='<short-lived-registration-token>' \
 deployment/github-runner/bin/runner configure
@@ -68,13 +68,13 @@ removal of Jenkins credential and state variables from its persistent
 environment. The workflow places uv's cache, managed Python installation, and
 Zig's global build cache under the writable runner temporary directory.
 
-GitHub personal accounts do not provide workflow-restricted runner groups. This
-repository therefore treats the runner label as an operational selector, not an
-authorization control. The supported threat model requires trusted write
-collaborators, reviewed protected-main changes, approval for every external fork
-workflow, no approval of untrusted workflow code, and a repository rule that no
-other workflow may target `sdi-jenkins-handoff`. Use an organization
-workflow-restricted runner group instead if those assumptions change.
+The supported installation uses a repository-scoped runner and treats its label
+as an operational selector, not an authorization control. It requires trusted
+write collaborators, reviewed protected-main changes, approval for every
+external fork workflow, no approval of untrusted workflow code, and a repository
+rule that no other workflow may target `sdi-jenkins-handoff`. An organization
+workflow-restricted runner group requires a separately reviewed extension to
+the runner interface; repository-scoped `configure` does not select one.
 
 Stop the service without removing registration or work state with:
 

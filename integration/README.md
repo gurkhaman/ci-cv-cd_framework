@@ -194,7 +194,7 @@ sequentially through the same workflow with:
 
 ```sh
 uv run --frozen --project integration sdi-integration dispatch-s-04 \
-  --repository gurkhaman/ci-cv-cd_framework
+  --repository open-SDI/ci-cv-cd_framework
 ```
 
 The helper prints each exact run URL before waiting and stops on failed or
