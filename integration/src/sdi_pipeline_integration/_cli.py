@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, cast
 from pydantic import ValidationError
 
 from ._assessment import assess_proposal_files
-from ._generation import GenerationError, generate_proposals
+from ._generation import GenerationConfig, GenerationError, generate_proposals
 from ._github_actions import render_github_summary
 from ._github_dispatch import GitHubDispatchError, dispatch_s04
 from ._jenkins_handoff import HandoffError, handoff_jenkins
@@ -113,6 +113,13 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     generate.add_argument("--service-repository", type=Path, required=True)
     generate.add_argument("--target-profile", type=Path, required=True)
     generate.add_argument("--requirements-specification", type=Path, required=True)
+    generate.add_argument(
+        "--generation-config",
+        type=Path,
+        required=True,
+        help="model settings: integration/generation-configs/qwen.yaml, or "
+        "luna.yaml when the self-hosted endpoint is unavailable",
+    )
     generate.add_argument("--output", type=Path, required=True)
     generate.add_argument("--evidence", type=Path, required=True)
     adapter_image = commands.add_parser(
@@ -275,11 +282,18 @@ def _generate_proposals(arguments: argparse.Namespace) -> int:
     evidence: dict[str, object] = {}
     try:
         arguments.output.unlink(missing_ok=True)
+        config = GenerationConfig.model_validate(
+            parse_yaml(
+                arguments.generation_config.read_bytes(),
+                str(arguments.generation_config),
+            )
+        )
         try:
             proposals = generate_proposals(
                 service_repository=arguments.service_repository,
                 target_profile=arguments.target_profile,
                 requirements_specification=arguments.requirements_specification,
+                config=config,
                 evidence=evidence,
             )
         except GenerationError as error:
@@ -293,7 +307,7 @@ def _generate_proposals(arguments: argparse.Namespace) -> int:
         _write_json(
             arguments.evidence, evidence | {"outcome": "generated", "reason": None}
         )
-    except (InputError, OSError) as error:
+    except (InputError, OSError, ValidationError) as error:
         sys.stderr.write(f"sdi-integration: {error}\n")
         return 2
     return 0

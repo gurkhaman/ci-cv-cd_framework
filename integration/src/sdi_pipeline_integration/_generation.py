@@ -1,12 +1,19 @@
-"""Model generation of composition proposals through the OpenAI Responses API."""
+"""Model generation of composition proposals through the OpenAI Responses API.
+
+A generation config file selects the model, its endpoint and the environment
+variable holding its key. Use the self-hosted Qwen config while its endpoint is
+up and rerun with the OpenAI luna config when it is not. Each endpoint reads
+only its own key, so the OpenAI key never reaches another server.
+"""
 
 from __future__ import annotations
 
 import json
+import os
 from typing import TYPE_CHECKING, Annotated, Literal, cast
 
 import openai
-from pydantic import Field, ValidationError, create_model
+from pydantic import Field, PositiveInt, ValidationError, create_model
 
 from ._assessment import (
     AssessmentInputs,
@@ -16,16 +23,13 @@ from ._assessment import (
     ServicePlacement,
     load_assessment_inputs,
 )
+from ._contracts import ContractModel
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from pydantic import BaseModel
 
-MODEL = "gpt-6-luna"
-REASONING_EFFORT = "high"
-MAX_OUTPUT_TOKENS = 32_000
-TIMEOUT_SECONDS = 300.0
 MAX_RETRIES = 0
 
 INSTRUCTIONS = """\
@@ -78,6 +82,17 @@ In the rationale, state the main choices and every gap you could not avoid.
 """
 
 type Outcome = Literal["generated", "exhausted", "refused", "invalid", "provider_error"]
+
+
+class GenerationConfig(ContractModel):
+    """The model, limits and endpoint for one generation request."""
+
+    model: str = Field(min_length=1)
+    reasoning_effort: Literal["low", "medium", "high", "xhigh"]
+    max_output_tokens: PositiveInt
+    timeout_seconds: PositiveInt
+    base_url: str = Field(min_length=1)
+    api_key_env: str = Field(min_length=1)
 
 
 class GenerationError(Exception):
@@ -148,6 +163,7 @@ def generate_proposals(
     service_repository: Path,
     target_profile: Path,
     requirements_specification: Path,
+    config: GenerationConfig,
     evidence: dict[str, object],
 ) -> dict[str, object]:
     """Ask the configured model for proposals, recording everything in evidence."""
@@ -160,21 +176,24 @@ def generate_proposals(
         [file.description.service_id for file in inputs.files],
         inputs.requirements.requirement_ids,
     )
-    evidence["settings"] = {
-        "model": MODEL,
-        "reasoning_effort": REASONING_EFFORT,
-        "max_output_tokens": MAX_OUTPUT_TOKENS,
-        "timeout_seconds": TIMEOUT_SECONDS,
-        "max_retries": MAX_RETRIES,
-    }
+    evidence["settings"] = config.model_dump() | {"max_retries": MAX_RETRIES}
+    api_key = os.environ.get(config.api_key_env)
+    if not api_key:
+        msg = f"{config.api_key_env} is not set"
+        raise GenerationError(msg, outcome="provider_error")
     try:
-        client = openai.OpenAI(timeout=TIMEOUT_SECONDS, max_retries=MAX_RETRIES)
+        client = openai.OpenAI(
+            api_key=api_key,
+            base_url=config.base_url,
+            timeout=config.timeout_seconds,
+            max_retries=MAX_RETRIES,
+        )
         raw = client.responses.with_raw_response.parse(
-            model=MODEL,
+            model=config.model,
             instructions=INSTRUCTIONS,
             input=_prompt_input(inputs),
-            reasoning={"effort": REASONING_EFFORT},
-            max_output_tokens=MAX_OUTPUT_TOKENS,
+            reasoning={"effort": config.reasoning_effort},
+            max_output_tokens=config.max_output_tokens,
             text_format=text_format,
             store=False,
         )
@@ -193,7 +212,7 @@ def generate_proposals(
     status = body.get("status")
     details = cast("dict[str, object]", body.get("incomplete_details") or {})
     if status == "incomplete" and details.get("reason") == "max_output_tokens":
-        msg = f"output reached max_output_tokens={MAX_OUTPUT_TOKENS}"
+        msg = f"output reached max_output_tokens={config.max_output_tokens}"
         raise GenerationError(msg, outcome="exhausted")
     if status == "incomplete" and details.get("reason") == "content_filter":
         msg = "output stopped by the content filter"
