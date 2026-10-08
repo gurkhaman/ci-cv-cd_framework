@@ -15,6 +15,7 @@ from tests._fixture_inputs import (
     FIXTURE_GENERATION_CONFIG,
     SUPPLIED_INPUT_ARGUMENTS,
     write_fixture_composition_descriptor,
+    write_scripted_adapter,
 )
 
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
@@ -260,25 +261,16 @@ def test_distributed_implemented_composition_skips_fixture_stages(
 ) -> None:
     repository, _commit_sha = _repository(tmp_path)
     case = SOURCE_ROOT / "integration/fixtures/cases/composition-s-04-tc-03-c-05"
-    implemented = ('"evidence_basis": "fixture"', '"evidence_basis": "implemented"')
-    blueprint = (case / "composition-blueprint.json").read_text().replace(*implemented)
-    deployment = (case / "deployment-schema.json").read_text().replace(*implemented)
+    blueprint, deployment = (
+        json.dumps(
+            json.loads((case / name).read_text()) | {"evidence_basis": "implemented"}
+        )
+        for name in ("composition-blueprint.json", "deployment-schema.json")
+    )
     adapter = tmp_path / "implemented-composition-adapter"
-    adapter.write_text(
-        f"""#!/usr/bin/env python3
-import argparse
-import json
-from pathlib import Path
-
-parser = argparse.ArgumentParser()
-parser.add_argument("command")
-parser.add_argument("--request")
-parser.add_argument("--input-root")
-parser.add_argument("--output-root")
-arguments = parser.parse_args()
-request = json.loads(Path(arguments.request).read_text())
-output = Path(arguments.output_root)
-(output / "outputs").mkdir()
+    write_scripted_adapter(
+        adapter,
+        f"""(output / "outputs").mkdir()
 (output / "outputs/composition-blueprint.json").write_text({blueprint!r})
 (output / "outputs/deployment-schema.json").write_text({deployment!r})
 response = {{
@@ -291,9 +283,8 @@ response = {{
     "diagnostic": {{"present": False, "truncated": False}},
 }}
 (output / "response.json").write_text(json.dumps(response))
-"""
+""",
     )
-    adapter.chmod(0o755)
     write_fixture_composition_descriptor(
         repository, entrypoint=adapter, mode="implemented"
     )

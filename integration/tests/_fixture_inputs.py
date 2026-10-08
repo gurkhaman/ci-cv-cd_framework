@@ -55,3 +55,26 @@ secret_bindings: []
 """,
         encoding="utf-8",
     )
+
+
+SCRIPTED_ADAPTER_PREAMBLE = """#!/usr/bin/env python3
+import argparse
+import json
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+commands = parser.add_subparsers(dest="command", required=True)
+run = commands.add_parser("run")
+run.add_argument("--request", required=True)
+run.add_argument("--input-root", required=True)
+run.add_argument("--output-root", required=True)
+arguments = parser.parse_args()
+request = json.loads(Path(arguments.request).read_text())
+output = Path(arguments.output_root)
+"""
+
+
+def write_scripted_adapter(path: Path, body: str) -> None:
+    """Write an executable adapter whose body sees `request` and `output`."""
+    path.write_text(SCRIPTED_ADAPTER_PREAMBLE + body, encoding="utf-8")
+    path.chmod(0o755)

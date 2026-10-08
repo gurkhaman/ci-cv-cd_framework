@@ -17,6 +17,7 @@ from tests._fixture_inputs import (
     FIXTURE_GENERATION_CONFIG,
     SUPPLIED_INPUT_ARGUMENTS,
     write_fixture_composition_descriptor,
+    write_scripted_adapter,
 )
 
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
@@ -146,29 +147,6 @@ def _select_adapter(repository: Path, adapter: Path, *, mode: str = "fixture") -
     _git(repository, "add", ".")
     _git(repository, "commit", "-m", "Select conformance adapter")
     return _git(repository, "rev-parse", "HEAD")
-
-
-def _write_composition_adapter(path: Path, body: str) -> None:
-    path.write_text(
-        """#!/usr/bin/env python3
-import argparse
-import json
-from pathlib import Path
-
-parser = argparse.ArgumentParser()
-commands = parser.add_subparsers(dest="command", required=True)
-run = commands.add_parser("run")
-run.add_argument("--request", required=True)
-run.add_argument("--input-root", required=True)
-run.add_argument("--output-root", required=True)
-arguments = parser.parse_args()
-request = json.loads(Path(arguments.request).read_text())
-output = Path(arguments.output_root)
-"""
-        + body,
-        encoding="utf-8",
-    )
-    path.chmod(0o755)
 
 
 def _configure_composition(
@@ -331,7 +309,7 @@ def test_handled_execution_failure_publishes_a_complete_result_with_typed_skips(
 ) -> None:
     repository, _ = _commit_fixture_repository(tmp_path)
     adapter = tmp_path / "handled-failure-adapter"
-    _write_composition_adapter(
+    write_scripted_adapter(
         adapter,
         """
 response = {
@@ -383,7 +361,7 @@ def test_negative_domain_outcome_blocks_dependents_without_machinery_failure(
 ) -> None:
     repository, _ = _commit_fixture_repository(tmp_path)
     adapter = tmp_path / "negative-domain-adapter"
-    _write_composition_adapter(
+    write_scripted_adapter(
         adapter,
         """
 response = {
@@ -429,7 +407,7 @@ def test_negative_domain_outcome_cannot_publish_domain_output(
     implemented = ('"evidence_basis": "fixture"', '"evidence_basis": "implemented"')
     blueprint = (case / "composition-blueprint.json").read_text().replace(*implemented)
     deployment = (case / "deployment-schema.json").read_text().replace(*implemented)
-    _write_composition_adapter(
+    write_scripted_adapter(
         adapter,
         f"""
 (output / "outputs").mkdir()
@@ -467,7 +445,7 @@ def test_rejected_candidate_records_runtime_failure_without_salvaging_files(
 ) -> None:
     repository, _ = _commit_fixture_repository(tmp_path)
     adapter = tmp_path / "undeclared-output-adapter"
-    _write_composition_adapter(
+    write_scripted_adapter(
         adapter,
         """
 (output / "private-endpoint.txt").write_text("https://private.example.test/secret")
@@ -569,7 +547,7 @@ def test_stage_timeout_terminates_attached_descendants_and_cleans_work(
     repository, _ = _commit_fixture_repository(tmp_path)
     adapter = tmp_path / "timeout-tree-adapter"
     child_pid_path = tmp_path / "timeout-child.pid"
-    _write_composition_adapter(
+    write_scripted_adapter(
         adapter,
         f"""
 import subprocess
@@ -629,7 +607,7 @@ def test_external_cancellation_terminates_the_process_tree_without_a_result(
     adapter = tmp_path / "cancellable-adapter"
     child_pid_path = tmp_path / "child.pid"
     ready_path = tmp_path / "ready"
-    _write_composition_adapter(
+    write_scripted_adapter(
         adapter,
         f"""
 import subprocess
@@ -740,7 +718,7 @@ def test_fixture_stage_skips_implemented_composition_output(
     implemented = ('"evidence_basis": "fixture"', '"evidence_basis": "implemented"')
     blueprint = (case / "composition-blueprint.json").read_text().replace(*implemented)
     deployment = (case / "deployment-schema.json").read_text().replace(*implemented)
-    _write_composition_adapter(
+    write_scripted_adapter(
         adapter,
         f"""
 (output / "outputs").mkdir()
@@ -803,7 +781,7 @@ def test_process_loss_records_runtime_failure_and_skips(tmp_path: Path) -> None:
 def test_process_signal_records_runtime_failure_and_skips(tmp_path: Path) -> None:
     repository, _ = _commit_fixture_repository(tmp_path)
     adapter = tmp_path / "signaled-adapter"
-    _write_composition_adapter(
+    write_scripted_adapter(
         adapter,
         """
 import os
@@ -838,7 +816,7 @@ def test_sensitive_diagnostic_is_not_accepted_or_archived(
 ) -> None:
     repository, _ = _commit_fixture_repository(tmp_path)
     adapter = tmp_path / "sensitive-diagnostic-adapter"
-    _write_composition_adapter(
+    write_scripted_adapter(
         adapter,
         f"""
 (output / "diagnostic.txt").write_text({sentinel!r})
@@ -901,7 +879,7 @@ def test_sensitive_domain_output_is_not_accepted_or_archived(
         .read_text()
         .replace('"evidence_basis": "fixture"', '"evidence_basis": "implemented"')
     )
-    _write_composition_adapter(
+    write_scripted_adapter(
         adapter,
         f"""
 (output / "outputs").mkdir()
@@ -947,7 +925,7 @@ def test_composition_placing_a_service_outside_the_profile_hosts_is_not_accepted
         .replace(*implemented)
         .replace('"host": "orin"', '"host": "xycar"', 1)
     )
-    _write_composition_adapter(
+    write_scripted_adapter(
         adapter,
         f"""
 (output / "outputs").mkdir()
