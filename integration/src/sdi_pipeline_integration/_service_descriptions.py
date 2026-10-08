@@ -10,7 +10,13 @@ from graphlib import CycleError, TopologicalSorter
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal
 
-from pydantic import Field, NonNegativeInt, ValidationError, model_validator
+from pydantic import (
+    Field,
+    NonNegativeInt,
+    StringConstraints,
+    ValidationError,
+    model_validator,
+)
 from pydantic.json_schema import SkipJsonSchema  # noqa: TC002
 
 from ._contracts import (
@@ -71,11 +77,15 @@ class Implementation(ContractModel):
         return reject_explicit_nulls(data, ("version",))
 
 
+# A Debian package with its version pin, such as ros-jazzy-nav2-bringup=1.3.13-1*.
+PinnedPackage = Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9+.-]+=\S+$")]
+
+
 class AptRoute(ContractModel):
     """Debian packages installed with their carried version pins."""
 
     kind: Literal["apt"]
-    packages: Annotated[list[NonBlank], Field(min_length=1)]
+    packages: Annotated[list[PinnedPackage], Field(min_length=1)]
 
 
 class ImageRoute(ContractModel):

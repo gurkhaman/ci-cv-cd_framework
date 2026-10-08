@@ -94,6 +94,18 @@ def test_lists_every_real_and_fake_description_with_its_digest(
             "a/SDI.md: contract validation failed",
         ),
         (
+            {
+                "a/SDI.md": _valid("a").replace(
+                    "depends_on:",
+                    "artifacts:\n  debs:\n    architectures: [arm64]\n"
+                    "    host_requirement: {os: ubuntu-24.04, ros_distro: jazzy}\n"
+                    "    route: {kind: apt, packages: [ros-jazzy-nav2-bringup]}\n"
+                    "depends_on:",
+                )
+            },
+            "a/SDI.md: contract validation failed",
+        ),
+        (
             {"a/SDI.md": _valid("same"), "b/SDI.md": _valid("same")},
             "b/SDI.md: duplicate service_id same (also a/SDI.md)",
         ),
