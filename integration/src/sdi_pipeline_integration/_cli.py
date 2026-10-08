@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Any, cast
 
 from pydantic import ValidationError
 
+from ._assessment import assess_proposal_files, load_assessment_inputs
+from ._generation import MAX_RETRIES, GenerationConfig, generate_proposals
 from ._github_actions import render_github_summary
 from ._github_dispatch import GitHubDispatchError, dispatch_s04
 from ._jenkins_handoff import HandoffError, handoff_jenkins
@@ -33,9 +35,10 @@ from ._recovery_contracts import (
 )
 from ._run_input import identify_committed_run
 from ._schemas import check_schemas, write_schemas
+from ._service_descriptions import read_service_repository
 from ._stage_contracts import AdapterDescriptor
 from ._stage_runtime import ExternalCancellation, execute_stage
-from ._yaml_input import InputError, parse_yaml
+from ._yaml_input import InputError, parse_yaml, validate_contract
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
@@ -90,6 +93,35 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     )
     installation.add_argument("--repository", type=Path, required=True)
     installation.add_argument("--installation", type=Path, required=True)
+    services = commands.add_parser(
+        "validate-service-repository",
+        help="validate every SDI.md service description under a directory",
+    )
+    services.add_argument("--service-repository", type=Path, required=True)
+    assess = commands.add_parser(
+        "assess-proposals",
+        help="check and rank composition proposals against a service repository",
+    )
+    assess.add_argument("--service-repository", type=Path, required=True)
+    assess.add_argument("--target-profile", type=Path, required=True)
+    assess.add_argument("--requirements-specification", type=Path, required=True)
+    assess.add_argument("--proposals", type=Path, required=True)
+    generate = commands.add_parser(
+        "generate-proposals",
+        help="ask the configured model for composition proposals",
+    )
+    generate.add_argument("--service-repository", type=Path, required=True)
+    generate.add_argument("--target-profile", type=Path, required=True)
+    generate.add_argument("--requirements-specification", type=Path, required=True)
+    generate.add_argument(
+        "--generation-config",
+        type=Path,
+        required=True,
+        help="model settings: integration/generation-configs/qwen.yaml, or "
+        "luna.yaml when the self-hosted endpoint is unavailable",
+    )
+    generate.add_argument("--output", type=Path, required=True)
+    generate.add_argument("--evidence", type=Path, required=True)
     adapter_image = commands.add_parser(
         "adapter-image",
         help="print the immutable runtime image selected by an adapter descriptor",
@@ -105,6 +137,7 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     execute.add_argument("--run-request-path", required=True)
     execute.add_argument("--descriptor-path", required=True)
     execute.add_argument("--attempt-root", type=Path, required=True)
+    _add_supplied_input_arguments(execute)
     preflight = commands.add_parser(
         "preflight-jenkins-run",
         help="revalidate one Jenkins submission and its complete execution topology",
@@ -119,6 +152,7 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     preflight.add_argument("--image-build-node", required=True)
     preflight.add_argument("--cv-node", required=True)
     preflight.add_argument("--cd-node", required=True)
+    _add_supplied_input_arguments(preflight)
     handoff = commands.add_parser(
         "handoff-jenkins",
         help="submit one run and retrieve its exact validated Jenkins bundle",
@@ -140,6 +174,7 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     )
     jenkins_execute.add_argument("--work-limit-seconds", type=int, required=True)
     jenkins_execute.add_argument("--run-deadline-epoch-millis", required=True)
+    _add_supplied_input_arguments(jenkins_execute)
     attempt_status = commands.add_parser(
         "attempt-allows-continuation",
         help="derive whether an accepted attempt permits the next Stage",
@@ -158,6 +193,7 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     finalize.add_argument("--attempt-root", type=Path, action="append", default=[])
     finalize.add_argument("--run-deadline-expired", action="store_true")
     finalize.add_argument("--bundle-root", type=Path, required=True)
+    _add_supplied_input_arguments(finalize)
     conclusion = commands.add_parser(
         "bundle-conclusion",
         help="validate a bundle and derive its Jenkins machinery conclusion",
@@ -173,6 +209,7 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     dispatch.add_argument("--resolved-commit", required=True)
     dispatch.add_argument("--run-request-path", required=True)
     dispatch.add_argument("--bundle-root", type=Path, required=True)
+    _add_supplied_input_arguments(dispatch)
     validate = commands.add_parser(
         "validate-bundle",
         help="validate one complete Pipeline integration archive candidate",
@@ -216,6 +253,21 @@ def _add_submitted_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--execution-id", required=True)
 
 
+def _add_supplied_input_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--service-repository",
+        type=Path,
+        required=True,
+        help="directory of SDI.md service descriptions given to composition",
+    )
+    parser.add_argument(
+        "--generation-config",
+        required=True,
+        help="repository path of the generation config, read at the resolved "
+        "commit: integration/generation-configs/qwen.yaml or luna.yaml",
+    )
+
+
 def _write_handoff_progress(phase: str) -> None:
     sys.stderr.write(f"sdi-integration: handoff phase={phase}\n")
 
@@ -240,6 +292,54 @@ def _has_machinery_failure(result: dict[str, object]) -> bool:
             }:
                 return True
     return False
+
+
+def _write_json(path: Path, document: object) -> None:
+    path.write_text(f"{json.dumps(document, indent=2, sort_keys=True)}\n")
+
+
+def _generate_proposals(arguments: argparse.Namespace) -> int:
+    try:
+        arguments.output.unlink(missing_ok=True)
+        config = validate_contract(
+            GenerationConfig,
+            parse_yaml(
+                arguments.generation_config.read_bytes(),
+                str(arguments.generation_config),
+            ),
+            str(arguments.generation_config),
+        )
+        result = generate_proposals(
+            inputs=load_assessment_inputs(
+                service_repository=arguments.service_repository,
+                target_profile=arguments.target_profile,
+                requirements_specification=arguments.requirements_specification,
+            ),
+            config=config,
+        )
+        evidence = {
+            "settings": config.model_dump() | {"max_retries": MAX_RETRIES},
+            "outcome": result.outcome,
+            "reason": result.reason,
+        } | {
+            name: value
+            for name, value in (
+                ("request", result.request),
+                ("response", result.response),
+                ("error", result.error),
+            )
+            if value is not None
+        }
+        if result.proposals is None:
+            _write_json(arguments.evidence, evidence)
+            sys.stderr.write(f"sdi-integration: {result.outcome}: {result.reason}\n")
+            return 1
+        _write_json(arguments.output, result.proposals.model_dump(mode="json"))
+        _write_json(arguments.evidence, evidence)
+    except (InputError, OSError, ValidationError) as error:
+        sys.stderr.write(f"sdi-integration: {error}\n")
+        return 2
+    return 0
 
 
 def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
@@ -281,6 +381,44 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
             sys.stderr.write(f"sdi-integration: {error}\n")
             return 2
         return 0
+    if arguments.command == "validate-service-repository":
+        try:
+            files = read_service_repository(arguments.service_repository)
+        except (InputError, OSError) as error:
+            sys.stderr.write(f"sdi-integration: {error}\n")
+            return 2
+        listed = {
+            "services": [
+                {
+                    "path": file.path,
+                    "service_id": file.description.service_id,
+                    "sha256": file.sha256,
+                }
+                for file in files
+            ]
+        }
+        sys.stdout.write(
+            f"{json.dumps(listed, sort_keys=True, separators=(',', ':'))}\n"
+        )
+        return 0
+    if arguments.command == "assess-proposals":
+        try:
+            assessment = assess_proposal_files(
+                service_repository=arguments.service_repository,
+                target_profile=arguments.target_profile,
+                requirements_specification=arguments.requirements_specification,
+                proposals=arguments.proposals,
+            )
+        except (InputError, OSError) as error:
+            sys.stderr.write(f"sdi-integration: {error}\n")
+            return 2
+        document = assessment.to_evidence()
+        sys.stdout.write(
+            f"{json.dumps(document, sort_keys=True, separators=(',', ':'))}\n"
+        )
+        return 0
+    if arguments.command == "generate-proposals":
+        return _generate_proposals(arguments)
     if arguments.command == "adapter-image":
         try:
             document = parse_yaml(
@@ -305,6 +443,8 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
                     run_request_path=arguments.run_request_path,
                     descriptor_path=arguments.descriptor_path,
                     attempt_root=arguments.attempt_root,
+                    service_repository=arguments.service_repository,
+                    generation_config=arguments.generation_config,
                 )
         except ExternalCancellation as cancellation:
             if not attempt_existed:
@@ -339,6 +479,8 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
                     "cv": arguments.cv_node,
                     "cd": arguments.cd_node,
                 },
+                service_repository=arguments.service_repository,
+                generation_config=arguments.generation_config,
             )
         except (InputError, OSError, ValidationError) as error:
             sys.stderr.write(f"sdi-integration: {error}\n")
@@ -396,6 +538,8 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
                     prior_attempt_roots=arguments.prior_attempt_root,
                     work_limit_seconds=arguments.work_limit_seconds,
                     run_deadline_epoch_millis=arguments.run_deadline_epoch_millis,
+                    service_repository=arguments.service_repository,
+                    generation_config=arguments.generation_config,
                 )
         except ExternalCancellation as cancellation:
             if not attempt_existed:
@@ -436,6 +580,8 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
                 attempt_roots=arguments.attempt_root,
                 run_deadline_expired=arguments.run_deadline_expired,
                 bundle_root=arguments.bundle_root,
+                service_repository=arguments.service_repository,
+                generation_config=arguments.generation_config,
             )
         except (InputError, OSError, ValidationError) as error:
             sys.stderr.write(f"sdi-integration: {error}\n")
@@ -466,6 +612,8 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
                     resolved_commit=arguments.resolved_commit,
                     run_request_path=arguments.run_request_path,
                     bundle_root=arguments.bundle_root,
+                    service_repository=arguments.service_repository,
+                    generation_config=arguments.generation_config,
                 )
         except ExternalCancellation as cancellation:
             if not bundle_existed:

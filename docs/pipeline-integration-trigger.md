@@ -81,7 +81,7 @@ The successful response contains `workflow_run_id`, API `run_url`, and exact
 browser `html_url`. Persist that returned identity rather than inferring a run
 from timestamps or listing order.
 
-## Dispatch The Six S-04 Fixtures
+## Dispatch The Six S-04 Runs
 
 The reviewed request paths, in sequential helper order, are:
 
@@ -171,8 +171,10 @@ not promise a Pipeline integration result. An always-run publication step makes
 the available receipt retrievable when GitHub still permits post-cancellation
 steps to complete.
 
-Every current Stage uses a deterministic Fixture. Fixture files prove only the
-pipeline interface and evidence handling. They are not proof of a real Domain
-capability, CV verdict, deployment outcome, supported-combination KPI, or any
-aggregate Domain result. The summary therefore always states
-`KPI evaluation: not evaluated`.
+The composition Stage is implemented and calls the model selected by the
+pipeline's generation config. Image build, CV, and CD use deterministic
+Fixtures, which never consume real composition output, so a successful
+composition leaves them skipped. Fixture files prove only the pipeline interface
+and evidence handling. They are not proof of a real Domain capability, CV
+verdict, deployment outcome, supported-combination KPI, or any aggregate Domain
+result. The summary therefore always states `KPI evaluation: not evaluated`.

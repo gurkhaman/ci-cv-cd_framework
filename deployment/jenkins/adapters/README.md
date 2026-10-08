@@ -5,7 +5,10 @@ process-contract version, Stage-profile version, agent label, entry point, and
 logical secret bindings. Secret values and Jenkins credential identifiers are
 governed separately and never enter these contracts.
 
-The four Fixture descriptors receive no secrets and select one shared
+`composition-v1.yaml` selects the implemented `sdi-composition-adapter`. Its
+`secret_bindings` name the environment variables a generation config may use for
+its key; the runtime forwards only the one the config names. The image-build,
+CV, and CD Fixture descriptors receive no secrets and select one shared
 digest-pinned Fixture implementation through separate reviewed Stage profiles.
 Each Domain-agent build consumes its own descriptor-selected runtime image, so a
 later reviewed descriptor can replace and reconcile one agent independently.

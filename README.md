@@ -10,10 +10,10 @@
 
 > [!IMPORTANT]
 > Sections 1-4 preserve the original project description and references. The
-> currently supported implementation is described in section 5. Its four Stages
-> run deterministic Fixtures; they do not implement or prove real service
-> integration, image publication, simulation Validation, deployment, or KPI
-> results.
+> currently supported implementation is described in section 5. Its composition
+> Stage generates and assesses service compositions with a configured model; the
+> image-build, CV, and CD Stages run deterministic Fixtures and do not implement
+> or prove image publication, simulation Validation, deployment, or KPI results.
 
 
 ## 1. Introduction
@@ -51,13 +51,17 @@ interfaces for Software-Defined Mobility while keeping those Domain capabilities
 independently replaceable.
 
 The current scaffold validates and identifies committed inputs and executes one
-deterministic four-Stage Fixture run locally or through the protected GitHub
-workflow and private five-agent Jenkins pipeline. GitHub is the external
-trigger, progress, summary, and artifact-retrieval surface. Both execution paths
-use the permanent Stage-adapter process interface and
-validate the complete archive candidate. Fixture output is not Validation
-evidence, Domain success, KPI evidence, or proof that a real composition, build,
-simulation, or deployment capability exists.
+four-Stage run locally or through the protected GitHub workflow and private
+five-agent Jenkins pipeline. GitHub is the external trigger, progress, summary,
+and artifact-retrieval surface. Both execution paths use the permanent
+Stage-adapter process interface and validate the complete archive candidate.
+The composition Stage is implemented: it asks a configured model for proposals
+over the supplied `service-repository/`, checks and ranks them, and publishes the
+preferred blueprint and deployment schema with evidence. The other three Stages
+remain Fixtures, which never consume real composition output, so a successful
+composition ends the run with them skipped. Fixture output is not Validation
+evidence, Domain success, KPI evidence, or proof that a real build, simulation,
+or deployment capability exists.
 
 The repository also reconstructs an on-demand, zero-executor Jenkins controller
 and five isolated one-executor inbound agents from immutable image inputs,

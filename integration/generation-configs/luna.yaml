@@ -1,0 +1,7 @@
+schema_version: sdi.generation-config/v1
+model: gpt-6-luna
+reasoning_effort: high
+max_output_tokens: 32000
+timeout_seconds: 300
+base_url: https://api.openai.com/v1
+api_key_env: OPENAI_API_KEY

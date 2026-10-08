@@ -5,7 +5,8 @@ agents. The controller runs on supported Ubuntu LTS x86_64, has no executors,
 and is started only on demand. One dedicated `integration` agent performs only
 integration work; four independently replaceable agents provide the
 `composition`, `image-build`, `cv`, and `cd` scheduling labels. The root pipeline
-executes one submitted Fixture chain across those five agents.
+executes one submitted run across those five agents: implemented composition,
+then the image-build, CV, and CD Fixtures.
 
 The tracked authority is:
 
@@ -94,10 +95,11 @@ tracked 90-minute run and 10, 30, 45, and 15 minute Stage defaults. They must be
 positive integers no greater than one day; the run limit must leave at least two
 minutes for finalization. Workflow dispatch parameters cannot change them.
 
-Create the administrator and machine-user password files outside the checkout.
-Each file must be nonempty, owned by the operator, and inaccessible to group and
-other users, for example mode `0600`. Compose mounts them through `/run/secrets`;
-secret values are never placed in tracked files or Compose environment values.
+Create the administrator and machine-user password files and the OpenAI API key
+file outside the checkout. Each file must be nonempty, owned by the operator, and
+inaccessible to group and other users, for example mode `0600`. Compose mounts
+them into the controller only, through `/run/secrets`; secret values are never
+placed in tracked files or Compose environment values.
 
 JCasC creates the two local identities from those bootstrap files. The
 administrator has `Overall/Administer`. The handoff machine user has only
@@ -140,9 +142,20 @@ destroyed controller volume:
 
 Never copy one registration secret between nodes. Destroying `jenkins-home`
 invalidates the old files; remove them and repeat provisioning. The integration
-agent receives no Domain credential and has no Domain label. The four Fixture
-descriptors currently declare no Domain secret binding, so every agent container
-sees only its own registration file and no controller password.
+agent receives no Domain credential and has no Domain label. The three Fixture
+descriptors declare no Domain secret binding, and no agent container sees a
+controller password.
+
+The composition descriptor binds `OPENAI_API_KEY` and `VLLM_KEY`. The root
+pipeline composes with `integration/generation-configs/luna.yaml`, because the
+agents cannot reach the self-hosted Qwen endpoint, and binds the Jenkins secret
+text credential `sdi-openai-api-key` as `OPENAI_API_KEY` around the composition
+Stage only. JCasC creates that credential from the file named by
+`JENKINS_OPENAI_API_KEY_FILE`, which holds only the key. Allow the `ci` agent
+HTTPS egress to `api.openai.com`. Without a valid key or that egress,
+composition fails with `sdi.composition.provider-error` and the build is red.
+The pipeline passes the checked-out `service-repository/` to every Stage
+command.
 
 Each image contains an immutable role and label identity under `/etc/sdi` on its
 read-only root filesystem. The supported Stage execution commands refuse every
@@ -412,7 +425,7 @@ sources are the Jenkins LTS changelog, official Jenkins Docker image, Jenkins
 plugin index, Configuration as Code plugin, Job DSL plugin, and Matrix
 Authorization plugin.
 
-The agent build combines the descriptor-selected CPython 3.12.13 Fixture runtime
+The agent build combines the descriptor-selected CPython 3.12.13 runtime
 with the official Jenkins inbound-agent `3391.va_37fa_a_305d6d-2` JDK 21 image
 and official `uv` 0.12.1 image. The production integration package and its exact
 dependencies are installed from `integration/uv.lock` while the image has build
@@ -426,3 +439,6 @@ Compose environment configuration.
 
 Controller health and Fixture execution prove pipeline machinery only. They are
 not Domain success, Validation evidence, deployment evidence, or KPI evidence.
+The descriptor `image` selects each agent's runtime base; the runtime starts the
+descriptor's entry point from the agent's installed package rather than pulling
+that image per Stage.

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import shutil
 import stat
@@ -15,15 +14,8 @@ from typing import Any, cast
 
 from pydantic import BaseModel, ValidationError
 
-from ._domain_contracts import (
-    CompositionBlueprint,
-    DeploymentResult,
-    DeploymentSchema,
-    ImageBuildResult,
-    ValidationEvidence,
-)
 from ._git_input import GitRepository
-from ._json_input import parse_json
+from ._json_input import canonical_json, parse_json
 from ._result_contracts import (
     FIXTURE_NOTICE,
     PIPELINE_RESULT_PATH,
@@ -40,6 +32,7 @@ from ._stage_contracts import (
     contains_sensitive_material,
 )
 from ._stage_runtime import (
+    OUTPUT_MODELS,
     StageExecution,
     capture_tree,
     committed_stage_sources,
@@ -47,6 +40,7 @@ from ._stage_runtime import (
     expected_directories,
     load_stage_adapter,
     skipped_stage_execution,
+    supplied_stage_sources,
     validate_stage_documents,
 )
 from ._yaml_input import InputError
@@ -55,18 +49,11 @@ MAX_RESULT_BYTES = 1024 * 1024
 RUN_DEADLINE_SECONDS = 90 * 60
 FINALIZATION_RESERVE_SECONDS = 2 * 60
 DESCRIPTORS: tuple[tuple[StageName, str], ...] = (
-    ("composition", "deployment/jenkins/adapters/composition-fixture-v1.yaml"),
+    ("composition", "deployment/jenkins/adapters/composition-v1.yaml"),
     ("image_build", "deployment/jenkins/adapters/image-build-fixture-v1.yaml"),
     ("cv", "deployment/jenkins/adapters/cv-fixture-v1.yaml"),
     ("cd", "deployment/jenkins/adapters/cd-fixture-v1.yaml"),
 )
-DOMAIN_MODELS = {
-    "sdi.composition-blueprint/v1": CompositionBlueprint,
-    "sdi.deployment-schema/v1": DeploymentSchema,
-    "sdi.image-build-result/v1": ImageBuildResult,
-    "sdi.validation-evidence/v1": ValidationEvidence,
-    "sdi.deployment-result/v1": DeploymentResult,
-}
 
 
 def _descriptor_modes(
@@ -80,19 +67,6 @@ def _descriptor_modes(
             raise InputError(msg)
         modes[expected_stage] = descriptor.implementation_mode
     return modes
-
-
-def _canonical_json(value: object) -> bytes:
-    return (
-        json.dumps(
-            value,
-            allow_nan=False,
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        + "\n"
-    ).encode()
 
 
 def _write_file(root: Path, relative_path: str, content: bytes) -> None:
@@ -201,6 +175,9 @@ def validate_bundle(  # noqa: C901, PLR0912, PLR0915
     domain_documents: dict[StageName, dict[str, BaseModel]] = {
         stage: {} for stage, _ in DESCRIPTORS
     }
+    evidence_documents: dict[StageName, list[BaseModel]] = {
+        stage: [] for stage, _ in DESCRIPTORS
+    }
     for artifact in result.artifacts:
         content = captured[artifact.path]
         if (
@@ -209,8 +186,8 @@ def validate_bundle(  # noqa: C901, PLR0912, PLR0915
         ):
             msg = f"archive artifact does not match its inventory: {artifact.path}"
             raise InputError(msg)
-        if artifact.role == "domain_output":
-            model = DOMAIN_MODELS.get(artifact.schema_version)
+        if artifact.role != "diagnostic":
+            model = OUTPUT_MODELS.get(artifact.schema_version)
             if model is None:
                 msg = f"archive artifact uses an unsupported schema: {artifact.path}"
                 raise InputError(msg)
@@ -221,8 +198,11 @@ def validate_bundle(  # noqa: C901, PLR0912, PLR0915
                     extra="forbid",
                 )
             except ValidationError as error:
-                msg = f"archive Domain output is invalid: {artifact.path}: {error}"
+                msg = f"archive artifact is invalid: {artifact.path}: {error}"
                 raise InputError(msg) from error
+            if artifact.role == "stage_evidence":
+                evidence_documents[artifact.stage].append(document)
+                continue
             if contains_sensitive_contract_material(document.model_dump(mode="json")):
                 msg = (
                     "archive Domain output contains sensitive material: "
@@ -264,7 +244,10 @@ def validate_bundle(  # noqa: C901, PLR0912, PLR0915
         }
         if any(
             getattr(document, "evidence_basis", None) != attempt.implementation_mode
-            for document in domain_documents[stage].values()
+            for document in [
+                *domain_documents[stage].values(),
+                *evidence_documents[stage],
+            ]
         ):
             msg = f"{stage} archive evidence basis does not match its adapter"
             raise InputError(msg)
@@ -274,6 +257,8 @@ def validate_bundle(  # noqa: C901, PLR0912, PLR0915
             stage_inputs,
             {item.slot: item.sha256 for item in attempt.accepted_inputs},
             identity,
+            domain_outcome=attempt.domain_outcome,
+            evidence=evidence_documents[stage],
         )
         available_documents.update(domain_documents[stage])
     second_paths, second_capture = capture_tree(bundle_root, root_identity, grants)
@@ -331,7 +316,7 @@ def _assemble_bundle_staging(
     _write_file(
         bundle_staging,
         PIPELINE_RESULT_PATH,
-        _canonical_json(result.model_dump(mode="json", exclude_none=True)),
+        canonical_json(result.model_dump(mode="json", exclude_none=True)),
     )
     validate_bundle(bundle_staging)
     return result.model_dump(mode="json", exclude_none=True)
@@ -384,15 +369,17 @@ def assemble_bundle(
             claim_path.unlink(missing_ok=True)
 
 
-def dispatch_local(  # noqa: PLR0915
+def dispatch_local(  # noqa: PLR0913, PLR0915
     *,
     repository_path: Path,
     requested_ref: str,
     resolved_commit: str,
     run_request_path: str,
     bundle_root: Path,
+    service_repository: Path,
+    generation_config: str,
 ) -> dict[str, Any]:
-    """Execute and atomically publish one complete local four-Stage Fixture run."""
+    """Execute and atomically publish one complete local four-Stage run."""
     run_started_at = datetime.now(UTC)
     run_started_monotonic = time.monotonic()
     if bundle_root.exists() or bundle_root.is_symlink():
@@ -406,7 +393,13 @@ def dispatch_local(  # noqa: PLR0915
     )
     repository = GitRepository(repository_path, resolved_commit)
     repository.require_ref_commit(requested_ref)
-    available_inputs = committed_stage_sources(repository, identified)
+    available_inputs = committed_stage_sources(
+        repository, identified
+    ) | supplied_stage_sources(
+        repository,
+        service_repository=service_repository,
+        generation_config=generation_config,
+    )
     descriptor_modes = _descriptor_modes(repository)
     run_deadline = (
         run_started_monotonic + RUN_DEADLINE_SECONDS - FINALIZATION_RESERVE_SECONDS

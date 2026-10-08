@@ -1,0 +1,57 @@
+{
+  "additionalProperties": false,
+  "description": "The model, limits and endpoint for one generation request.",
+  "properties": {
+    "api_key_env": {
+      "minLength": 1,
+      "title": "Api Key Env",
+      "type": "string"
+    },
+    "base_url": {
+      "minLength": 1,
+      "title": "Base Url",
+      "type": "string"
+    },
+    "max_output_tokens": {
+      "exclusiveMinimum": 0,
+      "title": "Max Output Tokens",
+      "type": "integer"
+    },
+    "model": {
+      "minLength": 1,
+      "title": "Model",
+      "type": "string"
+    },
+    "reasoning_effort": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "title": "Reasoning Effort",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "sdi.generation-config/v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "timeout_seconds": {
+      "exclusiveMinimum": 0,
+      "title": "Timeout Seconds",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "model",
+    "reasoning_effort",
+    "max_output_tokens",
+    "timeout_seconds",
+    "base_url",
+    "api_key_env"
+  ],
+  "title": "GenerationConfig",
+  "type": "object"
+}

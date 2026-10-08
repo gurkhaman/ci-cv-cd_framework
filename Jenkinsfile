@@ -23,7 +23,7 @@ if (runLimitSeconds < 180) {
 
 def stages = [
     [name: 'Composition', stage: 'composition', label: 'composition',
-     descriptor: 'deployment/jenkins/adapters/composition-fixture-v1.yaml',
+     descriptor: 'deployment/jenkins/adapters/composition-v1.yaml',
      workLimitSeconds: readPositiveSeconds(
          'JENKINS_COMPOSITION_WORK_LIMIT_SECONDS', env.JENKINS_COMPOSITION_WORK_LIMIT_SECONDS)],
     [name: 'Image build', stage: 'image_build', label: 'image-build',
@@ -64,12 +64,19 @@ git update-ref refs/heads/main "$RESOLVED_COMMIT_SHA"
 '''
 }
 
+// The Domain agents reach only the OpenAI endpoint, so Jenkins composes with
+// luna. The config is read from the submitted commit, and its key comes from
+// the sdi-openai-api-key credential bound around the composition Stage only.
+def generationConfigPath = 'integration/generation-configs/luna.yaml'
+
 def commonArguments = '''\
   --repository . \
   --requested-ref "$REQUESTED_GIT_REF" \
   --resolved-commit "$RESOLVED_COMMIT_SHA" \
   --run-request-path "$RUN_REQUEST_PATH" \
-  --execution-id "$EXECUTION_ID"'''
+  --execution-id "$EXECUTION_ID" \
+  --service-repository service-repository \
+  --generation-config ''' + "'${generationConfigPath}'"
 
 def resourceNodes = [:]
 def acceptedStages = []
@@ -151,12 +158,8 @@ ${commonArguments} \\
                     }.join(' ')
                     priorArguments = "${priorArguments} --work-limit-seconds '${definition.workLimitSeconds}'"
                     def stageExecutionStatus = 0
-                    withEnv([
-                        "SDI_RUN_DEADLINE_EPOCH_MILLIS=${runDeadlineEpochMillis}",
-                    ]) {
-                        try {
-                            timeout(time: definition.workLimitSeconds + 60, unit: 'SECONDS') {
-                                stageExecutionStatus = sh(returnStatus: true, script: """set -eu
+                    def executeStage = {
+                        sh(returnStatus: true, script: """set -eu
 sdi-integration execute-jenkins-stage \\
 ${commonArguments} \\
   --descriptor-path '${definition.descriptor}' \\
@@ -164,6 +167,22 @@ ${commonArguments} \\
   ${priorArguments} \\
   --run-deadline-epoch-millis \"\$SDI_RUN_DEADLINE_EPOCH_MILLIS\" >/dev/null
 """)
+                    }
+                    withEnv([
+                        "SDI_RUN_DEADLINE_EPOCH_MILLIS=${runDeadlineEpochMillis}",
+                    ]) {
+                        try {
+                            timeout(time: definition.workLimitSeconds + 60, unit: 'SECONDS') {
+                                if (definition.stage == 'composition') {
+                                    withCredentials([string(
+                                        credentialsId: 'sdi-openai-api-key',
+                                        variable: 'OPENAI_API_KEY',
+                                    )]) {
+                                        stageExecutionStatus = executeStage()
+                                    }
+                                } else {
+                                    stageExecutionStatus = executeStage()
+                                }
                             }
                         } catch (FlowInterruptedException interruption) {
                             if (isTimeoutInterruption(interruption)
