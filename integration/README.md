@@ -19,7 +19,7 @@ uv run --project integration sdi-integration identify-run \
   --repository . \
   --requested-ref refs/heads/main \
   --resolved-commit "$GITHUB_SHA" \
-  --run-request-path runs/s-04/s-04-tc-03-c-01-fixture.yaml
+  --run-request-path runs/s-04/s-04-tc-03-c-05-fixture.yaml
 ```
 
 The repository must have one uncredentialed GitHub `origin` URL. Successful
@@ -40,56 +40,102 @@ uv run --project integration sdi-integration execute-stage \
   --repository . \
   --requested-ref refs/heads/main \
   --resolved-commit "$GITHUB_SHA" \
-  --run-request-path runs/s-04/s-04-tc-03-c-01-fixture.yaml \
-  --descriptor-path deployment/jenkins/adapters/composition-fixture-v1.yaml \
+  --run-request-path runs/s-04/s-04-tc-03-c-05-fixture.yaml \
+  --descriptor-path deployment/jenkins/adapters/composition-v1.yaml \
+  --service-repository service-repository \
+  --generation-config integration/generation-configs/qwen.yaml \
   --attempt-root artifacts/composition-attempt
 ```
+
+Every Stage-executing command takes the same two run-supplied composition
+inputs. `--service-repository` names a directory of `SDI.md` descriptions; the
+runtime copies every description into the composition Stage's inputs and gives
+the adapter a manifest of their paths, sizes, and digests. It refuses symbolic
+links, non-regular descriptions, and more than 256 files or 1 MiB.
+`--generation-config` is a repository path read at the resolved commit, so a run
+can only pair a reviewed model endpoint with the key variable that config names.
 
 The adapter process exposes only:
 
 ```sh
-sdi-fixture-adapter run \
+sdi-composition-adapter run \
   --request request.json \
   --input-root inputs \
   --output-root candidate
 ```
 
-The accepted envelope records `execution_conclusion: succeeded`,
-`implementation_mode: fixture`, and `domain_outcome: not_evaluated` separately.
-The deterministic blueprint and deployment schema prove pipeline-interface
-handling only. They are not composition, deployment, Validation, or KPI evidence.
+## Implemented Composition
 
-## Dispatch The Four-Stage Fixture
+The composition descriptor selects `sdi-composition-adapter` with
+`implementation_mode: implemented`. The adapter validates the copied
+descriptions, asks the configured model for proposals, assesses them with the
+same rules as `assess-proposals`, and publishes the preferred proposal as the
+composition blueprint and deployment schema. The blueprint records the
+`proposal_id` and each requirement's checked coverage status; each placement is
+`resolved` or `unresolved`.
+
+The runtime forwards only the key variable named by the generation config, and
+only when the descriptor's `secret_bindings` lists it; otherwise the run stops
+before launch. `HTTPS_PROXY`, `NO_PROXY`, and `SSL_CERT_FILE` are forwarded when
+set. A candidate holding the forwarded key's exact bytes is rejected.
+
+| Outcome code | Execution | Domain outcome | Published |
+| --- | --- | --- | --- |
+| `sdi.composition.preferred-proposal` | succeeded | succeeded | blueprint, deployment schema, evidence |
+| `sdi.composition.bounded-no-result` | succeeded | failed | evidence |
+| `sdi.composition.scoped-rejection` | succeeded | failed | evidence |
+| `sdi.composition.insufficient-proposals` | succeeded | failed | evidence |
+| `sdi.composition.invalid-service-description` | failed | not evaluated | diagnostic |
+| `sdi.composition.generation-invalid` | failed | not evaluated | diagnostic |
+| `sdi.composition.generation-refused` | failed | not evaluated | diagnostic |
+| `sdi.composition.provider-error` | failed | not evaluated | diagnostic |
+
+A bounded result means generation reached `max_output_tokens`. A scoped
+rejection means every proposal lost all of its services to placement removals.
+`composition-evidence.json` (`sdi.composition-evidence/v1`, at most 256 KiB)
+records the description digests, the generation settings, the exact model
+request and response summary, and the complete assessment. It is never an input
+to a later Stage. Reason summaries and the diagnostic come from fixed templates
+and never repeat provider error text.
+
+Fixture cases match exact input digests and cannot recognize real output, so a
+Fixture Stage whose inputs include implemented output is skipped with
+`sdi.dependency.implemented-evidence`. A successful composition therefore ends
+the run with image build skipped and CV and CD blocked; the run still exits 0.
+
+## Dispatch A Local Run
 
 `dispatch-local` assigns one Execution ID, executes the reviewed composition,
 image-build, CV, and CD descriptors sequentially, and passes only exact accepted
 files along the least-required graph. It atomically publishes a complete archive
-candidate only after all attempts, Domain outputs, diagnostics, result metadata,
-and checksums validate:
+candidate only after all attempts, Domain outputs, evidence, diagnostics, result
+metadata, and checksums validate:
 
 ```sh
 uv run --project integration sdi-integration dispatch-local \
   --repository . \
   --requested-ref refs/heads/main \
   --resolved-commit "$GITHUB_SHA" \
-  --run-request-path runs/s-04/s-04-tc-03-c-01-fixture.yaml \
-  --bundle-root artifacts/s-04-tc-03-c-01
+  --run-request-path runs/s-04/s-04-tc-03-c-05-fixture.yaml \
+  --service-repository service-repository \
+  --generation-config integration/generation-configs/qwen.yaml \
+  --bundle-root artifacts/s-04-tc-03-c-05
 ```
 
-The archive contains the fixed `pipeline-integration-result.json`, five small
-Domain handoff files, and four bounded diagnostics. The result is the manifest;
-its checksummed inventory covers every other archive file without a recursive
-self-digest. Revalidate the complete archive independently with:
+Use `qwen.yaml` while the self-hosted endpoint answers and rerun with
+`luna.yaml` when it does not; export the key the chosen config names. The result
+is the manifest; its checksummed inventory covers every other archive file
+without a recursive self-digest. Revalidate the complete archive independently
+with:
 
 ```sh
 uv run --project integration sdi-integration validate-bundle \
-  --bundle-root artifacts/s-04-tc-03-c-01
+  --bundle-root artifacts/s-04-tc-03-c-05
 ```
 
-Every attempt remains `implementation_mode: fixture` and
-`domain_outcome: not_evaluated`; the result explicitly records
-`kpi_evaluation: not_evaluated` and contains no overall Domain or six-combination
-verdict.
+Image-build, CV, and CD remain Fixtures. The result explicitly records
+`kpi_evaluation: not_evaluated` and contains no overall Domain or
+six-combination verdict.
 
 ## Jenkins Pipeline Operations
 
@@ -215,8 +261,8 @@ Candidate acceptance is transactional. A malformed, missing, changing, unsafe,
 undeclared, oversized, identity-mismatched, or schema-invalid candidate
 contributes no adapter-authored files. The resulting failed attempt explicitly
 records that no adapter response was accepted. An implemented adapter cannot
-consume unevaluated Fixture output, while an implemented output may feed a later
-Fixture during incremental replacement.
+consume unevaluated Fixture output, and a Fixture never consumes implemented
+output. A negative Domain outcome publishes no Domain output.
 
 External `SIGINT` or `SIGTERM` cancellation is the deliberate exception: the CLI
 immediately terminates the active adapter process tree, removes attempt-local and
