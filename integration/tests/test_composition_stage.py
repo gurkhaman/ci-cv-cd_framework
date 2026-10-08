@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from tests._live_model import REPOSITORY_ROOT, live_config, openai_key
+from tests._stub_provider import BODIES, STUB_KEY, stub_config, stub_provider
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -235,6 +236,39 @@ def test_a_rejected_key_fails_execution_without_outputs(tmp_path: Path) -> None:
     assert image_build["reason"]["code"] == "sdi.dependency.prerequisite-blocked"
     _validate_bundle(tmp_path)
     assert api_key not in _bundle_text(tmp_path) + completed.stdout
+
+
+@pytest.mark.parametrize(
+    ("body", "code"),
+    [
+        ("refusal", "sdi.composition.generation-refused"),
+        ("off-schema", "sdi.composition.generation-invalid"),
+    ],
+)
+def test_an_answer_without_proposals_fails_execution(
+    tmp_path: Path, body: str, code: str
+) -> None:
+    with stub_provider(BODIES[body]) as base_url:
+        commit_sha = _repository(
+            tmp_path,
+            {"integration/generation-configs/stub.yaml": stub_config(base_url)},
+        )
+        completed = _dispatch(
+            tmp_path,
+            commit_sha,
+            generation_config="integration/generation-configs/stub.yaml",
+            keys={"VLLM_KEY": STUB_KEY},
+        )
+
+    assert completed.returncode == 1, completed.stderr
+    result = json.loads(completed.stdout)
+    composition = result["attempts"][0]
+    assert composition["execution_conclusion"] == "failed"
+    assert composition["domain_outcome"] == "not_evaluated"
+    assert composition["reason"]["code"] == code
+    assert _composition_files(result) == {"diagnostic"}
+    _validate_bundle(tmp_path)
+    assert STUB_KEY not in _bundle_text(tmp_path) + completed.stdout
 
 
 def test_an_invalid_description_fails_before_generation(tmp_path: Path) -> None:

@@ -39,7 +39,6 @@ from ._domain_contracts import (
 from ._generation import (
     MAX_RETRIES,
     GenerationConfig,
-    GenerationError,
     generate_proposals,
 )
 from ._jenkins_agent_boundary import enforce_domain_execution_boundary
@@ -196,27 +195,6 @@ class _Run:
             lines.append(f"{name}: {text}")
         content = "\n".join(lines) + "\n"
         return content.encode()[: self.request.diagnostic.max_bytes]
-
-
-def _record_provider_facts(run: _Run, evidence: dict[str, object]) -> None:
-    error = cast("dict[str, object]", evidence.get("error") or {})
-    response = cast("dict[str, object]", evidence.get("response") or {})
-    usage = cast("dict[str, object]", response.get("usage") or {})
-    run.facts.update(
-        {
-            "error_type": error.get("type"),
-            "status_code": error.get("status_code"),
-            "request_id": error.get("request_id"),
-            "response_id": response.get("id"),
-            "response_status": response.get("status"),
-            "input_tokens": usage.get("input_tokens"),
-            "output_tokens": usage.get("output_tokens"),
-        }
-    )
-    if "request" in evidence:
-        run.facts["request_sha256"] = hashlib.sha256(
-            canonical_json(evidence["request"])
-        ).hexdigest()
 
 
 def _blueprint_documents(
@@ -385,51 +363,35 @@ def _compose(run: _Run, input_root: Path) -> Outcome:
     inputs = AssessmentInputs(files, profile, requirements, requirements_body)
     services = {file.description.service_id: file.description for file in files}
 
-    generation: dict[str, object] = {}
-    record: dict[str, object] = {
-        "config_sha256": config_sha256,
-        "model": config.model,
-        "reasoning_effort": config.reasoning_effort,
-        "max_output_tokens": config.max_output_tokens,
-        "timeout_seconds": config.timeout_seconds,
-        "max_retries": MAX_RETRIES,
-    }
+    generation = generate_proposals(inputs=inputs, config=config)
+    run.facts |= generation.provider_facts()
+    if generation.outcome not in {"generated", "exhausted"}:
+        return GENERATION_FAILURES[generation.outcome], {}
     evidence: dict[str, object] = identity | {
         "schema_version": "sdi.composition-evidence/v1",
         "descriptions": [
             {"path": item.path, "sha256": item.sha256} for item in manifest.files
         ],
+        "generation": {
+            "config_sha256": config_sha256,
+            "model": config.model,
+            "reasoning_effort": config.reasoning_effort,
+            "max_output_tokens": config.max_output_tokens,
+            "timeout_seconds": config.timeout_seconds,
+            "max_retries": MAX_RETRIES,
+            "outcome": generation.outcome,
+            "request": generation.request,
+            "response": generation.response,
+        },
     }
-    try:
-        generated = generate_proposals(
-            inputs=inputs, config=config, evidence=generation
-        )
-    except GenerationError as error:
-        _record_provider_facts(run, generation)
-        run.facts["generation_outcome"] = error.outcome
-        if error.outcome != "exhausted":
-            return GENERATION_FAILURES[error.outcome], {}
-        record |= {
-            "outcome": "exhausted",
-            "request": generation["request"],
-            "response": generation["response"],
-        }
+    proposals = generation.proposals
+    if proposals is None:
         return "bounded-no-result", {
-            "composition_evidence": _validated(
-                CompositionEvidence, evidence | {"generation": record}
-            )
+            "composition_evidence": _validated(CompositionEvidence, evidence)
         }
-    _record_provider_facts(run, generation)
-    run.facts["generation_outcome"] = "generated"
-    record |= {
-        "outcome": "generated",
-        "request": generation["request"],
-        "response": generation["response"],
-    }
-    proposals = _validated(CompositionProposals, generated)
     assessment = assess_proposals(
         proposals,
-        cast("list[object]", generated["proposals"]),
+        proposals.model_dump(mode="json")["proposals"],
         services,
         profile,
         requirements.requirement_ids,
@@ -437,7 +399,7 @@ def _compose(run: _Run, input_root: Path) -> Outcome:
     documents: dict[str, BaseModel] = {
         "composition_evidence": _validated(
             CompositionEvidence,
-            evidence | {"generation": record, "assessment": assessment},
+            evidence | {"assessment": assessment},
         )
     }
     if assessment["preferred"] is None:

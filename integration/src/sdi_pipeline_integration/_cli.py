@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, cast
 from pydantic import ValidationError
 
 from ._assessment import assess_proposal_files, load_assessment_inputs
-from ._generation import GenerationConfig, GenerationError, generate_proposals
+from ._generation import MAX_RETRIES, GenerationConfig, generate_proposals
 from ._github_actions import render_github_summary
 from ._github_dispatch import GitHubDispatchError, dispatch_s04
 from ._jenkins_handoff import HandoffError, handoff_jenkins
@@ -299,7 +299,6 @@ def _write_json(path: Path, document: object) -> None:
 
 
 def _generate_proposals(arguments: argparse.Namespace) -> int:
-    evidence: dict[str, object] = {}
     try:
         arguments.output.unlink(missing_ok=True)
         config = GenerationConfig.model_validate(
@@ -308,27 +307,33 @@ def _generate_proposals(arguments: argparse.Namespace) -> int:
                 str(arguments.generation_config),
             )
         )
-        try:
-            proposals = generate_proposals(
-                inputs=load_assessment_inputs(
-                    service_repository=arguments.service_repository,
-                    target_profile=arguments.target_profile,
-                    requirements_specification=arguments.requirements_specification,
-                ),
-                config=config,
-                evidence=evidence,
-            )
-        except GenerationError as error:
-            _write_json(
-                arguments.evidence,
-                evidence | {"outcome": error.outcome, "reason": str(error)},
-            )
-            sys.stderr.write(f"sdi-integration: {error}\n")
-            return 1
-        _write_json(arguments.output, proposals)
-        _write_json(
-            arguments.evidence, evidence | {"outcome": "generated", "reason": None}
+        result = generate_proposals(
+            inputs=load_assessment_inputs(
+                service_repository=arguments.service_repository,
+                target_profile=arguments.target_profile,
+                requirements_specification=arguments.requirements_specification,
+            ),
+            config=config,
         )
+        evidence = {
+            "settings": config.model_dump() | {"max_retries": MAX_RETRIES},
+            "outcome": result.outcome,
+            "reason": result.reason,
+        } | {
+            name: value
+            for name, value in (
+                ("request", result.request),
+                ("response", result.response),
+                ("error", result.error),
+            )
+            if value is not None
+        }
+        if result.proposals is None:
+            _write_json(arguments.evidence, evidence)
+            sys.stderr.write(f"sdi-integration: {result.outcome}: {result.reason}\n")
+            return 1
+        _write_json(arguments.output, result.proposals.model_dump(mode="json"))
+        _write_json(arguments.evidence, evidence)
     except (InputError, OSError, ValidationError) as error:
         sys.stderr.write(f"sdi-integration: {error}\n")
         return 2

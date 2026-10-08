@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from tests._live_model import CONFIGS, REPOSITORY_ROOT, live_config, openai_key
+from tests._stub_provider import BODIES, STUB_KEY, stub_config, stub_provider
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -100,6 +101,33 @@ def test_provider_error_writes_no_proposals(tmp_path: Path) -> None:
     assert evidence["outcome"] == "provider_error"
     assert evidence["error"]["status_code"] == 401
     assert api_key not in evidence_text + completed.stdout + completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("body", "outcome"),
+    [
+        ("content-filter", "refused"),
+        ("refusal", "refused"),
+        ("off-schema", "invalid"),
+        ("failed", "provider_error"),
+    ],
+)
+def test_reports_why_the_provider_returned_no_proposals(
+    tmp_path: Path, body: str, outcome: str
+) -> None:
+    config = tmp_path / "stub.yaml"
+    with stub_provider(BODIES[body]) as base_url:
+        config.write_text(stub_config(base_url))
+        completed = _generate(tmp_path, config, {"VLLM_KEY": STUB_KEY})
+
+    assert completed.returncode == 1, completed.stderr
+    assert not (tmp_path / "proposals.json").exists()
+    evidence_text = (tmp_path / "evidence.json").read_text()
+    evidence = json.loads(evidence_text)
+    assert evidence["outcome"] == outcome
+    assert evidence["request"]["model"] == "stub-model"
+    assert evidence["response"]["id"] == "resp_stub"
+    assert STUB_KEY not in evidence_text + completed.stdout + completed.stderr
 
 
 def test_rejects_an_unknown_generation_setting(tmp_path: Path) -> None:

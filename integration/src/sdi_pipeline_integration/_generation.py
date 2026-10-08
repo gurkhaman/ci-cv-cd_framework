@@ -8,8 +8,11 @@ only its own key, so the OpenAI key never reaches another server.
 
 from __future__ import annotations
 
+import functools
+import hashlib
 import json
 import os
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Literal, cast
 
 import openai
@@ -23,8 +26,11 @@ from ._assessment import (
     ServicePlacement,
 )
 from ._contracts import ContractModel
+from ._json_input import canonical_json
 
 if TYPE_CHECKING:
+    from openai._legacy_response import LegacyAPIResponse
+    from openai.types.responses import ParsedResponse
     from pydantic import BaseModel
 
 MAX_RETRIES = 0
@@ -79,6 +85,11 @@ In the rationale, state the main choices and every gap you could not avoid.
 """
 
 type Outcome = Literal["generated", "exhausted", "refused", "invalid", "provider_error"]
+# Why an incomplete response stopped, for the reasons that are not provider errors.
+INCOMPLETE_OUTCOMES: dict[str, Outcome] = {
+    "max_output_tokens": "exhausted",
+    "content_filter": "refused",
+}
 
 
 class GenerationConfig(ContractModel):
@@ -91,14 +102,6 @@ class GenerationConfig(ContractModel):
     timeout_seconds: PositiveInt
     base_url: str = Field(min_length=1)
     api_key_env: str = Field(min_length=1)
-
-
-class GenerationError(Exception):
-    """Generation ended without proposals; the outcome names why."""
-
-    def __init__(self, message: str, *, outcome: Outcome) -> None:
-        super().__init__(f"{outcome}: {message}")
-        self.outcome: Outcome = outcome
 
 
 def _generation_model(
@@ -156,22 +159,56 @@ def _response_record(body: dict[str, object]) -> dict[str, object]:
     }
 
 
+@dataclass(frozen=True)
+class GenerationResult:
+    """How one generation request ended and what it exchanged with the provider.
+
+    The reason explains an outcome without proposals and may quote provider
+    text, so only operator-facing output may show it.
+    """
+
+    outcome: Outcome
+    proposals: CompositionProposals | None = None
+    reason: str | None = None
+    request: dict[str, object] | None = None
+    response: dict[str, object] | None = None
+    error: dict[str, object] | None = None
+
+    def provider_facts(self) -> dict[str, object]:
+        """Return the provider's identifiers and counts, never its text."""
+        error = self.error or {}
+        response = self.response or {}
+        usage = cast("dict[str, object]", response.get("usage") or {})
+        facts: dict[str, object] = {
+            "generation_outcome": self.outcome,
+            "error_type": error.get("type"),
+            "status_code": error.get("status_code"),
+            "request_id": error.get("request_id"),
+            "response_id": response.get("id"),
+            "response_status": response.get("status"),
+            "input_tokens": usage.get("input_tokens"),
+            "output_tokens": usage.get("output_tokens"),
+        }
+        if self.request is not None:
+            facts["request_sha256"] = hashlib.sha256(
+                canonical_json(self.request)
+            ).hexdigest()
+        return facts
+
+
 def generate_proposals(
-    *,
-    inputs: AssessmentInputs,
-    config: GenerationConfig,
-    evidence: dict[str, object],
-) -> dict[str, object]:
-    """Ask the configured model for proposals, recording everything in evidence."""
-    text_format: type[BaseModel] = _generation_model(
+    *, inputs: AssessmentInputs, config: GenerationConfig
+) -> GenerationResult:
+    """Ask the configured model for proposals and report how the request ended."""
+    text_format = _generation_model(
         [file.description.service_id for file in inputs.files],
         inputs.requirements.requirement_ids,
     )
-    evidence["settings"] = config.model_dump() | {"max_retries": MAX_RETRIES}
     api_key = os.environ.get(config.api_key_env)
     if not api_key:
-        msg = f"{config.api_key_env} is not set"
-        raise GenerationError(msg, outcome="provider_error")
+        return GenerationResult(
+            "provider_error", reason=f"{config.api_key_env} is not set"
+        )
     try:
         client = openai.OpenAI(
             api_key=api_key,
@@ -189,32 +226,45 @@ def generate_proposals(
             store=False,
         )
     except openai.OpenAIError as error:
-        if isinstance(error, openai.APIError):
-            evidence["request"] = json.loads(error.request.content)
-        evidence["error"] = {
-            "type": type(error).__name__,
-            "status_code": getattr(error, "status_code", None),
-            "request_id": getattr(error, "request_id", None),
-        }
-        raise GenerationError(str(error), outcome="provider_error") from error
-    evidence["request"] = json.loads(raw.http_response.request.content)
+        return GenerationResult(
+            "provider_error",
+            reason=str(error),
+            request=(
+                json.loads(error.request.content)
+                if isinstance(error, openai.APIError)
+                else None
+            ),
+            error={
+                "type": type(error).__name__,
+                "status_code": getattr(error, "status_code", None),
+                "request_id": getattr(error, "request_id", None),
+            },
+        )
+    return _interpret(raw)
+
+
+def _interpret(
+    raw: LegacyAPIResponse[ParsedResponse[CompositionProposals]],
+) -> GenerationResult:
+    """Classify the provider's answer to one request."""
     body = cast("dict[str, object]", raw.http_response.json())
-    evidence["response"] = _response_record(body)
+    ended = functools.partial(
+        GenerationResult,
+        request=json.loads(raw.http_response.request.content),
+        response=_response_record(body),
+    )
     status = body.get("status")
-    details = cast("dict[str, object]", body.get("incomplete_details") or {})
-    if status == "incomplete" and details.get("reason") == "max_output_tokens":
-        msg = f"output reached max_output_tokens={config.max_output_tokens}"
-        raise GenerationError(msg, outcome="exhausted")
-    if status == "incomplete" and details.get("reason") == "content_filter":
-        msg = "output stopped by the content filter"
-        raise GenerationError(msg, outcome="refused")
     if status != "completed":
-        msg = f"response status {status}: {body.get('error')}"
-        raise GenerationError(msg, outcome="provider_error")
+        details = cast("dict[str, object]", body.get("incomplete_details") or {})
+        outcome: Outcome = "provider_error"
+        if status == "incomplete":
+            outcome = INCOMPLETE_OUTCOMES.get(str(details.get("reason")), outcome)
+        reason = details.get("reason") or body.get("error")
+        return ended(outcome, reason=f"response status {status}: {reason}")
     try:
         response = raw.parse()
     except ValidationError as error:
-        raise GenerationError(str(error), outcome="invalid") from error
+        return ended("invalid", reason=str(error))
     refusals = [
         item.refusal
         for output in response.output
@@ -223,9 +273,7 @@ def generate_proposals(
         if item.type == "refusal"
     ]
     if refusals:
-        evidence["refusal"] = refusals
-        raise GenerationError(" ".join(refusals), outcome="refused")
+        return ended("refused", reason=" ".join(refusals))
     if response.output_parsed is None:
-        msg = "the response holds no proposals"
-        raise GenerationError(msg, outcome="invalid")
-    return response.output_parsed.model_dump(mode="json")
+        return ended("invalid", reason="the response holds no proposals")
+    return ended("generated", proposals=response.output_parsed)
