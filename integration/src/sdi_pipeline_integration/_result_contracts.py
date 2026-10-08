@@ -26,8 +26,10 @@ from ._contracts import (
 )
 from ._git_input import validate_repository_path
 from ._stage_contracts import (
+    EXPECTED_STAGE_EVIDENCE,
     EXPECTED_STAGE_INPUT_SLOTS,
     EXPECTED_STAGE_OUTPUTS,
+    SUPPLIED_INPUT_SLOTS,
     AcceptedAttemptEnvelope,
     ExecutionId,
     Sha256,
@@ -50,7 +52,16 @@ GitCommitSha = Annotated[
     StringConstraints(strict=True, pattern=r"^[0-9a-f]{40}$"),
 ]
 SmallDomainFileSize = Annotated[NonNegativeInt, Field(le=32768)]
-BoundedDiagnosticSize = Annotated[NonNegativeInt, Field(le=4096)]
+BoundedEvidenceSize = Annotated[NonNegativeInt, Field(le=262144)]
+BoundedDiagnosticSize = Annotated[NonNegativeInt, Field(le=16384)]
+INITIAL_SKIP_CODES = frozenset(
+    {
+        "sdi.stage.not-implemented",
+        "sdi.dependency.fixture-evidence",
+        "sdi.dependency.implemented-evidence",
+        "sdi.run.deadline-exceeded",
+    }
+)
 
 
 def archive_path(stage: StageName, accepted_path: str) -> str:
@@ -93,6 +104,25 @@ class BundleDomainArtifact(ContractModel):
         return path
 
 
+class BundleEvidenceArtifact(ContractModel):
+    """One schema-valid Stage evidence record included in the archive candidate."""
+
+    role: Literal["stage_evidence"]
+    stage: StageName
+    slot: SlotName
+    path: RepositoryPath
+    media_type: NonBlank
+    schema_version: NonBlank
+    byte_size: BoundedEvidenceSize
+    sha256: Sha256
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, path: str) -> str:
+        validate_repository_path(path)
+        return path
+
+
 class BundleDiagnosticArtifact(ContractModel):
     """One bounded sanitized diagnostic included in the archive candidate."""
 
@@ -113,7 +143,7 @@ class BundleDiagnosticArtifact(ContractModel):
 
 
 type BundleArtifact = Annotated[
-    BundleDomainArtifact | BundleDiagnosticArtifact,
+    BundleDomainArtifact | BundleEvidenceArtifact | BundleDiagnosticArtifact,
     Field(discriminator="role"),
 ]
 
@@ -235,11 +265,9 @@ class PipelineIntegrationResult(ContractModel):
                     raise ValueError(msg)
                 continue
             if attempt.lifecycle_state == "skipped":
-                if attempt.reason is None or attempt.reason.code not in {
-                    "sdi.stage.not-implemented",
-                    "sdi.dependency.fixture-evidence",
-                    "sdi.run.deadline-exceeded",
-                }:
+                if attempt.reason is None or attempt.reason.code not in (
+                    INITIAL_SKIP_CODES
+                ):
                     msg = f"{stage} has no typed reason for its initial skip"
                     raise ValueError(msg)
                 blocking_stage = stage
@@ -250,6 +278,8 @@ class PipelineIntegrationResult(ContractModel):
                 msg = f"{stage} attempt inputs do not match the reviewed graph"
                 raise ValueError(msg)
             for accepted in attempt.accepted_inputs:
+                if accepted.slot in SUPPLIED_INPUT_SLOTS:
+                    continue
                 if accepted.slot not in sources:
                     msg = f"{stage} attempt input has no accepted source"
                     raise ValueError(msg)
@@ -270,14 +300,31 @@ class PipelineIntegrationResult(ContractModel):
                 ):
                     msg = "implemented attempt consumed unevaluated Fixture output"
                     raise ValueError(msg)
-            file_slots = [item.slot for item in attempt.accepted_files]
-            output_slots = list(EXPECTED_STAGE_OUTPUTS[stage])
-            if attempt.execution_conclusion == "succeeded":
-                if file_slots not in (output_slots, [*output_slots, "diagnostic"]):
+            domain_slots = [
+                item.slot
+                for item in attempt.accepted_files
+                if item.role == "domain_output"
+            ]
+            if (
+                attempt.execution_conclusion == "succeeded"
+                and attempt.domain_outcome != "failed"
+            ):
+                if domain_slots != list(EXPECTED_STAGE_OUTPUTS[stage]):
                     msg = f"{stage} attempt files do not match the reviewed profile"
                     raise ValueError(msg)
-            elif any(item.role == "domain_output" for item in attempt.accepted_files):
-                msg = f"{stage} failed attempt cannot contribute Domain output"
+            elif domain_slots:
+                msg = f"{stage} unsuccessful attempt cannot contribute Domain output"
+                raise ValueError(msg)
+            if attempt.execution_conclusion != "succeeded" and any(
+                item.role == "stage_evidence" for item in attempt.accepted_files
+            ):
+                msg = f"{stage} failed attempt cannot contribute evidence"
+                raise ValueError(msg)
+            roles = [item.role for item in attempt.accepted_files]
+            if roles != sorted(
+                roles, key=("domain_output", "stage_evidence", "diagnostic").index
+            ):
+                msg = f"{stage} attempt files are not in reviewed order"
                 raise ValueError(msg)
             for accepted in attempt.accepted_files:
                 if accepted.role == "domain_output":
@@ -299,6 +346,14 @@ class PipelineIntegrationResult(ContractModel):
                         attempt.implementation_mode,
                         attempt.domain_outcome,
                     )
+                elif accepted.role == "stage_evidence":
+                    if (
+                        accepted.path,
+                        accepted.media_type,
+                        accepted.schema_version,
+                    ) != EXPECTED_STAGE_EVIDENCE[stage].get(accepted.slot):
+                        msg = f"{stage} evidence does not match the reviewed profile"
+                        raise ValueError(msg)
                 elif accepted.path != "diagnostic.txt":
                     msg = f"{stage} diagnostic does not match the reviewed profile"
                     raise ValueError(msg)
@@ -318,7 +373,7 @@ class PipelineIntegrationResult(ContractModel):
                     archive_path(attempt.correlation.stage, accepted.path),
                     accepted.media_type,
                 )
-                if accepted.role == "domain_output":
+                if accepted.role != "diagnostic":
                     expected_artifacts.append(
                         (
                             *common,
@@ -345,7 +400,7 @@ class PipelineIntegrationResult(ContractModel):
                 artifact.path,
                 artifact.media_type,
             )
-            if artifact.role == "domain_output":
+            if artifact.role != "diagnostic":
                 actual_artifacts.append(
                     (
                         *common,

@@ -587,7 +587,7 @@ descriptor_image() {
         fail "invalid adapter descriptor: $descriptor"
 }
 
-JENKINS_COMPOSITION_AGENT_IMAGE=$(descriptor_image composition-fixture-v1.yaml)
+JENKINS_COMPOSITION_AGENT_IMAGE=$(descriptor_image composition-v1.yaml)
 JENKINS_IMAGE_BUILD_AGENT_IMAGE=$(descriptor_image image-build-fixture-v1.yaml)
 JENKINS_CV_AGENT_IMAGE=$(descriptor_image cv-fixture-v1.yaml)
 JENKINS_CD_AGENT_IMAGE=$(descriptor_image cd-fixture-v1.yaml)

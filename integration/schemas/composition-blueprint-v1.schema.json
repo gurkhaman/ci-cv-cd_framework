@@ -1,11 +1,44 @@
 {
   "$defs": {
+    "BlueprintCoverage": {
+      "additionalProperties": false,
+      "description": "The checked coverage status of one requirement obligation.",
+      "properties": {
+        "requirement_id": {
+          "maxLength": 63,
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+          "title": "Requirement Id",
+          "type": "string"
+        },
+        "services": {
+          "items": {
+            "maxLength": 63,
+            "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "title": "Services",
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/$defs/CoverageStatus"
+        }
+      },
+      "required": [
+        "requirement_id",
+        "status",
+        "services"
+      ],
+      "title": "BlueprintCoverage",
+      "type": "object"
+    },
     "BlueprintService": {
       "additionalProperties": false,
       "description": "One selected service; capability is an unchecked assigned label.",
       "properties": {
         "capability": {
+          "maxLength": 64,
           "minLength": 1,
+          "pattern": "^[^/:]+$",
           "title": "Capability",
           "type": "string"
         },
@@ -32,6 +65,15 @@
       ],
       "title": "BlueprintService",
       "type": "object"
+    },
+    "CoverageStatus": {
+      "enum": [
+        "supported",
+        "missing",
+        "uncertain",
+        "outside_composition"
+      ],
+      "type": "string"
     },
     "SourceInputDigest": {
       "additionalProperties": false,
@@ -71,6 +113,14 @@
       "title": "Combination Id",
       "type": "string"
     },
+    "coverage": {
+      "items": {
+        "$ref": "#/$defs/BlueprintCoverage"
+      },
+      "minItems": 1,
+      "title": "Coverage",
+      "type": "array"
+    },
     "evidence_basis": {
       "enum": [
         "fixture",
@@ -83,6 +133,12 @@
       "maxLength": 63,
       "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
       "title": "Profile Id",
+      "type": "string"
+    },
+    "proposal_id": {
+      "maxLength": 63,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "title": "Proposal Id",
       "type": "string"
     },
     "requirement_ids": {
@@ -117,8 +173,8 @@
       "items": {
         "$ref": "#/$defs/SourceInputDigest"
       },
-      "maxItems": 3,
-      "minItems": 3,
+      "maxItems": 5,
+      "minItems": 5,
       "title": "Source Inputs",
       "type": "array"
     },
@@ -132,13 +188,15 @@
     "schema_version",
     "evidence_basis",
     "blueprint_id",
+    "proposal_id",
     "scenario_id",
     "testcase_id",
     "combination_id",
     "profile_id",
     "source_inputs",
     "requirement_ids",
-    "services"
+    "services",
+    "coverage"
   ],
   "title": "CompositionBlueprint",
   "type": "object"

@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from typing import Annotated, Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import (
+    Field,
+    JsonValue,
+    NonNegativeInt,
+    PositiveInt,
+    StringConstraints,
+    model_validator,
+)
 from pydantic.json_schema import SkipJsonSchema  # noqa: TC002
 
 from ._contracts import (
@@ -23,6 +30,19 @@ DEPLOYMENT_SCHEMA_VERSION = "sdi.deployment-schema/v1"
 IMAGE_BUILD_RESULT_SCHEMA_VERSION = "sdi.image-build-result/v1"
 VALIDATION_EVIDENCE_SCHEMA_VERSION = "sdi.validation-evidence/v1"
 DEPLOYMENT_RESULT_SCHEMA_VERSION = "sdi.deployment-result/v1"
+COMPOSITION_EVIDENCE_SCHEMA_VERSION = "sdi.composition-evidence/v1"
+
+# A short label without path or URL syntax, so a model-chosen capability can
+# never carry an endpoint or a machine path into a Domain output.
+Capability = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True, min_length=1, max_length=64, pattern=r"^[^/:]+$"
+    ),
+]
+type CoverageStatus = Literal[
+    "supported", "missing", "uncertain", "outside_composition"
+]
 
 
 def _require_unique(values: list[str], field_name: str) -> None:
@@ -42,8 +62,16 @@ class BlueprintService(ContractModel):
     """One selected service; capability is an unchecked assigned label."""
 
     service_id: Slug
-    capability: NonBlank
+    capability: Capability
     depends_on: list[Slug]
+
+
+class BlueprintCoverage(ContractModel):
+    """The checked coverage status of one requirement obligation."""
+
+    requirement_id: Slug
+    status: CoverageStatus
+    services: list[Slug]
 
 
 class CompositionBlueprint(ContractModel):
@@ -52,13 +80,15 @@ class CompositionBlueprint(ContractModel):
     schema_version: Literal["sdi.composition-blueprint/v1"]
     evidence_basis: Literal["fixture", "implemented"]
     blueprint_id: Slug
+    proposal_id: Slug
     scenario_id: ScenarioId
     testcase_id: TestcaseId
     combination_id: CombinationId
     profile_id: Slug
-    source_inputs: Annotated[list[SourceInputDigest], Field(min_length=3, max_length=3)]
+    source_inputs: Annotated[list[SourceInputDigest], Field(min_length=5, max_length=5)]
     requirement_ids: Annotated[list[Slug], Field(min_length=1)]
     services: Annotated[list[BlueprintService], Field(min_length=1)]
+    coverage: Annotated[list[BlueprintCoverage], Field(min_length=1)]
 
     @model_validator(mode="after")
     def validate_services(self) -> Self:
@@ -67,6 +97,15 @@ class CompositionBlueprint(ContractModel):
         _require_unique([item.service_id for item in self.services], "service_id")
         for service in self.services:
             _require_unique(service.depends_on, "depends_on")
+        if [item.requirement_id for item in self.coverage] != self.requirement_ids:
+            msg = "coverage must list each requirement_id once, in order"
+            raise ValueError(msg)
+        service_ids = {item.service_id for item in self.services}
+        for entry in self.coverage:
+            _require_unique(entry.services, "covering service_id")
+            if not set(entry.services) <= service_ids:
+                msg = "coverage cites a service outside the blueprint"
+                raise ValueError(msg)
         return self
 
 
@@ -74,6 +113,7 @@ class ServicePlacement(ContractModel):
     """One service placed as a chosen artifact on a profile host."""
 
     service_id: Slug
+    status: Literal["resolved", "unresolved"]
     artifact_id: Slug | SkipJsonSchema[None] = None
     host: Slug | SkipJsonSchema[None] = None
 
@@ -82,6 +122,15 @@ class ServicePlacement(ContractModel):
     def reject_explicit_unknowns(cls, data: object) -> object:
         """Require an unresolved artifact or host to be omitted rather than null."""
         return reject_explicit_nulls(data, ("artifact_id", "host"))
+
+    @model_validator(mode="after")
+    def require_resolved_facts(self) -> Self:
+        if self.status == "resolved" and (
+            self.artifact_id is None or self.host is None
+        ):
+            msg = "a resolved placement requires its artifact_id and host"
+            raise ValueError(msg)
+        return self
 
 
 class DeploymentSchema(ContractModel):
@@ -95,7 +144,7 @@ class DeploymentSchema(ContractModel):
     testcase_id: TestcaseId
     combination_id: CombinationId
     profile_id: Slug
-    source_inputs: Annotated[list[SourceInputDigest], Field(min_length=3, max_length=3)]
+    source_inputs: Annotated[list[SourceInputDigest], Field(min_length=5, max_length=5)]
     placements: Annotated[list[ServicePlacement], Field(min_length=1)]
 
     @model_validator(mode="after")
@@ -214,4 +263,54 @@ class DeploymentResult(ContractModel):
             [item.service_id for item in self.deployment_records],
             "deployment service_id",
         )
+        return self
+
+
+class EvidenceDescription(ContractModel):
+    """One service description supplied to generation and assessment."""
+
+    path: NonBlank
+    sha256: Sha256
+
+
+class GenerationRecord(ContractModel):
+    """The settings, exact request and response summary of one generation."""
+
+    config_sha256: Sha256
+    model: NonBlank
+    reasoning_effort: NonBlank
+    max_output_tokens: PositiveInt
+    timeout_seconds: PositiveInt
+    max_retries: NonNegativeInt
+    outcome: Literal["generated", "exhausted"]
+    request: dict[str, JsonValue]
+    response: dict[str, JsonValue]
+
+
+class CompositionEvidence(ContractModel):
+    """How the composition Stage reached its outcome; never a Domain input."""
+
+    schema_version: Literal["sdi.composition-evidence/v1"]
+    evidence_basis: Literal["implemented"]
+    scenario_id: ScenarioId
+    testcase_id: TestcaseId
+    combination_id: CombinationId
+    profile_id: Slug
+    source_inputs: Annotated[list[SourceInputDigest], Field(min_length=5, max_length=5)]
+    descriptions: Annotated[list[EvidenceDescription], Field(min_length=1)]
+    generation: GenerationRecord
+    assessment: dict[str, JsonValue] | SkipJsonSchema[None] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_explicit_unknowns(cls, data: object) -> object:
+        """Require an absent assessment to be omitted rather than null."""
+        return reject_explicit_nulls(data, ("assessment",))
+
+    @model_validator(mode="after")
+    def require_assessment_of_generated_proposals(self) -> Self:
+        _require_unique([item.slot for item in self.source_inputs], "source input slot")
+        if (self.generation.outcome == "generated") != (self.assessment is not None):
+            msg = "evidence holds an assessment exactly when proposals were generated"
+            raise ValueError(msg)
         return self

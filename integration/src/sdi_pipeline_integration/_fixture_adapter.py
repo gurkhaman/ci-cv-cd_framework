@@ -212,7 +212,9 @@ def run_adapter(  # noqa: C901, PLR0911, PLR0912, PLR0915
         return
 
     case, case_root = selected
-    output_by_slot = {item.slot: item for item in request.outputs}
+    # Fixtures publish only Domain outputs, never optional Stage evidence.
+    domain_grants = [item for item in request.outputs if item.required]
+    output_by_slot = {item.slot: item for item in domain_grants}
     if case.behavior == "absent_response":
         return
     if case.behavior == "crash":
@@ -229,7 +231,7 @@ def run_adapter(  # noqa: C901, PLR0911, PLR0912, PLR0915
         (output_root / "unsafe-link").symlink_to("/dev/null")
         return
     if case.behavior == "oversize_output":
-        grant = request.outputs[0]
+        grant = domain_grants[0]
         _atomic_write(output_root, grant.path, b"x" * (grant.max_bytes + 1))
         return
     if case.behavior == "missing_output":
@@ -238,20 +240,20 @@ def run_adapter(  # noqa: C901, PLR0911, PLR0912, PLR0915
             conclusion="succeeded",
             code=case.reason.code,
             summary=case.reason.summary,
-            produced_outputs=[item.slot for item in request.outputs],
+            produced_outputs=list(output_by_slot),
             diagnostic_present=False,
         )
         _atomic_write(output_root, "response.json", response)
         return
     if case.behavior == "schema_mismatch":
-        for grant in request.outputs:
+        for grant in domain_grants:
             _atomic_write(output_root, grant.path, b"{}\n")
         response = _response(
             request,
             conclusion="succeeded",
             code=case.reason.code,
             summary=case.reason.summary,
-            produced_outputs=[item.slot for item in request.outputs],
+            produced_outputs=list(output_by_slot),
             diagnostic_present=False,
         )
         _atomic_write(output_root, "response.json", response)
@@ -270,9 +272,11 @@ def run_adapter(  # noqa: C901, PLR0911, PLR0912, PLR0915
         response["correlation"]["attempt_number"] += 1
         _atomic_write(output_root, "response.json", _canonical_json(response))
         return
-    if case.execution_conclusion == "succeeded" and set(output_by_slot) != {
-        item.slot for item in case.outputs
-    }:
+    if (
+        case.execution_conclusion == "succeeded"
+        and case.domain_outcome != "failed"
+        and set(output_by_slot) != {item.slot for item in case.outputs}
+    ):
         msg = "Fixture outputs do not match the request grants"
         raise InputError(msg)
 

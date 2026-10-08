@@ -17,6 +17,7 @@ from pydantic import BaseModel, ValidationError
 
 from ._domain_contracts import (
     CompositionBlueprint,
+    CompositionEvidence,
     DeploymentResult,
     DeploymentSchema,
     ImageBuildResult,
@@ -47,6 +48,7 @@ from ._stage_runtime import (
     expected_directories,
     load_stage_adapter,
     skipped_stage_execution,
+    supplied_stage_sources,
     validate_stage_documents,
 )
 from ._yaml_input import InputError
@@ -55,7 +57,7 @@ MAX_RESULT_BYTES = 1024 * 1024
 RUN_DEADLINE_SECONDS = 90 * 60
 FINALIZATION_RESERVE_SECONDS = 2 * 60
 DESCRIPTORS: tuple[tuple[StageName, str], ...] = (
-    ("composition", "deployment/jenkins/adapters/composition-fixture-v1.yaml"),
+    ("composition", "deployment/jenkins/adapters/composition-v1.yaml"),
     ("image_build", "deployment/jenkins/adapters/image-build-fixture-v1.yaml"),
     ("cv", "deployment/jenkins/adapters/cv-fixture-v1.yaml"),
     ("cd", "deployment/jenkins/adapters/cd-fixture-v1.yaml"),
@@ -209,7 +211,18 @@ def validate_bundle(  # noqa: C901, PLR0912, PLR0915
         ):
             msg = f"archive artifact does not match its inventory: {artifact.path}"
             raise InputError(msg)
-        if artifact.role == "domain_output":
+        if artifact.role == "stage_evidence":
+            try:
+                document = CompositionEvidence.model_validate(
+                    parse_json(content, artifact.path, max_bytes=artifact.byte_size),
+                    strict=True,
+                    extra="forbid",
+                )
+            except ValidationError as error:
+                msg = f"archive Stage evidence is invalid: {artifact.path}: {error}"
+                raise InputError(msg) from error
+            domain_documents[artifact.stage][artifact.slot] = document
+        elif artifact.role == "domain_output":
             model = DOMAIN_MODELS.get(artifact.schema_version)
             if model is None:
                 msg = f"archive artifact uses an unsupported schema: {artifact.path}"
@@ -274,8 +287,15 @@ def validate_bundle(  # noqa: C901, PLR0912, PLR0915
             stage_inputs,
             {item.slot: item.sha256 for item in attempt.accepted_inputs},
             identity,
+            domain_outcome=attempt.domain_outcome,
         )
-        available_documents.update(domain_documents[stage])
+        available_documents.update(
+            {
+                slot: document
+                for slot, document in domain_documents[stage].items()
+                if not isinstance(document, CompositionEvidence)
+            }
+        )
     second_paths, second_capture = capture_tree(bundle_root, root_identity, grants)
     if second_paths != paths or second_capture != captured:
         msg = "archive candidate changed after validation"
@@ -384,15 +404,17 @@ def assemble_bundle(
             claim_path.unlink(missing_ok=True)
 
 
-def dispatch_local(  # noqa: PLR0915
+def dispatch_local(  # noqa: PLR0913, PLR0915
     *,
     repository_path: Path,
     requested_ref: str,
     resolved_commit: str,
     run_request_path: str,
     bundle_root: Path,
+    service_repository: Path,
+    generation_config: str,
 ) -> dict[str, Any]:
-    """Execute and atomically publish one complete local four-Stage Fixture run."""
+    """Execute and atomically publish one complete local four-Stage run."""
     run_started_at = datetime.now(UTC)
     run_started_monotonic = time.monotonic()
     if bundle_root.exists() or bundle_root.is_symlink():
@@ -406,7 +428,13 @@ def dispatch_local(  # noqa: PLR0915
     )
     repository = GitRepository(repository_path, resolved_commit)
     repository.require_ref_commit(requested_ref)
-    available_inputs = committed_stage_sources(repository, identified)
+    available_inputs = committed_stage_sources(
+        repository, identified
+    ) | supplied_stage_sources(
+        repository,
+        service_repository=service_repository,
+        generation_config=generation_config,
+    )
     descriptor_modes = _descriptor_modes(repository)
     run_deadline = (
         run_started_monotonic + RUN_DEADLINE_SECONDS - FINALIZATION_RESERVE_SECONDS

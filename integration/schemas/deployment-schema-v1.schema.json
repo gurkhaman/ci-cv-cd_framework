@@ -21,10 +21,19 @@
           "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
           "title": "Service Id",
           "type": "string"
+        },
+        "status": {
+          "enum": [
+            "resolved",
+            "unresolved"
+          ],
+          "title": "Status",
+          "type": "string"
         }
       },
       "required": [
-        "service_id"
+        "service_id",
+        "status"
       ],
       "title": "ServicePlacement",
       "type": "object"
@@ -109,8 +118,8 @@
       "items": {
         "$ref": "#/$defs/SourceInputDigest"
       },
-      "maxItems": 3,
-      "minItems": 3,
+      "maxItems": 5,
+      "minItems": 5,
       "title": "Source Inputs",
       "type": "array"
     },

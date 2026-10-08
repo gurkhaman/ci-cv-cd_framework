@@ -18,6 +18,7 @@ from ._contracts import (
     RoleMaps,
     TargetExecutionProfile,
 )
+from ._domain_contracts import Capability  # noqa: TC001
 from ._json_input import parse_json
 from ._service_descriptions import read_service_repository
 from ._yaml_input import InputError, parse_front_matter, parse_yaml
@@ -54,7 +55,7 @@ class ServicePlacement(ContractModel):
     service_id: NonBlank
     artifact_id: NonBlank | None = None
     host: NonBlank | None = None
-    capability: NonBlank
+    capability: Capability
 
 
 class CoverageClaim(ContractModel):

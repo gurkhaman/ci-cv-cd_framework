@@ -11,6 +11,12 @@ match_inputs:
   - slot: target_profile
     byte_size: 203
     sha256: 84dd69df5d85c1c952e7894903ac6d42a16d1c8ae793f719c63fbd07cb0aab46
+  - slot: service_repository
+    byte_size: 192
+    sha256: b19d11139b8172261548482e72aeec31d82fdbfd43500f80ef2ad20996533cb5
+  - slot: generation_config
+    byte_size: 192
+    sha256: 337d36b1cff3cd3e26362e18353349462cb4b59fd81e92ca50d0d5c92850ac44
 behavior: response
 execution_conclusion: succeeded
 domain_outcome: failed
@@ -18,15 +24,7 @@ reason:
   category: domain
   code: sdi.domain.requirement-unsatisfied
   summary: The deterministic conformance case represents a negative Domain outcome.
-outputs:
-  - slot: composition_blueprint
-    source_path: composition-blueprint.json
-    byte_size: 1044
-    sha256: 0fcbe34c86f99bb7b5875092b1d34f3c6a544b7902cb898d2bc52bbbc29f0e75
-  - slot: deployment_schema
-    source_path: deployment-schema.json
-    byte_size: 855
-    sha256: c0cb30e7d06a5134341c5aff6c200a5c830f5a0b2f3eb10c146ed213455223b2
+outputs: []
 diagnostic:
   source_path: diagnostic.txt
   byte_size: 55

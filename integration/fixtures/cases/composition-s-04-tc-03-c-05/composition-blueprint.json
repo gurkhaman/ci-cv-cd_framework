@@ -1,8 +1,51 @@
 {
   "blueprint_id": "s-04-tc-03-c-05-composition",
   "combination_id": "C-05",
+  "coverage": [
+    {
+      "requirement_id": "secure-book",
+      "services": [],
+      "status": "missing"
+    },
+    {
+      "requirement_id": "accept-spoken-request",
+      "services": [],
+      "status": "missing"
+    },
+    {
+      "requirement_id": "resolve-rendezvous",
+      "services": [],
+      "status": "missing"
+    },
+    {
+      "requirement_id": "navigate-to-rendezvous",
+      "services": [],
+      "status": "missing"
+    },
+    {
+      "requirement_id": "verify-recipient-face",
+      "services": [],
+      "status": "missing"
+    },
+    {
+      "requirement_id": "transfer-book",
+      "services": [],
+      "status": "missing"
+    },
+    {
+      "requirement_id": "acknowledge-receipt",
+      "services": [],
+      "status": "missing"
+    },
+    {
+      "requirement_id": "return-to-origin",
+      "services": [],
+      "status": "missing"
+    }
+  ],
   "evidence_basis": "fixture",
   "profile_id": "waffle-jetson-arm64",
+  "proposal_id": "proposal-1",
   "requirement_ids": [
     "secure-book",
     "accept-spoken-request",
@@ -48,6 +91,14 @@
     {
       "sha256": "b18ef771accd5b48c7b50c2bc188fddedc0a599e5452f6d8bf40117a05983c93",
       "slot": "target_profile"
+    },
+    {
+      "sha256": "b19d11139b8172261548482e72aeec31d82fdbfd43500f80ef2ad20996533cb5",
+      "slot": "service_repository"
+    },
+    {
+      "sha256": "337d36b1cff3cd3e26362e18353349462cb4b59fd81e92ca50d0d5c92850ac44",
+      "slot": "generation_config"
     }
   ],
   "testcase_id": "TC-03"

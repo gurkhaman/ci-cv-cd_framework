@@ -9,7 +9,7 @@ from graphlib import CycleError, TopologicalSorter
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import Field, ValidationError, model_validator
+from pydantic import Field, NonNegativeInt, ValidationError, model_validator
 from pydantic.json_schema import SkipJsonSchema  # noqa: TC002
 
 from ._contracts import (
@@ -20,10 +20,15 @@ from ._contracts import (
     Slug,
     reject_explicit_nulls,
 )
+from ._stage_contracts import Sha256  # noqa: TC001
 from ._yaml_input import InputError, parse_front_matter
 
 SERVICE_DESCRIPTION_SCHEMA_VERSION = "sdi.service-description/v1"
+# The directory under a Stage's input root that holds the copied descriptions.
+SERVICE_REPOSITORY_ROOT = "service-repository"
 DESCRIPTION_FILENAME = "SDI.md"
+MAX_DESCRIPTION_FILES = 256
+MAX_DESCRIPTION_BYTES = 1024 * 1024
 
 type Architecture = Literal["amd64", "arm64", "noarch"]
 
@@ -219,3 +224,33 @@ def read_service_repository(root: Path) -> list[DescriptionFile]:
     files = [_read(root, file) for file in found]
     _check_cross_file(files)
     return files
+
+
+class ManifestFile(ContractModel):
+    """One description file copied into a Stage's inputs."""
+
+    path: Annotated[
+        str, Field(strict=True, pattern=r"^(?:[A-Za-z0-9][A-Za-z0-9._-]*/)*SDI\.md$")
+    ]
+    byte_size: NonNegativeInt
+    sha256: Sha256
+
+
+class ServiceRepositoryManifest(ContractModel):
+    """The exact description files a Stage receives from the service repository."""
+
+    schema_version: Literal["sdi.service-repository-manifest/v1"]
+    files: Annotated[
+        list[ManifestFile], Field(min_length=1, max_length=MAX_DESCRIPTION_FILES)
+    ]
+
+    @model_validator(mode="after")
+    def validate_files(self) -> ServiceRepositoryManifest:
+        paths = [item.path for item in self.files]
+        if paths != sorted(set(paths)):
+            msg = "manifest paths must be unique and sorted"
+            raise ValueError(msg)
+        if sum(item.byte_size for item in self.files) > MAX_DESCRIPTION_BYTES:
+            msg = "manifest files exceed the service repository byte limit"
+            raise ValueError(msg)
+        return self

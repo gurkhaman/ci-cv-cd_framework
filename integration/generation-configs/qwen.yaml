@@ -1,3 +1,4 @@
+schema_version: sdi.generation-config/v1
 model: Qwen/Qwen3.8-27B
 reasoning_effort: xhigh
 max_output_tokens: 32000

@@ -26,18 +26,28 @@ from ._contracts import (
 )
 from ._domain_contracts import (
     CompositionBlueprint,
+    CompositionEvidence,
     DeploymentResult,
     DeploymentSchema,
     ImageBuildResult,
     ValidationEvidence,
 )
+from ._generation import GenerationConfig
 from ._git_input import CommittedBlob, GitRepository, validate_repository_path
 from ._jenkins_agent_boundary import enforce_domain_execution_boundary
 from ._json_input import parse_json
 from ._run_input import PROTECTED_MAIN_REF, identify_committed_run
+from ._service_descriptions import (
+    DESCRIPTION_FILENAME,
+    MAX_DESCRIPTION_BYTES,
+    MAX_DESCRIPTION_FILES,
+    SERVICE_REPOSITORY_ROOT,
+    ServiceRepositoryManifest,
+)
 from ._stage_contracts import (
     ASCII_CONTROL_LIMIT,
     ASCII_DELETE,
+    EXPECTED_STAGE_EVIDENCE,
     EXPECTED_STAGE_INPUT_SLOTS,
     EXPECTED_STAGE_OUTPUTS,
     AcceptedAttemptEnvelope,
@@ -60,10 +70,13 @@ if TYPE_CHECKING:
 MAX_RESPONSE_BYTES = 64 * 1024
 MAX_ACCEPTED_ENVELOPE_BYTES = 64 * 1024
 MAX_TRANSFER_DOMAIN_BYTES = 32 * 1024
-MAX_TRANSFER_DIAGNOSTIC_BYTES = 4 * 1024
+MAX_TRANSFER_EVIDENCE_BYTES = 256 * 1024
+MAX_TRANSFER_DIAGNOSTIC_BYTES = 16 * 1024
 MAX_CANDIDATE_ENTRIES = 32
 MAX_CANDIDATE_DEPTH = 4
 ADAPTER_SHUTDOWN_GRACE_SECONDS = 10
+# Network settings an implemented adapter may need to reach its model endpoint.
+FORWARDED_NETWORK_SETTINGS = ("HTTPS_PROXY", "NO_PROXY", "SSL_CERT_FILE")
 
 
 @dataclass(frozen=True)
@@ -76,6 +89,9 @@ class StageInputSource:
     content: bytes
     producer_implementation_mode: ImplementationMode | None = None
     producer_domain_outcome: DomainOutcome | None = None
+    # Files written beside the input that its content names, such as the
+    # descriptions a service-repository manifest lists.
+    attachments: tuple[tuple[str, bytes], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -103,6 +119,8 @@ INPUT_MODELS: dict[str, type[BaseModel]] = {
     "sdi.deployment-schema/v1": DeploymentSchema,
     "sdi.image-build-result/v1": ImageBuildResult,
     "sdi.validation-evidence/v1": ValidationEvidence,
+    "sdi.service-repository-manifest/v1": ServiceRepositoryManifest,
+    "sdi.generation-config/v1": GenerationConfig,
 }
 OUTPUT_MODELS: dict[str, type[BaseModel]] = {
     "sdi.composition-blueprint/v1": CompositionBlueprint,
@@ -110,6 +128,7 @@ OUTPUT_MODELS: dict[str, type[BaseModel]] = {
     "sdi.image-build-result/v1": ImageBuildResult,
     "sdi.validation-evidence/v1": ValidationEvidence,
     "sdi.deployment-result/v1": DeploymentResult,
+    "sdi.composition-evidence/v1": CompositionEvidence,
 }
 
 
@@ -318,6 +337,7 @@ def _capture_candidate(  # noqa: C901, PLR0912, PLR0913, PLR0915, PLR0917
     implementation_mode: str,
     identified: Mapping[str, Any],
     input_models: Mapping[str, BaseModel],
+    secrets: tuple[bytes, ...] = (),
 ) -> tuple[AdapterResponse, dict[str, bytes]]:
     grants = {item.path: item.max_bytes for item in request.outputs}
     grants[request.diagnostic.path] = request.diagnostic.max_bytes
@@ -329,6 +349,9 @@ def _capture_candidate(  # noqa: C901, PLR0912, PLR0913, PLR0915, PLR0917
     )
     if "response.json" not in captured:
         msg = "candidate bundle did not publish response.json"
+        raise InputError(msg)
+    if any(secret in content for content in captured.values() for secret in secrets):
+        msg = "candidate bundle contains a forwarded secret"
         raise InputError(msg)
     try:
         response = AdapterResponse.model_validate(
@@ -365,12 +388,16 @@ def _capture_candidate(  # noqa: C901, PLR0912, PLR0913, PLR0915, PLR0917
     if not set(response.produced_outputs) <= set(output_by_slot):
         msg = "candidate response names an ungranted output slot"
         raise InputError(msg)
+    required_outputs = {item.slot for item in request.outputs if item.required}
     if response.execution_conclusion == "succeeded":
         if set(response.consumed_inputs) != set(input_slots):
             msg = "candidate response did not consume every declared input"
             raise InputError(msg)
-        required_outputs = {item.slot for item in request.outputs if item.required}
-        if not required_outputs <= set(response.produced_outputs):
+        if response.domain_outcome == "failed":
+            if required_outputs & set(response.produced_outputs):
+                msg = "candidate negative Domain outcome produced ungranted output"
+                raise InputError(msg)
+        elif not required_outputs <= set(response.produced_outputs):
             msg = "candidate response did not produce every required output"
             raise InputError(msg)
     expected_files = {
@@ -400,7 +427,9 @@ def _capture_candidate(  # noqa: C901, PLR0912, PLR0913, PLR0915, PLR0917
         except ValidationError as error:
             msg = f"candidate output contract validation failed: {slot}: {error}"
             raise InputError(msg) from error
-        if contains_sensitive_contract_material(
+        # Evidence carries the exact model request, whose service descriptions
+        # name public upstream URLs; the forwarded-secret check above covers it.
+        if grant.required and contains_sensitive_contract_material(
             validated_outputs[slot].model_dump(mode="json")
         ):
             msg = (
@@ -446,6 +475,7 @@ def _capture_candidate(  # noqa: C901, PLR0912, PLR0913, PLR0915, PLR0917
                 identified["combination_id"],
                 identified["profile_id"],
             ),
+            domain_outcome=response.domain_outcome,
         )
     second_paths, second_capture = capture_tree(
         output_root,
@@ -458,15 +488,16 @@ def _capture_candidate(  # noqa: C901, PLR0912, PLR0913, PLR0915, PLR0917
     return response, captured
 
 
-def validate_stage_documents(  # noqa: C901, PLR0912, PLR0915
+def validate_stage_documents(  # noqa: C901, PLR0912, PLR0913, PLR0915
     stage: StageName,
     outputs: Mapping[str, BaseModel],
     inputs: Mapping[str, BaseModel],
     expected_input_digests: Mapping[str, str],
     expected_identity: tuple[str, str, str, str],
+    *,
+    domain_outcome: DomainOutcome,
 ) -> None:
-    domain_outputs = tuple(outputs.values())
-    for output in domain_outputs:
+    for output in outputs.values():
         if not isinstance(
             output,
             (
@@ -475,6 +506,7 @@ def validate_stage_documents(  # noqa: C901, PLR0912, PLR0915
                 ImageBuildResult,
                 ValidationEvidence,
                 DeploymentResult,
+                CompositionEvidence,
             ),
         ):
             msg = "candidate output is not a supported Domain contract"
@@ -493,6 +525,16 @@ def validate_stage_documents(  # noqa: C901, PLR0912, PLR0915
         } != expected_input_digests:
             msg = "candidate Domain output input digests do not match the request"
             raise InputError(msg)
+    outputs = {
+        slot: output
+        for slot, output in outputs.items()
+        if not isinstance(output, CompositionEvidence)
+    }
+    if domain_outcome == "failed":
+        if outputs:
+            msg = f"{stage} negative Domain outcome cannot carry Domain output"
+            raise InputError(msg)
+        return
 
     blueprint = outputs.get("composition_blueprint") or inputs.get(
         "composition_blueprint"
@@ -607,15 +649,15 @@ def _accepted_envelope(  # noqa: PLR0913
     started_at: datetime,
     finished_at: datetime,
 ) -> AcceptedAttemptEnvelope:
-    output_by_slot = {item.slot: item for item in request.outputs}
     accepted_files: list[dict[str, object]] = []
-    for slot in response.produced_outputs:
-        grant = output_by_slot[slot]
+    for grant in sorted(request.outputs, key=lambda item: not item.required):
+        if grant.slot not in response.produced_outputs:
+            continue
         content = captured[grant.path]
         accepted_files.append(
             {
-                "role": "domain_output",
-                "slot": slot,
+                "role": "domain_output" if grant.required else "stage_evidence",
+                "slot": grant.slot,
                 "path": grant.path,
                 "media_type": grant.media_type,
                 "schema_version": grant.schema_version,
@@ -823,6 +865,8 @@ def _materialize_stage_inputs(
         validated_inputs[grant.slot] = _validate_source_model(model, source)
         digest = hashlib.sha256(source.content).hexdigest()
         _write_file(input_root, grant.path, source.content)
+        for relative_path, content in source.attachments:
+            _write_file(input_root, relative_path, content)
         declared_inputs.append(
             {
                 **grant.model_dump(mode="json"),
@@ -880,6 +924,83 @@ def committed_stage_sources(
         msg = "identified run does not contain its exact committed input set"
         raise InputError(msg)
     return sources
+
+
+def _service_repository_source(root: Path) -> StageInputSource:
+    """Capture every description under a supplied directory and its manifest."""
+    if not root.is_dir() or root.is_symlink():
+        msg = f"{root}: service repository is not a directory"
+        raise InputError(msg)
+    files: list[tuple[str, bytes]] = []
+    for directory, subdirectories, filenames in os.walk(root):
+        current = Path(directory)
+        if any((current / name).is_symlink() for name in subdirectories):
+            msg = f"{current}: service repository contains a symbolic link"
+            raise InputError(msg)
+        if DESCRIPTION_FILENAME not in filenames:
+            continue
+        path = current / DESCRIPTION_FILENAME
+        metadata = path.lstat()
+        if not stat.S_ISREG(metadata.st_mode):
+            msg = f"{path}: description is not a regular file"
+            raise InputError(msg)
+        if len(files) >= MAX_DESCRIPTION_FILES:
+            msg = f"{root}: service repository exceeds {MAX_DESCRIPTION_FILES} files"
+            raise InputError(msg)
+        content = path.read_bytes()
+        if sum(len(item) for _, item in files) + len(content) > MAX_DESCRIPTION_BYTES:
+            msg = f"{root}: service repository exceeds {MAX_DESCRIPTION_BYTES} bytes"
+            raise InputError(msg)
+        files.append((path.relative_to(root).as_posix(), content))
+    files.sort()
+    try:
+        manifest = ServiceRepositoryManifest.model_validate(
+            {
+                "schema_version": "sdi.service-repository-manifest/v1",
+                "files": [
+                    {
+                        "path": path,
+                        "byte_size": len(content),
+                        "sha256": hashlib.sha256(content).hexdigest(),
+                    }
+                    for path, content in files
+                ],
+            }
+        )
+    except ValidationError as error:
+        msg = f"{root}: service repository manifest is invalid: {error}"
+        raise InputError(msg) from error
+    return StageInputSource(
+        source_path="service-repository.json",
+        media_type="application/json",
+        schema_version="sdi.service-repository-manifest/v1",
+        content=_canonical_json(manifest.model_dump(mode="json")),
+        attachments=tuple(
+            (f"{SERVICE_REPOSITORY_ROOT}/{path}", content) for path, content in files
+        ),
+    )
+
+
+def supplied_stage_sources(
+    repository: GitRepository,
+    *,
+    service_repository: Path,
+    generation_config: str,
+) -> dict[str, StageInputSource]:
+    """Capture the service repository and the committed generation config."""
+    validate_repository_path(generation_config)
+    blob = repository.read_regular_file(generation_config)
+    config = StageInputSource(
+        source_path=blob.path,
+        media_type="application/yaml",
+        schema_version="sdi.generation-config/v1",
+        content=blob.content,
+    )
+    _validate_source_model(GenerationConfig, config)
+    return {
+        "service_repository": _service_repository_source(service_repository),
+        "generation_config": config,
+    }
 
 
 def _read_accepted_envelope(
@@ -994,7 +1115,21 @@ def load_stage_execution(  # noqa: C901, PLR0912, PLR0915
     domain_files = [
         item for item in envelope.accepted_files if item.role == "domain_output"
     ]
-    if envelope.execution_conclusion == "succeeded":
+    evidence_files = [
+        item for item in envelope.accepted_files if item.role == "stage_evidence"
+    ]
+    if any(
+        (item.path, item.media_type, item.schema_version)
+        != EXPECTED_STAGE_EVIDENCE[expected_stage].get(item.slot)
+        or item.byte_size > MAX_TRANSFER_EVIDENCE_BYTES
+        for item in evidence_files
+    ) or (evidence_files and envelope.execution_conclusion != "succeeded"):
+        msg = "accepted attempt evidence does not match the reviewed Stage grant"
+        raise InputError(msg)
+    if (
+        envelope.execution_conclusion == "succeeded"
+        and envelope.domain_outcome != "failed"
+    ):
         expected_outputs = EXPECTED_STAGE_OUTPUTS[expected_stage]
         if [item.slot for item in domain_files] != list(expected_outputs):
             msg = "accepted attempt outputs do not match the reviewed Stage graph"
@@ -1066,6 +1201,23 @@ def load_stage_execution(  # noqa: C901, PLR0912, PLR0915
                 raise InputError(msg)
             if contains_sensitive_material(diagnostic):
                 msg = "accepted attempt diagnostic contains sensitive material"
+                raise InputError(msg)
+            continue
+        if accepted.role == "stage_evidence":
+            evidence = _validate_source_model(
+                CompositionEvidence,
+                StageInputSource(
+                    source_path=accepted.path,
+                    media_type=accepted.media_type,
+                    schema_version=accepted.schema_version,
+                    content=content,
+                ),
+            )
+            if (
+                getattr(evidence, "evidence_basis", None)
+                != envelope.implementation_mode
+            ):
+                msg = "accepted attempt evidence basis does not match its envelope"
                 raise InputError(msg)
             continue
         model = OUTPUT_MODELS.get(accepted.schema_version)
@@ -1189,6 +1341,8 @@ def execute_stage(  # noqa: PLR0913
     run_request_path: str,
     descriptor_path: str,
     attempt_root: Path,
+    service_repository: Path,
+    generation_config: str,
 ) -> dict[str, Any]:
     """Execute and transactionally accept one descriptor-selected Stage attempt."""
     if requested_ref != PROTECTED_MAIN_REF:
@@ -1207,7 +1361,12 @@ def execute_stage(  # noqa: PLR0913
         identified=identified,
         descriptor_path=descriptor_path,
         attempt_root=attempt_root,
-        available_inputs=committed_stage_sources(repository, identified),
+        available_inputs=committed_stage_sources(repository, identified)
+        | supplied_stage_sources(
+            repository,
+            service_repository=service_repository,
+            generation_config=generation_config,
+        ),
     )
     return execution.envelope.model_dump(mode="json", exclude_none=True)
 
@@ -1234,6 +1393,34 @@ def load_stage_adapter(
         msg = "Stage profile identity does not match the reviewed descriptor"
         raise InputError(msg)
     return descriptor, profile
+
+
+def _adapter_environment(
+    descriptor: AdapterDescriptor, input_models: Mapping[str, BaseModel]
+) -> tuple[dict[str, str], tuple[bytes, ...]]:
+    """Build the adapter's environment, forwarding only its bound model key."""
+    environment = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "LC_ALL": "C.UTF-8",
+    }
+    config = input_models.get("generation_config")
+    if not isinstance(config, GenerationConfig) or not descriptor.secret_bindings:
+        return environment, ()
+    if config.api_key_env not in descriptor.secret_bindings:
+        msg = "generation config names a key the adapter descriptor does not bind"
+        raise InputError(msg)
+    environment.update(
+        {
+            name: os.environ[name]
+            for name in FORWARDED_NETWORK_SETTINGS
+            if name in os.environ
+        }
+    )
+    api_key = os.environ.get(config.api_key_env)
+    if not api_key:
+        return environment, ()
+    environment[config.api_key_env] = api_key
+    return environment, (api_key.encode(),)
 
 
 def enforce_jenkins_agent_boundary(descriptor: AdapterDescriptor) -> None:
@@ -1288,6 +1475,21 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
         )
         _publish_execution(attempt_root, execution)
         return execution
+    if descriptor.implementation_mode == "fixture" and any(
+        source.producer_implementation_mode == "implemented"
+        for source in available_inputs.values()
+    ):
+        # Fixture cases match exact digests, so they can never recognize real
+        # output; running one would only report a Fixture input mismatch.
+        execution = skipped_stage_execution(
+            execution_id=identified["execution_id"],
+            stage=descriptor.stage,
+            implementation_mode="fixture",
+            code="sdi.dependency.implemented-evidence",
+            summary="Fixture work cannot consume implemented output.",
+        )
+        _publish_execution(attempt_root, execution)
+        return execution
 
     work_root = Path(
         tempfile.mkdtemp(prefix=f".{attempt_root.name}.work-", dir=attempt_root.parent)
@@ -1331,6 +1533,7 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
             "request.json",
             _canonical_json(request.model_dump(mode="json")),
         )
+        environment, secrets = _adapter_environment(descriptor, input_models)
         started_at = datetime.now(UTC)
         try:
             process = subprocess.Popen(  # noqa: S603
@@ -1347,10 +1550,7 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                env={
-                    "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-                    "LC_ALL": "C.UTF-8",
-                },
+                env=environment,
                 start_new_session=True,
             )
         except OSError:
@@ -1450,6 +1650,7 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
                 descriptor.implementation_mode,
                 identified,
                 input_models,
+                secrets,
             )
         except (InputError, OSError) as error:
             code, summary = _candidate_rejection_reason(str(error))
@@ -1477,7 +1678,7 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
             finished_at=finished_at,
         )
 
-        output_by_slot = {item.slot: item for item in request.outputs}
+        output_by_slot = {item.slot: item for item in request.outputs if item.required}
         output_sources = {
             slot: StageInputSource(
                 source_path=(
@@ -1491,6 +1692,7 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
                 producer_domain_outcome=response.domain_outcome,
             )
             for slot in response.produced_outputs
+            if slot in output_by_slot
         }
         accepted_files = {
             item.path: captured[item.path] for item in envelope.accepted_files

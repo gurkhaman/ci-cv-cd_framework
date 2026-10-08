@@ -15,6 +15,14 @@ inputs:
     path: target-profile.yaml
     media_type: application/yaml
     schema_version: sdi.target-execution-profile/v1
+  - slot: service_repository
+    path: service-repository.json
+    media_type: application/json
+    schema_version: sdi.service-repository-manifest/v1
+  - slot: generation_config
+    path: generation-config.yaml
+    media_type: application/yaml
+    schema_version: sdi.generation-config/v1
 outputs:
   - slot: composition_blueprint
     path: outputs/composition-blueprint.json
@@ -28,7 +36,13 @@ outputs:
     schema_version: sdi.deployment-schema/v1
     required: true
     max_bytes: 32768
+  - slot: composition_evidence
+    path: outputs/composition-evidence.json
+    media_type: application/json
+    schema_version: sdi.composition-evidence/v1
+    required: false
+    max_bytes: 262144
 diagnostic:
   path: diagnostic.txt
   media_type: text/plain; charset=utf-8
-  max_bytes: 4096
+  max_bytes: 16384

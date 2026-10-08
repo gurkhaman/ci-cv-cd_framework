@@ -11,6 +11,12 @@ match_inputs:
   - slot: target_profile
     byte_size: 203
     sha256: 84dd69df5d85c1c952e7894903ac6d42a16d1c8ae793f719c63fbd07cb0aab46
+  - slot: service_repository
+    byte_size: 192
+    sha256: b19d11139b8172261548482e72aeec31d82fdbfd43500f80ef2ad20996533cb5
+  - slot: generation_config
+    byte_size: 192
+    sha256: 337d36b1cff3cd3e26362e18353349462cb4b59fd81e92ca50d0d5c92850ac44
 behavior: unsafe_output
 execution_conclusion: failed
 domain_outcome: not_evaluated

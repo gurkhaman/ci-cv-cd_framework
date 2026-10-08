@@ -94,7 +94,9 @@
           "title": "Artifact Id"
         },
         "capability": {
+          "maxLength": 64,
           "minLength": 1,
+          "pattern": "^[^/:]+$",
           "title": "Capability",
           "type": "string"
         },

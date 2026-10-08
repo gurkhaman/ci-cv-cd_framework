@@ -87,6 +87,7 @@ type Outcome = Literal["generated", "exhausted", "refused", "invalid", "provider
 class GenerationConfig(ContractModel):
     """The model, limits and endpoint for one generation request."""
 
+    schema_version: Literal["sdi.generation-config/v1"]
     model: str = Field(min_length=1)
     reasoning_effort: Literal["low", "medium", "high", "xhigh"]
     max_output_tokens: PositiveInt

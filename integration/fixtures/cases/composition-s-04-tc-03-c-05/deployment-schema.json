@@ -6,15 +6,18 @@
   "placements": [
     {
       "host": "orin",
-      "service_id": "fixture-localization"
+      "service_id": "fixture-localization",
+      "status": "unresolved"
     },
     {
       "host": "orin",
-      "service_id": "fixture-navigation"
+      "service_id": "fixture-navigation",
+      "status": "unresolved"
     },
     {
       "host": "orin",
-      "service_id": "fixture-mission-control"
+      "service_id": "fixture-mission-control",
+      "status": "unresolved"
     }
   ],
   "profile_id": "waffle-jetson-arm64",
@@ -32,6 +35,14 @@
     {
       "sha256": "b18ef771accd5b48c7b50c2bc188fddedc0a599e5452f6d8bf40117a05983c93",
       "slot": "target_profile"
+    },
+    {
+      "sha256": "b19d11139b8172261548482e72aeec31d82fdbfd43500f80ef2ad20996533cb5",
+      "slot": "service_repository"
+    },
+    {
+      "sha256": "337d36b1cff3cd3e26362e18353349462cb4b59fd81e92ca50d0d5c92850ac44",
+      "slot": "generation_config"
     }
   ],
   "testcase_id": "TC-03"
