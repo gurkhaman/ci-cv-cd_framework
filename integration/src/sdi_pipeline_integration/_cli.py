@@ -410,8 +410,9 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
         except (InputError, OSError) as error:
             sys.stderr.write(f"sdi-integration: {error}\n")
             return 2
+        document = assessment.to_evidence()
         sys.stdout.write(
-            f"{json.dumps(assessment, sort_keys=True, separators=(',', ':'))}\n"
+            f"{json.dumps(document, sort_keys=True, separators=(',', ':'))}\n"
         )
         return 0
     if arguments.command == "generate-proposals":

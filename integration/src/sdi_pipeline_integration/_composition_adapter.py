@@ -15,17 +15,12 @@ import hashlib
 import re
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ValidationError
 
 from ._adapter_output import atomic_write
-from ._assessment import (
-    AssessmentInputs,
-    CompositionProposals,
-    Proposal,
-    assess_proposals,
-)
+from ._assessment import AssessmentInputs, assess_proposals
 from ._contracts import (
     MobilityRequirementsSpecification,
     RunRequest,
@@ -55,6 +50,7 @@ from ._yaml_input import InputError, parse_front_matter, parse_yaml
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from ._assessment import AssessedProposal
     from ._service_descriptions import ServiceDescription
 
 MAX_REQUEST_BYTES = 128 * 1024
@@ -111,6 +107,11 @@ OUTCOMES: dict[str, tuple[str, str, str, str]] = {
         "tool",
         "The model provider did not complete the request.",
     ),
+}
+ASSESSMENT_OUTCOMES = {
+    "preferred": "preferred-proposal",
+    "scoped-rejection": "scoped-rejection",
+    "insufficient": "insufficient-proposals",
 }
 GENERATION_FAILURES = {
     "invalid": "generation-invalid",
@@ -199,37 +200,18 @@ class _Run:
 
 def _blueprint_documents(
     *,
-    assessment: dict[str, object],
-    proposals: CompositionProposals,
+    preferred: AssessedProposal,
     services: dict[str, ServiceDescription],
     identity: dict[str, object],
     requirement_ids: list[str],
 ) -> dict[str, BaseModel]:
     """Turn the preferred proposal's checked outcome into the Domain outputs."""
-    proposal_id = cast("str", assessment["preferred"])
-    # The assessment lists proposals in the model's order, one per proposal.
-    index, assessed = next(
-        (index, item)
-        for index, item in enumerate(
-            cast("list[dict[str, object]]", assessment["proposals"])
-        )
-        if item["proposal_id"] == proposal_id
-    )
-    proposal: Proposal = proposals.proposals[index]
-    capabilities = {item.service_id: item.capability for item in proposal.services}
-    kept = [
-        cast("dict[str, object]", item)
-        for item in cast("list[object]", assessed["services"])
-        if cast("dict[str, object]", item)["placement"] != "rejected"
-    ]
-    kept_ids = [cast("str", item["service_id"]) for item in kept]
-    coverage = {
-        cast("str", entry["requirement_id"]): entry
-        for entry in cast("list[dict[str, object]]", assessed["coverage"])
-    }
+    kept = preferred.kept
+    kept_ids = {item.service_id for item in kept}
+    coverage = {entry.requirement_id: entry for entry in preferred.coverage or []}
     blueprint_id = (
         f"{identity['scenario_id']}-{identity['testcase_id']}-"
-        f"{identity['combination_id']}-{proposal_id}"
+        f"{identity['combination_id']}-{preferred.proposal_id}"
     ).lower()
     blueprint = _validated(
         CompositionBlueprint,
@@ -237,25 +219,23 @@ def _blueprint_documents(
         | {
             "schema_version": "sdi.composition-blueprint/v1",
             "blueprint_id": blueprint_id,
-            "proposal_id": proposal_id,
+            "proposal_id": preferred.proposal_id,
             "requirement_ids": requirement_ids,
             "services": [
                 {
-                    "service_id": service_id,
-                    "capability": capabilities[service_id],
-                    "depends_on": services[service_id].depends_on or [],
+                    "service_id": item.service_id,
+                    "capability": item.capability,
+                    "depends_on": services[item.service_id].depends_on or [],
                 }
-                for service_id in kept_ids
+                for item in kept
             ],
             "coverage": [
                 {
                     "requirement_id": requirement_id,
-                    "status": coverage[requirement_id]["status"],
+                    "status": coverage[requirement_id].status,
                     "services": [
                         service_id
-                        for service_id in cast(
-                            "list[str]", coverage[requirement_id]["services"]
-                        )
+                        for service_id in coverage[requirement_id].services
                         if service_id in kept_ids
                     ],
                 }
@@ -263,24 +243,6 @@ def _blueprint_documents(
             ],
         },
     )
-    placements: list[dict[str, object]] = []
-    for item in kept:
-        placement: dict[str, object] = {
-            "service_id": item["service_id"],
-            "status": "resolved"
-            if item["placement"] == "resolved"
-            and item["artifact_id"] is not None
-            and item["host"] is not None
-            else "unresolved",
-        }
-        placement.update(
-            {
-                name: item[name]
-                for name in ("artifact_id", "host")
-                if item[name] is not None
-            }
-        )
-        placements.append(placement)
     deployment = _validated(
         DeploymentSchema,
         identity
@@ -288,7 +250,17 @@ def _blueprint_documents(
             "schema_version": "sdi.deployment-schema/v1",
             "deployment_schema_id": f"{blueprint_id}-deployment",
             "blueprint_id": blueprint_id,
-            "placements": placements,
+            # Only a placement with both an artifact and a host is resolved.
+            "placements": [
+                {"service_id": item.service_id, "status": item.placement}
+                | (
+                    {}
+                    if item.artifact_id is None
+                    else {"artifact_id": item.artifact_id}
+                )
+                | ({} if item.host is None else {"host": item.host})
+                for item in kept
+            ],
         },
     )
     return {"composition_blueprint": blueprint, "deployment_schema": deployment}
@@ -361,7 +333,6 @@ def _compose(run: _Run, input_root: Path) -> Outcome:
     except InputError:
         return "invalid-service-description", {}
     inputs = AssessmentInputs(files, profile, requirements, requirements_body)
-    services = {file.description.service_id: file.description for file in files}
 
     generation = generate_proposals(inputs=inputs, config=config)
     run.facts |= generation.provider_facts()
@@ -389,33 +360,18 @@ def _compose(run: _Run, input_root: Path) -> Outcome:
         return "bounded-no-result", {
             "composition_evidence": _validated(CompositionEvidence, evidence)
         }
-    assessment = assess_proposals(
-        proposals,
-        proposals.model_dump(mode="json")["proposals"],
-        services,
-        profile,
-        requirements.requirement_ids,
-    )
+    assessment = assess_proposals(proposals, inputs)
     documents: dict[str, BaseModel] = {
         "composition_evidence": _validated(
-            CompositionEvidence,
-            evidence | {"assessment": assessment},
+            CompositionEvidence, evidence | {"assessment": assessment.to_evidence()}
         )
     }
-    if assessment["preferred"] is None:
-        assessed = cast("list[dict[str, object]]", assessment["proposals"])
-        # A proposal that passed the ineligibility checks reaches placement;
-        # it can then only become ineligible by losing every service there.
-        scoped = all(item["services"] is not None for item in assessed)
-        return (
-            "scoped-rejection" if scoped else "insufficient-proposals",
-            documents,
-        )
-    run.facts["preferred"] = assessment["preferred"]
+    if assessment.preferred is None:
+        return ASSESSMENT_OUTCOMES[assessment.outcome], documents
+    run.facts["preferred"] = assessment.preferred.proposal_id
     return "preferred-proposal", _blueprint_documents(
-        assessment=assessment,
-        proposals=proposals,
-        services=services,
+        preferred=assessment.preferred,
+        services={file.description.service_id: file.description for file in files},
         identity=identity,
         requirement_ids=requirements.requirement_ids,
     ) | documents

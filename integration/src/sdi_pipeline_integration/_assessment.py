@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 from collections import Counter
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Literal, cast
@@ -47,6 +48,8 @@ GAP_KINDS = frozenset(
 type CoverageStatus = Literal[
     "supported", "missing", "uncertain", "outside_composition"
 ]
+type PlacementStatus = Literal["resolved", "unresolved", "rejected"]
+type AssessmentOutcome = Literal["preferred", "scoped-rejection", "insufficient"]
 
 
 class ServicePlacement(ContractModel):
@@ -92,6 +95,95 @@ class _Participant:
     @property
     def label(self) -> str:
         return self.service_id or "orchestrator"
+
+
+@dataclass(frozen=True)
+class PlacedService:
+    """One proposed service after its artifact and host checks."""
+
+    service_id: str
+    capability: str
+    artifact_id: str | None
+    host: str | None
+    placement: PlacementStatus
+
+
+@dataclass(frozen=True)
+class AssessedProposal:
+    """One proposal and the outcome of every check it reached.
+
+    Services are absent when the proposal failed the checks that precede
+    placement; the score is absent whenever the proposal is ineligible.
+    """
+
+    proposal_id: str
+    proposal: Proposal
+    findings: list[dict[str, object]]
+    services: list[PlacedService] | None = None
+    bindings: list[dict[str, object]] | None = None
+    coverage: list[CoverageClaim] | None = None
+    score: tuple[int, int] | None = None
+
+    @property
+    def kept(self) -> list[PlacedService]:
+        """The services that survive placement."""
+        return [item for item in self.services or [] if item.placement != "rejected"]
+
+    def to_evidence(self) -> dict[str, object]:
+        """Return the JSON record of this proposal's assessment."""
+        return {
+            "proposal_id": self.proposal_id,
+            "eligible": self.score is not None,
+            "findings": self.findings,
+            "services": None
+            if self.services is None
+            else [
+                {
+                    "service_id": item.service_id,
+                    "artifact_id": item.artifact_id,
+                    "host": item.host,
+                    "placement": item.placement,
+                }
+                for item in self.services
+            ],
+            "bindings": self.bindings,
+            "coverage": None
+            if self.coverage is None
+            else [entry.model_dump(mode="json") for entry in self.coverage],
+            "score": None
+            if self.score is None
+            else {"gaps": self.score[0], "missing": self.score[1]},
+            "proposal": self.proposal.model_dump(mode="json", exclude_unset=True),
+        }
+
+
+@dataclass(frozen=True)
+class Assessment:
+    """Every assessed proposal and the one preferred, if any is eligible."""
+
+    proposals: list[AssessedProposal]
+    preferred: AssessedProposal | None
+    tie_broken_by_model_order: bool
+
+    @property
+    def outcome(self) -> AssessmentOutcome:
+        """Say whether a proposal is preferred and, if not, why none is."""
+        if self.preferred is not None:
+            return "preferred"
+        # A proposal that passed the checks preceding placement can only become
+        # ineligible by losing every service there.
+        if all(item.services is not None for item in self.proposals):
+            return "scoped-rejection"
+        return "insufficient"
+
+    def to_evidence(self) -> dict[str, object]:
+        """Return the JSON record of the whole assessment."""
+        return {
+            "preferred": None if self.preferred is None else self.preferred.proposal_id,
+            "tie_broken_by_model_order": self.tie_broken_by_model_order,
+            "reason": None if self.preferred is not None else "no proposal is eligible",
+            "proposals": [item.to_evidence() for item in self.proposals],
+        }
 
 
 def _finding(
@@ -185,17 +277,18 @@ def _place(
     placement: ServicePlacement,
     description: ServiceDescription,
     hosts: dict[str, Host],
-) -> tuple[dict[str, object], list[dict[str, object]]]:
+) -> tuple[PlacedService, list[dict[str, object]]]:
     """Return the placement outcome for one service and its findings."""
     service_id = placement.service_id
     artifact, findings = _artifact(placement, description)
     host = hosts.get(placement.host) if placement.host is not None else None
-    outcome: dict[str, object] = {
-        "service_id": service_id,
-        "artifact_id": placement.artifact_id if artifact is not None else None,
-        "host": placement.host if host is not None else None,
-        "placement": "resolved",
-    }
+    placed = functools.partial(
+        PlacedService,
+        service_id=service_id,
+        capability=placement.capability,
+        artifact_id=placement.artifact_id if artifact is not None else None,
+        host=placement.host if host is not None else None,
+    )
     if host is None:
         findings.append(
             _finding(
@@ -206,7 +299,7 @@ def _place(
                 service_id=service_id,
             )
         )
-        return {**outcome, "placement": "unresolved"}, findings
+        return placed(placement="unresolved"), findings
     conflicts: list[str] = []
     if artifact is not None:
         if not {"noarch", host.architecture} & set(artifact.architectures):
@@ -236,10 +329,8 @@ def _place(
             f"on {placement.host}: {'; '.join(conflicts)}; service removed",
             service_id=service_id,
         )
-        return {**outcome, "placement": "rejected"}, [rejection]
-    if findings:
-        return {**outcome, "placement": "unresolved"}, findings
-    return outcome, findings
+        return placed(placement="rejected"), [rejection]
+    return placed(placement="unresolved" if findings else "resolved"), findings
 
 
 def _binding_conflict(
@@ -331,52 +422,59 @@ def _bind(
 
 def _final_coverage(
     proposal: Proposal, present: set[str]
-) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    coverage: list[dict[str, object]] = []
+) -> tuple[list[CoverageClaim], list[dict[str, object]]]:
+    coverage: list[CoverageClaim] = []
     findings: list[dict[str, object]] = []
     for entry in proposal.coverage:
-        status, reason = entry.status, entry.reason
         cited = set(entry.services)
-        if status == "supported" and not (cited and cited <= present):
-            status, reason = "missing", "a cited service is not in the proposal"
-        elif status == "uncertain" and not cited & present:
-            status, reason = "missing", "no cited service is in the proposal"
-        if status != entry.status:
+        final = entry
+        if entry.status == "supported" and not (cited and cited <= present):
+            final = entry.model_copy(
+                update={
+                    "status": "missing",
+                    "reason": "a cited service is not in the proposal",
+                }
+            )
+        elif entry.status == "uncertain" and not cited & present:
+            final = entry.model_copy(
+                update={
+                    "status": "missing",
+                    "reason": "no cited service is in the proposal",
+                }
+            )
+        if final is not entry:
             findings.append(
                 _finding(
                     "coverage-downgraded",
-                    f"{entry.status} -> missing: {reason}",
+                    f"{entry.status} -> missing: {final.reason}",
                     requirement_id=entry.requirement_id,
                 )
             )
-        coverage.append(
-            {
-                "requirement_id": entry.requirement_id,
-                "status": status,
-                "services": list(entry.services),
-                "reason": reason,
-            }
-        )
+        coverage.append(final)
     return coverage, findings
 
 
 def _check(
+    proposal_id: str,
     proposal: Proposal,
     services: dict[str, ServiceDescription],
     profile: TargetExecutionProfile,
-) -> tuple[tuple[int, int] | None, dict[str, object]]:
+) -> AssessedProposal:
     findings: list[dict[str, object]] = []
-    outcomes: list[dict[str, object]] = []
+    placed: list[PlacedService] = []
     participants: list[_Participant] = []
+    dependencies: dict[str, list[str]] = {}
     for placement in proposal.services:
         description = services[placement.service_id]
-        outcome, placed = _place(placement, description, profile.hosts)
-        outcomes.append(outcome)
-        findings.extend(placed)
-        if outcome["placement"] == "rejected":
+        outcome, placement_findings = _place(placement, description, profile.hosts)
+        placed.append(outcome)
+        findings.extend(placement_findings)
+        if outcome.placement == "rejected":
             continue
-        host = cast("str | None", outcome["host"])
-        participants.append(_Participant(placement.service_id, host, description))
+        participants.append(
+            _Participant(placement.service_id, outcome.host, description)
+        )
+        dependencies[placement.service_id] = description.depends_on or []
         if not any(
             getattr(description, role) is not None
             for pair in ROLE_PAIRS
@@ -391,92 +489,66 @@ def _check(
             )
     if not participants:
         findings.append(_finding("ineligible", "no service remains after removals"))
-        return None, {
-            "eligible": False,
-            "findings": findings,
-            "services": outcomes,
-            "bindings": None,
-            "coverage": None,
-            "score": None,
-        }
-    present = {participant.label for participant in participants}
-    for participant in participants:
-        findings.extend(
-            _finding(
-                "unmet-dependency",
-                f"depends_on {dependency} is not in the proposal",
-                service_id=participant.service_id,
-            )
-            for dependency in services[participant.label].depends_on or []
-            if dependency not in present
+        return AssessedProposal(proposal_id, proposal, findings, services=placed)
+    findings.extend(
+        _finding(
+            "unmet-dependency",
+            f"depends_on {dependency} is not in the proposal",
+            service_id=service_id,
         )
+        for service_id, needed in dependencies.items()
+        for dependency in needed
+        if dependency not in dependencies
+    )
     orchestrator = _Participant(None, None, profile.orchestrator_provides or RoleMaps())
     bindings, bound = _bind(
         [*participants, orchestrator],
         {frozenset(pair) for pair in profile.connections or []},
     )
     findings.extend(bound)
-    coverage, downgraded = _final_coverage(proposal, present)
+    coverage, downgraded = _final_coverage(proposal, set(dependencies))
     findings.extend(downgraded)
-    gaps = sum(1 for finding in findings if finding["gap"])
-    missing = sum(1 for entry in coverage if entry["status"] == "missing")
-    return (gaps, missing), {
-        "eligible": True,
-        "findings": findings,
-        "services": outcomes,
-        "bindings": bindings,
-        "coverage": coverage,
-        "score": {"gaps": gaps, "missing": missing},
-    }
+    return AssessedProposal(
+        proposal_id,
+        proposal,
+        findings,
+        services=placed,
+        bindings=bindings,
+        coverage=coverage,
+        score=(
+            sum(1 for finding in findings if finding["gap"]),
+            sum(1 for entry in coverage if entry.status == "missing"),
+        ),
+    )
 
 
 def assess_proposals(
-    proposals: CompositionProposals,
-    raw_proposals: list[object],
-    services: dict[str, ServiceDescription],
-    profile: TargetExecutionProfile,
-    requirement_ids: list[str],
-) -> dict[str, object]:
+    proposals: CompositionProposals, inputs: AssessmentInputs
+) -> Assessment:
     """Check every proposal and prefer the eligible one with fewest gaps."""
-    assessed: list[dict[str, object]] = []
-    ranked: list[tuple[int, int, int]] = []
+    services = {file.description.service_id: file.description for file in inputs.files}
+    assessed: list[AssessedProposal] = []
     for index, proposal in enumerate(proposals.proposals):
-        ineligible = _ineligibility(proposal, services, requirement_ids)
-        if ineligible:
-            result: dict[str, object] = {
-                "eligible": False,
-                "findings": ineligible,
-                "services": None,
-                "bindings": None,
-                "coverage": None,
-                "score": None,
-            }
-        else:
-            score, result = _check(proposal, services, profile)
-            if score is not None:
-                ranked.append((*score, index))
-        assessed.append(
-            {
-                "proposal_id": f"proposal-{index + 1}",
-                **result,
-                "proposal": raw_proposals[index],
-            }
+        proposal_id = f"proposal-{index + 1}"
+        ineligible = _ineligibility(
+            proposal, services, inputs.requirements.requirement_ids
         )
-    ranked.sort()
-    if not ranked:
-        return {
-            "preferred": None,
-            "tie_broken_by_model_order": False,
-            "reason": "no proposal is eligible",
-            "proposals": assessed,
-        }
-    best = ranked[0]
-    return {
-        "preferred": f"proposal-{best[2] + 1}",
-        "tie_broken_by_model_order": len(ranked) > 1 and ranked[1][:2] == best[:2],
-        "reason": None,
-        "proposals": assessed,
-    }
+        assessed.append(
+            AssessedProposal(proposal_id, proposal, ineligible)
+            if ineligible
+            else _check(proposal_id, proposal, services, inputs.profile)
+        )
+    # Sorting is stable, so equal scores keep the model's order.
+    ranked = sorted(
+        (item for item in assessed if item.score is not None),
+        key=lambda item: item.score or (0, 0),
+    )
+    return Assessment(
+        proposals=assessed,
+        preferred=ranked[0] if ranked else None,
+        tie_broken_by_model_order=len(ranked) > 1
+        and ranked[0].score == ranked[1].score,
+    )
 
 
 def _validate[ModelT: BaseModel](
@@ -527,7 +599,7 @@ def assess_proposal_files(
     target_profile: Path,
     requirements_specification: Path,
     proposals: Path,
-) -> dict[str, object]:
+) -> Assessment:
     """Read the supplied inputs and assess the proposals they hold."""
     inputs = load_assessment_inputs(
         service_repository=service_repository,
@@ -538,9 +610,5 @@ def assess_proposal_files(
         proposals.read_bytes(), str(proposals), max_bytes=MAX_PROPOSALS_BYTES
     )
     return assess_proposals(
-        _validate(CompositionProposals, document, proposals),
-        document["proposals"],
-        {file.description.service_id: file.description for file in inputs.files},
-        inputs.profile,
-        inputs.requirements.requirement_ids,
+        _validate(CompositionProposals, document, proposals), inputs
     )
