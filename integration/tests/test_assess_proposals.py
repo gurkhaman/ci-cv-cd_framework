@@ -88,6 +88,9 @@ def _assessment(
     return json.loads(completed.stdout)
 
 
+INSUFFICIENT = "no proposal is eligible"
+
+
 def _kinds(proposal: dict[str, Any]) -> list[str]:
     return sorted({finding["kind"] for finding in proposal["findings"]})
 
@@ -335,10 +338,11 @@ def test_records_findings_and_their_gaps(  # noqa: PLR0913, PLR0917
 
 
 @pytest.mark.parametrize(
-    "proposal",
+    ("proposal", "reason"),
     [
         pytest.param(
             _variant(add=({"service_id": "invented", "host": "orin"},)),
+            INSUFFICIENT,
             id="unknown-service",
         ),
         pytest.param(
@@ -352,6 +356,7 @@ def test_records_findings_and_their_gaps(  # noqa: PLR0913, PLR0917
                     },
                 ),
             ),
+            INSUFFICIENT,
             id="unknown-artifact",
         ),
         pytest.param(
@@ -364,14 +369,17 @@ def test_records_findings_and_their_gaps(  # noqa: PLR0913, PLR0917
                     },
                 )
             ),
+            INSUFFICIENT,
             id="duplicate-service",
         ),
         pytest.param(
             {**COMPLETE, "coverage": COMPLETE["coverage"][1:]},
+            INSUFFICIENT,
             id="coverage-mismatch",
         ),
         pytest.param(
             _variant(coverage={"transfer-book": ("missing", ["face-recog"])}),
+            INSUFFICIENT,
             id="negative-status-cites-services",
         ),
         pytest.param(
@@ -386,12 +394,13 @@ def test_records_findings_and_their_gaps(  # noqa: PLR0913, PLR0917
                     }
                 ],
             },
+            "every proposal lost all of its services to placement removals",
             id="no-service-remains",
         ),
     ],
 )
 def test_reports_no_preferred_proposal_when_none_is_eligible(
-    tmp_path: Path, proposal: dict[str, Any]
+    tmp_path: Path, proposal: dict[str, Any], reason: str
 ) -> None:
     assessment = _assessment(tmp_path, [proposal])
 
@@ -400,7 +409,7 @@ def test_reports_no_preferred_proposal_when_none_is_eligible(
     assert assessed["score"] is None
     assert "ineligible" in _kinds(assessed)
     assert assessment["preferred"] is None
-    assert assessment["reason"] == "no proposal is eligible"
+    assert assessment["reason"] == reason
 
 
 def test_rejects_proposals_outside_the_schema(tmp_path: Path) -> None:

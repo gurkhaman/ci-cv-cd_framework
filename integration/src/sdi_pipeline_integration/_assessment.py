@@ -50,6 +50,10 @@ type CoverageStatus = Literal[
 ]
 type PlacementStatus = Literal["resolved", "unresolved", "rejected"]
 type AssessmentOutcome = Literal["preferred", "scoped-rejection", "insufficient"]
+NO_PREFERENCE_REASONS: dict[AssessmentOutcome, str] = {
+    "scoped-rejection": "every proposal lost all of its services to placement removals",
+    "insufficient": "no proposal is eligible",
+}
 
 
 class ServicePlacement(ContractModel):
@@ -181,7 +185,7 @@ class Assessment:
         return {
             "preferred": None if self.preferred is None else self.preferred.proposal_id,
             "tie_broken_by_model_order": self.tie_broken_by_model_order,
-            "reason": None if self.preferred is not None else "no proposal is eligible",
+            "reason": NO_PREFERENCE_REASONS.get(self.outcome),
             "proposals": [item.to_evidence() for item in self.proposals],
         }
 
