@@ -60,11 +60,13 @@
   "schema_version": "sdi.composition-blueprint/v1",
   "services": [
     {
+      "basis": "placeholder",
       "capability": "localization",
       "depends_on": [],
       "service_id": "fixture-localization"
     },
     {
+      "basis": "placeholder",
       "capability": "navigation",
       "depends_on": [
         "fixture-localization"
@@ -72,6 +74,7 @@
       "service_id": "fixture-navigation"
     },
     {
+      "basis": "placeholder",
       "capability": "delivery-mission-control",
       "depends_on": [
         "fixture-navigation"

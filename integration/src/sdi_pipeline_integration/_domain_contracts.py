@@ -59,9 +59,13 @@ class SourceInputDigest(ContractModel):
 
 
 class BlueprintService(ContractModel):
-    """One selected service; capability is an unchecked assigned label."""
+    """One selected service; capability is an unchecked assigned label.
+
+    basis carries the description's provenance, so a placeholder stays visible.
+    """
 
     service_id: Slug
+    basis: Literal["declared", "placeholder"]
     capability: Capability
     depends_on: list[Slug]
 

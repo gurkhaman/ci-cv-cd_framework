@@ -221,6 +221,7 @@ def _blueprint_documents(
             "services": [
                 {
                     "service_id": item.service_id,
+                    "basis": services[item.service_id].provenance.basis,
                     "capability": item.capability,
                     "depends_on": services[item.service_id].depends_on or [],
                 }

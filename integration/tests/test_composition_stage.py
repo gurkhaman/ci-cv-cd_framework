@@ -301,6 +301,18 @@ def test_publishes_the_preferred_stubbed_proposal(tmp_path: Path) -> None:
         "diagnostic",
     }
     assert image_build["reason"]["code"] == "sdi.dependency.implemented-evidence"
+    blueprint = json.loads(
+        (tmp_path / "bundle/stages/composition/composition-blueprint.json").read_text()
+    )
+    assert {item["service_id"]: item["basis"] for item in blueprint["services"]} == {
+        item["service_id"]: (
+            "placeholder"
+            if "basis: placeholder"
+            in (SERVICE_REPOSITORY / item["service_id"] / "SDI.md").read_text()
+            else "declared"
+        )
+        for item in COMPLETE["services"]
+    }
     _validate_bundle(tmp_path)
     assert STUB_KEY not in _bundle_text(tmp_path) + completed.stdout
 

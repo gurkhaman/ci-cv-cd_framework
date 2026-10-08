@@ -33,8 +33,16 @@
     },
     "BlueprintService": {
       "additionalProperties": false,
-      "description": "One selected service; capability is an unchecked assigned label.",
+      "description": "One selected service; capability is an unchecked assigned label.\n\nbasis carries the description's provenance, so a placeholder stays visible.",
       "properties": {
+        "basis": {
+          "enum": [
+            "declared",
+            "placeholder"
+          ],
+          "title": "Basis",
+          "type": "string"
+        },
         "capability": {
           "maxLength": 64,
           "minLength": 1,
@@ -60,6 +68,7 @@
       },
       "required": [
         "service_id",
+        "basis",
         "capability",
         "depends_on"
       ],
