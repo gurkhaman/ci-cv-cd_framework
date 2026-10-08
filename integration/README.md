@@ -95,7 +95,13 @@ rejection means every proposal lost all of its services to placement removals.
 `composition-evidence.json` (`sdi.composition-evidence/v1`, at most 256 KiB)
 records the description digests, the generation settings, the exact model
 request and response summary, and the complete assessment. It is never an input
-to a later Stage. Reason summaries and the diagnostic come from fixed templates
+to a later Stage. Each assessed service carries its chosen artifact's `route` as
+declared. A `mutable-artifact` finding marks a route that may install different
+content later: any apt route, an image without a digest, or a source revision
+that is not a full commit. It is read from the declared route only, never
+resolved against a registry, and never counts as a gap. Discovery reads every
+description and fails rather than truncates at its limits, so the evidence omits
+no description. Reason summaries and the diagnostic come from fixed templates
 and never repeat provider error text.
 
 Fixture cases match exact input digests and cannot recognize real output, so a

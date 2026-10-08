@@ -92,7 +92,14 @@ INSUFFICIENT = "no proposal is eligible"
 
 
 def _kinds(proposal: dict[str, Any]) -> list[str]:
-    return sorted({finding["kind"] for finding in proposal["findings"]})
+    """Defect kinds; every apt route also records a mutable-artifact finding."""
+    return sorted(
+        {
+            finding["kind"]
+            for finding in proposal["findings"]
+            if finding["kind"] != "mutable-artifact"
+        }
+    )
 
 
 WITHOUT_FACE_RECOG = _variant(
@@ -335,6 +342,51 @@ def test_records_findings_and_their_gaps(  # noqa: PLR0913, PLR0917
         if service["placement"] != "resolved"
     } == placements
     assert assessment["preferred"] == "proposal-1"
+
+
+def test_records_each_chosen_route_and_flags_mutable_ones(tmp_path: Path) -> None:
+    images = _variant(
+        add=(
+            {"service_id": "fake-tagged-image", "artifact_id": "image", "host": "orin"},
+            {"service_id": "fake-digest-image", "artifact_id": "image", "host": "orin"},
+        )
+    )
+
+    baseline, assessed = _assessment(tmp_path, [COMPLETE, images])["proposals"]
+
+    routes = {
+        service["service_id"]: service["route"] for service in assessed["services"]
+    }
+    assert routes["fake-tagged-image"] == {
+        "kind": "image",
+        "reference": "example.invalid/sdi-test-fakes:jazzy",
+    }
+    assert routes["face-recog"] == {
+        "kind": "source",
+        "repository": "https://github.com/elpidiovaldez/face_recog",
+        "revision": "49604f569e1ef0c6283c2a8369f580167087b874",
+    }
+    assert routes["turtlebot3-bringup"]["kind"] == "apt"
+    mutable = [
+        finding
+        for finding in assessed["findings"]
+        if finding["kind"] == "mutable-artifact"
+    ]
+    assert {finding["service_id"] for finding in mutable} == {
+        "turtlebot3-bringup",
+        "nav2-localization",
+        "nav2-navigation",
+        "v4l2-camera",
+        "fake-tagged-image",
+    }
+    assert not any(finding["gap"] for finding in mutable)
+    assert routes["fake-digest-image"]["kind"] == "image"
+    assert "version patterns" in next(
+        finding["message"]
+        for finding in mutable
+        if finding["service_id"] == "turtlebot3-bringup"
+    )
+    assert assessed["score"] == baseline["score"]
 
 
 @pytest.mark.parametrize(
