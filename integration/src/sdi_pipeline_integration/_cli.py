@@ -38,7 +38,7 @@ from ._schemas import check_schemas, write_schemas
 from ._service_descriptions import read_service_repository
 from ._stage_contracts import AdapterDescriptor
 from ._stage_runtime import ExternalCancellation, execute_stage
-from ._yaml_input import InputError, parse_yaml
+from ._yaml_input import InputError, parse_yaml, validate_contract
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
@@ -301,11 +301,13 @@ def _write_json(path: Path, document: object) -> None:
 def _generate_proposals(arguments: argparse.Namespace) -> int:
     try:
         arguments.output.unlink(missing_ok=True)
-        config = GenerationConfig.model_validate(
+        config = validate_contract(
+            GenerationConfig,
             parse_yaml(
                 arguments.generation_config.read_bytes(),
                 str(arguments.generation_config),
-            )
+            ),
+            str(arguments.generation_config),
         )
         result = generate_proposals(
             inputs=load_assessment_inputs(

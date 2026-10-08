@@ -22,7 +22,7 @@ from ._contracts import (
     reject_explicit_nulls,
 )
 from ._stage_contracts import Sha256  # noqa: TC001
-from ._yaml_input import InputError, parse_front_matter
+from ._yaml_input import InputError, parse_front_matter, validate_contract
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -168,11 +168,7 @@ class DescriptionFile:
 
 def _parse(path: str, raw: bytes) -> DescriptionFile:
     front_matter, body = parse_front_matter(raw, path)
-    try:
-        description = ServiceDescription.model_validate(front_matter)
-    except ValidationError as error:
-        msg = f"{path}: contract validation failed: {error}"
-        raise InputError(msg) from error
+    description = validate_contract(ServiceDescription, front_matter, path)
     return DescriptionFile(
         path=path,
         sha256=hashlib.sha256(raw).hexdigest(),
