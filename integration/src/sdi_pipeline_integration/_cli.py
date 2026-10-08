@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from pydantic import ValidationError
 
+from ._assessment import assess_proposal_files
 from ._github_actions import render_github_summary
 from ._github_dispatch import GitHubDispatchError, dispatch_s04
 from ._jenkins_handoff import HandoffError, handoff_jenkins
@@ -96,6 +97,14 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         help="validate every SDI.md service description under a directory",
     )
     services.add_argument("--service-repository", type=Path, required=True)
+    assess = commands.add_parser(
+        "assess-proposals",
+        help="check and rank composition proposals against a service repository",
+    )
+    assess.add_argument("--service-repository", type=Path, required=True)
+    assess.add_argument("--target-profile", type=Path, required=True)
+    assess.add_argument("--requirements-specification", type=Path, required=True)
+    assess.add_argument("--proposals", type=Path, required=True)
     adapter_image = commands.add_parser(
         "adapter-image",
         help="print the immutable runtime image selected by an adapter descriptor",
@@ -305,6 +314,21 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
         }
         sys.stdout.write(
             f"{json.dumps(listed, sort_keys=True, separators=(',', ':'))}\n"
+        )
+        return 0
+    if arguments.command == "assess-proposals":
+        try:
+            assessment = assess_proposal_files(
+                service_repository=arguments.service_repository,
+                target_profile=arguments.target_profile,
+                requirements_specification=arguments.requirements_specification,
+                proposals=arguments.proposals,
+            )
+        except (InputError, OSError) as error:
+            sys.stderr.write(f"sdi-integration: {error}\n")
+            return 2
+        sys.stdout.write(
+            f"{json.dumps(assessment, sort_keys=True, separators=(',', ':'))}\n"
         )
         return 0
     if arguments.command == "adapter-image":

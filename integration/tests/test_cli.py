@@ -99,6 +99,7 @@ def test_cli_writes_and_freshness_checks_contract_schemas(tmp_path: Path) -> Non
         "accepted-attempt-envelope-v1.schema.json",
         "adapter-descriptor-v1.schema.json",
         "composition-blueprint-v1.schema.json",
+        "composition-proposals-v1.schema.json",
         "deployment-result-v1.schema.json",
         "deployment-schema-v1.schema.json",
         "fixture-case-v1.schema.json",

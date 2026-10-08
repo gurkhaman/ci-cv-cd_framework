@@ -10,6 +10,7 @@ if TYPE_CHECKING:
 
     from pydantic import BaseModel
 
+from ._assessment import CompositionProposals
 from ._contracts import (
     MobilityRequirementsSpecification,
     RunRequest,
@@ -40,6 +41,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "accepted-attempt-envelope-v1.schema.json": AcceptedAttemptEnvelope,
     "adapter-descriptor-v1.schema.json": AdapterDescriptor,
     "composition-blueprint-v1.schema.json": CompositionBlueprint,
+    "composition-proposals-v1.schema.json": CompositionProposals,
     "deployment-schema-v1.schema.json": DeploymentSchema,
     "deployment-result-v1.schema.json": DeploymentResult,
     "fixture-case-v1.schema.json": FixtureCase,
