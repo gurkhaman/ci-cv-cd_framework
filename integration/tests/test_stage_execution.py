@@ -9,13 +9,19 @@ from pathlib import Path
 
 import pytest
 
+from tests._fixture_inputs import (
+    FIXTURE_GENERATION_CONFIG,
+    SUPPLIED_INPUT_ARGUMENTS,
+    write_fixture_composition_descriptor,
+)
+
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
 COMMITTED_FILES = (
-    "runs/s-04/s-04-tc-03-c-01-fixture.yaml",
+    "runs/s-04/s-04-tc-03-c-05-fixture.yaml",
     "requirements/s-04/deliver-book-to-joe.md",
-    "profiles/s-04/waffle-native-arm64.yaml",
+    "profiles/s-04/waffle-jetson-arm64.yaml",
     "integration/stage-profiles/composition-v1.yaml",
-    "deployment/jenkins/adapters/composition-fixture-v1.yaml",
+    FIXTURE_GENERATION_CONFIG,
 )
 
 
@@ -46,6 +52,7 @@ def _commit_fixture_repository(tmp_path: Path) -> tuple[Path, str]:
         destination = repository / relative_path
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes((SOURCE_ROOT / relative_path).read_bytes())
+    write_fixture_composition_descriptor(repository)
     _git(repository, "add", ".")
     _git(repository, "commit", "-m", "Add composition Fixture")
     return repository, _git(repository, "rev-parse", "HEAD")
@@ -67,11 +74,12 @@ def _execute(
             "--resolved-commit",
             commit_sha,
             "--run-request-path",
-            "runs/s-04/s-04-tc-03-c-01-fixture.yaml",
+            "runs/s-04/s-04-tc-03-c-05-fixture.yaml",
             "--descriptor-path",
-            "deployment/jenkins/adapters/composition-fixture-v1.yaml",
+            "deployment/jenkins/adapters/composition-v1.yaml",
             "--attempt-root",
             str(attempt_root),
+            *SUPPLIED_INPUT_ARGUMENTS,
         ],
         check=False,
         capture_output=True,
@@ -162,9 +170,7 @@ response = {
         encoding="utf-8",
     )
     adapter.chmod(0o755)
-    descriptor_path = (
-        repository / "deployment/jenkins/adapters/composition-fixture-v1.yaml"
-    )
+    descriptor_path = repository / "deployment/jenkins/adapters/composition-v1.yaml"
     descriptor_path.write_text(
         f"""schema_version: sdi.adapter-descriptor/v1
 stage: composition
@@ -246,9 +252,7 @@ response = {
         encoding="utf-8",
     )
     adapter.chmod(0o755)
-    descriptor_path = (
-        repository / "deployment/jenkins/adapters/composition-fixture-v1.yaml"
-    )
+    descriptor_path = repository / "deployment/jenkins/adapters/composition-v1.yaml"
     descriptor_path.write_text(
         f"""schema_version: sdi.adapter-descriptor/v1
 stage: composition
@@ -293,7 +297,7 @@ def test_rejects_unconfined_output_grants_before_invocation(
         profile.read_text().replace("outputs/composition-blueprint.json", profile_path),
         encoding="utf-8",
     )
-    descriptor = repository / "deployment/jenkins/adapters/composition-fixture-v1.yaml"
+    descriptor = repository / "deployment/jenkins/adapters/composition-v1.yaml"
     descriptor.write_text(
         descriptor.read_text().replace(
             next(
@@ -320,7 +324,7 @@ def test_rejects_a_descriptor_profile_digest_mismatch_before_invocation(
     tmp_path: Path,
 ) -> None:
     repository, _ = _commit_fixture_repository(tmp_path)
-    descriptor = repository / "deployment/jenkins/adapters/composition-fixture-v1.yaml"
+    descriptor = repository / "deployment/jenkins/adapters/composition-v1.yaml"
     old_digest = next(
         line.split(": ", 1)[1]
         for line in descriptor.read_text().splitlines()

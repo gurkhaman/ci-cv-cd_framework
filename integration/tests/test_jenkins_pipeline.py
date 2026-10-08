@@ -11,11 +11,17 @@ from typing import Any
 
 import pytest
 
+from tests._fixture_inputs import (
+    FIXTURE_GENERATION_CONFIG,
+    SUPPLIED_INPUT_ARGUMENTS,
+    write_fixture_composition_descriptor,
+)
+
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
 EXECUTION_ID = "12345678-1234-4234-9234-123456789abc"
-SUCCESS_REQUEST = "runs/s-04/s-04-tc-03-c-01-fixture.yaml"
+SUCCESS_REQUEST = "runs/s-04/s-04-tc-03-c-05-fixture.yaml"
 DESCRIPTORS = (
-    ("composition", "deployment/jenkins/adapters/composition-fixture-v1.yaml"),
+    ("composition", "deployment/jenkins/adapters/composition-v1.yaml"),
     ("image_build", "deployment/jenkins/adapters/image-build-fixture-v1.yaml"),
     ("cv", "deployment/jenkins/adapters/cv-fixture-v1.yaml"),
     ("cd", "deployment/jenkins/adapters/cd-fixture-v1.yaml"),
@@ -30,11 +36,11 @@ COMMITTED_FILES = (
     SUCCESS_REQUEST,
     "requirements/s-04/deliver-book-to-joe.md",
     "profiles/s-04/waffle-native-arm64.yaml",
+    "profiles/s-04/waffle-jetson-arm64.yaml",
     "integration/stage-profiles/composition-v1.yaml",
     "integration/stage-profiles/image-build-v1.yaml",
     "integration/stage-profiles/cv-v1.yaml",
     "integration/stage-profiles/cd-v1.yaml",
-    "deployment/jenkins/adapters/composition-fixture-v1.yaml",
     "deployment/jenkins/adapters/image-build-fixture-v1.yaml",
     "deployment/jenkins/adapters/cv-fixture-v1.yaml",
     "deployment/jenkins/adapters/cd-fixture-v1.yaml",
@@ -42,6 +48,7 @@ COMMITTED_FILES = (
     "runs/conformance/composition-handled-failure.yaml",
     "runs/conformance/composition-malformed-response.yaml",
     "runs/conformance/composition-timeout.yaml",
+    FIXTURE_GENERATION_CONFIG,
 )
 
 
@@ -72,6 +79,7 @@ def _repository(tmp_path: Path) -> tuple[Path, str]:
         destination = repository / relative_path
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes((SOURCE_ROOT / relative_path).read_bytes())
+    write_fixture_composition_descriptor(repository)
     _git(repository, "add", ".")
     _git(repository, "commit", "-m", "Add distributed Fixture inputs")
     return repository, _git(repository, "rev-parse", "HEAD")
@@ -89,6 +97,7 @@ def _common(repository: Path, commit_sha: str, request_path: str) -> list[str]:
         request_path,
         "--execution-id",
         EXECUTION_ID,
+        *SUPPLIED_INPUT_ARGUMENTS,
     ]
 
 
@@ -244,6 +253,69 @@ def test_distributed_fixture_chain_preserves_identity_and_exact_archive(
     assert all(
         attempt["execution_conclusion"] == "succeeded" for attempt in result["attempts"]
     )
+
+
+def test_distributed_implemented_composition_skips_fixture_stages(
+    tmp_path: Path,
+) -> None:
+    repository, _commit_sha = _repository(tmp_path)
+    case = SOURCE_ROOT / "integration/fixtures/cases/composition-s-04-tc-03-c-05"
+    implemented = ('"evidence_basis": "fixture"', '"evidence_basis": "implemented"')
+    blueprint = (case / "composition-blueprint.json").read_text().replace(*implemented)
+    deployment = (case / "deployment-schema.json").read_text().replace(*implemented)
+    adapter = tmp_path / "implemented-composition-adapter"
+    adapter.write_text(
+        f"""#!/usr/bin/env python3
+import argparse
+import json
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("command")
+parser.add_argument("--request")
+parser.add_argument("--input-root")
+parser.add_argument("--output-root")
+arguments = parser.parse_args()
+request = json.loads(Path(arguments.request).read_text())
+output = Path(arguments.output_root)
+(output / "outputs").mkdir()
+(output / "outputs/composition-blueprint.json").write_text({blueprint!r})
+(output / "outputs/deployment-schema.json").write_text({deployment!r})
+response = {{
+    "schema_version": "sdi.stage-adapter-response/v1",
+    "correlation": request["correlation"],
+    "execution_conclusion": "succeeded",
+    "domain_outcome": "succeeded",
+    "consumed_inputs": [item["slot"] for item in request["inputs"]],
+    "produced_outputs": ["composition_blueprint", "deployment_schema"],
+    "diagnostic": {{"present": False, "truncated": False}},
+}}
+(output / "response.json").write_text(json.dumps(response))
+"""
+    )
+    adapter.chmod(0o755)
+    write_fixture_composition_descriptor(
+        repository, entrypoint=adapter, mode="implemented"
+    )
+    _git(repository, "add", ".")
+    _git(repository, "commit", "-m", "Select implemented composition adapter")
+    commit_sha = _git(repository, "rev-parse", "HEAD")
+
+    conclusion, result = _execute_chain(
+        repository,
+        commit_sha,
+        SUCCESS_REQUEST,
+        tmp_path / "run",
+        str(int((time.time() - 1) * 1000)),
+    )
+
+    assert conclusion.returncode == 0, conclusion.stderr
+    assert result["attempts"][0]["domain_outcome"] == "succeeded"
+    assert [attempt["reason"]["code"] for attempt in result["attempts"][1:]] == [
+        "sdi.dependency.implemented-evidence",
+        "sdi.dependency.prerequisite-blocked",
+        "sdi.dependency.prerequisite-blocked",
+    ]
 
 
 def test_malformed_final_bundle_is_rejected_by_public_cli(tmp_path: Path) -> None:
@@ -486,7 +558,7 @@ def test_external_cancellation_publishes_no_attempt(tmp_path: Path) -> None:
         "time.sleep(60)\n"
     )
     adapter.chmod(0o755)
-    descriptor = repository / "deployment/jenkins/adapters/composition-fixture-v1.yaml"
+    descriptor = repository / "deployment/jenkins/adapters/composition-v1.yaml"
     descriptor.write_text(
         descriptor.read_text().replace(
             "entrypoint: sdi-fixture-adapter", f"entrypoint: {adapter}"

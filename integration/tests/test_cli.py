@@ -51,8 +51,7 @@ def test_handoff_cli_exposes_only_non_secret_run_and_output_arguments() -> None:
 
 def test_cli_reads_the_descriptor_selected_agent_image() -> None:
     descriptor = (
-        Path(__file__).parents[2]
-        / "deployment/jenkins/adapters/composition-fixture-v1.yaml"
+        Path(__file__).parents[2] / "deployment/jenkins/adapters/composition-v1.yaml"
     )
     completed = subprocess.run(
         ["sdi-integration", "adapter-image", "--descriptor", str(descriptor)],
@@ -99,10 +98,12 @@ def test_cli_writes_and_freshness_checks_contract_schemas(tmp_path: Path) -> Non
         "accepted-attempt-envelope-v1.schema.json",
         "adapter-descriptor-v1.schema.json",
         "composition-blueprint-v1.schema.json",
+        "composition-evidence-v1.schema.json",
         "composition-proposals-v1.schema.json",
         "deployment-result-v1.schema.json",
         "deployment-schema-v1.schema.json",
         "fixture-case-v1.schema.json",
+        "generation-config-v1.schema.json",
         "handoff-receipt-v1.schema.json",
         "image-build-result-v1.schema.json",
         "mobility-requirements-specification-v1.schema.json",
@@ -110,6 +111,7 @@ def test_cli_writes_and_freshness_checks_contract_schemas(tmp_path: Path) -> Non
         "pipeline-integration-run-request-v1.schema.json",
         "recovery-manifest-v1.schema.json",
         "service-description-v1.schema.json",
+        "service-repository-manifest-v1.schema.json",
         "stage-adapter-request-v1.schema.json",
         "stage-adapter-response-v1.schema.json",
         "stage-profile-v1.schema.json",

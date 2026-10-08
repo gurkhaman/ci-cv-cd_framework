@@ -90,7 +90,7 @@ def _write_fake_deployment_tools(fake_bin: Path) -> None:
     uv.write_text(
         "#!/bin/sh\n"
         'case "$*" in\n'
-        "  *composition-fixture-v1.yaml) "
+        "  *composition-v1.yaml) "
         f"printf '{FAKE_AGENT_IMAGES[0]}\\n' ;;\n"
         "  *image-build-fixture-v1.yaml) "
         f"printf '{FAKE_AGENT_IMAGES[1]}\\n' ;;\n"
