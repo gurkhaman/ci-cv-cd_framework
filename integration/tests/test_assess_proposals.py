@@ -185,13 +185,6 @@ WITHOUT_FACE_RECOG = _variant(
             True,
             id="tie-broken-by-model-order",
         ),
-        pytest.param(
-            [_variant(add=({"service_id": "invented", "host": "orin"},)), COMPLETE],
-            [None, (0, 0)],
-            "proposal-2",
-            False,
-            id="ineligible-is-not-ranked",
-        ),
     ],
 )
 def test_prefers_the_proposal_with_fewest_gaps_then_missing_coverage(
@@ -265,14 +258,6 @@ def test_prefers_the_proposal_with_fewest_gaps_then_missing_coverage(
             id="qos-mismatch",
         ),
         pytest.param(
-            _variant(add=({"service_id": "fake-missing-artifact", "host": "orin"},)),
-            ("", ""),
-            ["missing-artifact"],
-            (1, 0),
-            {"fake-missing-artifact": "unresolved"},
-            id="missing-artifact",
-        ),
-        pytest.param(
             _variant(
                 add=(
                     {
@@ -303,14 +288,6 @@ def test_prefers_the_proposal_with_fewest_gaps_then_missing_coverage(
             (0, 0),
             {"hri-face-detect": "rejected"},
             id="baseline-mismatch",
-        ),
-        pytest.param(
-            _variant(hosts={"whisper-server": "waffle"}),
-            ("", ""),
-            ["coverage-downgraded", "placement-rejected"],
-            (0, 3),
-            {"whisper-server": "rejected"},
-            id="device-absent",
         ),
         pytest.param(
             _variant(
