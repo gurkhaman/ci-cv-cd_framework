@@ -24,6 +24,7 @@ services:
     secrets:
       - jenkins-admin-password
       - jenkins-handoff-password
+      - openai-api-key
     networks:
       - controller-integration
       - controller-ci
@@ -229,6 +230,8 @@ secrets:
     file: ${JENKINS_ADMIN_PASSWORD_FILE}
   jenkins-handoff-password:
     file: ${JENKINS_HANDOFF_PASSWORD_FILE}
+  openai-api-key:
+    file: ${JENKINS_OPENAI_API_KEY_FILE}
   integration-agent-secret:
     file: ${JENKINS_INTEGRATION_AGENT_SECRET_FILE}
   ci-agent-secret:

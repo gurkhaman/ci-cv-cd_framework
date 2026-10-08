@@ -103,6 +103,10 @@ umask 077
 python3 -c 'import secrets; print(secrets.token_urlsafe(48))' > /secure/path/password
 ```
 
+Write the OpenAI API key, and nothing else, to a third owner-only file outside
+the checkout and name it in `JENKINS_OPENAI_API_KEY_FILE`. JCasC turns it into
+the `sdi-openai-api-key` credential that the composition Stage uses.
+
 Configure five distinct, initially absent secret-file paths outside the
 checkout for `integration`, `ci`, `image-build`, `cv`, and `cd`. Their parent
 directory must be writable only by the stack operator.

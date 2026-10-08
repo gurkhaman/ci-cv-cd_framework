@@ -116,6 +116,16 @@ jenkins:
               workDirPath: "/home/jenkins/agent"
         retentionStrategy: "always"
 
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - string:
+              scope: GLOBAL
+              id: "sdi-openai-api-key"
+              description: "OpenAI API key bound around the composition Stage"
+              secret: "${openai-api-key}"
+
 unclassified:
   buildDiscarders:
     configuredBuildDiscarders:

@@ -95,10 +95,11 @@ tracked 90-minute run and 10, 30, 45, and 15 minute Stage defaults. They must be
 positive integers no greater than one day; the run limit must leave at least two
 minutes for finalization. Workflow dispatch parameters cannot change them.
 
-Create the administrator and machine-user password files outside the checkout.
-Each file must be nonempty, owned by the operator, and inaccessible to group and
-other users, for example mode `0600`. Compose mounts them through `/run/secrets`;
-secret values are never placed in tracked files or Compose environment values.
+Create the administrator and machine-user password files and the OpenAI API key
+file outside the checkout. Each file must be nonempty, owned by the operator, and
+inaccessible to group and other users, for example mode `0600`. Compose mounts
+them into the controller only, through `/run/secrets`; secret values are never
+placed in tracked files or Compose environment values.
 
 JCasC creates the two local identities from those bootstrap files. The
 administrator has `Overall/Administer`. The handoff machine user has only
@@ -149,11 +150,12 @@ The composition descriptor binds `OPENAI_API_KEY` and `VLLM_KEY`. The root
 pipeline composes with `integration/generation-configs/luna.yaml`, because the
 agents cannot reach the self-hosted Qwen endpoint, and binds the Jenkins secret
 text credential `sdi-openai-api-key` as `OPENAI_API_KEY` around the composition
-Stage only. Create that credential in **Manage Jenkins > Credentials** before
-the first run, and allow the `ci` agent HTTPS egress to `api.openai.com`.
-Without either, composition fails with `sdi.composition.provider-error` and the
-build is red. The pipeline passes the checked-out `service-repository/` to every
-Stage command.
+Stage only. JCasC creates that credential from the file named by
+`JENKINS_OPENAI_API_KEY_FILE`, which holds only the key. Allow the `ci` agent
+HTTPS egress to `api.openai.com`. Without a valid key or that egress,
+composition fails with `sdi.composition.provider-error` and the build is red.
+The pipeline passes the checked-out `service-repository/` to every Stage
+command.
 
 Each image contains an immutable role and label identity under `/etc/sdi` on its
 read-only root filesystem. The supported Stage execution commands refuse every

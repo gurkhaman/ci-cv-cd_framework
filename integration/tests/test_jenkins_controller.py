@@ -286,6 +286,14 @@ def test_compose_exposes_only_loopback_http_and_persists_only_controller_state()
     assert controller["ports"] == ["127.0.0.1:${JENKINS_HTTP_PORT}:8080"]
     assert controller["restart"] == "no"
     assert controller["volumes"] == ["jenkins-home:/var/jenkins_home"]
+    assert controller["secrets"] == [
+        "jenkins-admin-password",
+        "jenkins-handoff-password",
+        "openai-api-key",
+    ]
+    assert compose["secrets"]["openai-api-key"] == {
+        "file": "${JENKINS_OPENAI_API_KEY_FILE}"
+    }
     assert set(controller["environment"]) >= {
         "JENKINS_PIPELINE_RUN_LIMIT_SECONDS",
         "JENKINS_COMPOSITION_WORK_LIMIT_SECONDS",
@@ -376,6 +384,26 @@ def test_jcasc_owns_zero_executor_security_and_retention_defaults() -> None:
         },
         {"file": "/usr/local/share/jenkins/job-dsl/pipeline-integration.groovy"},
     ]
+    assert casc["credentials"] == {
+        "system": {
+            "domainCredentials": [
+                {
+                    "credentials": [
+                        {
+                            "string": {
+                                "scope": "GLOBAL",
+                                "id": "sdi-openai-api-key",
+                                "description": (
+                                    "OpenAI API key bound around the composition Stage"
+                                ),
+                                "secret": "${openai-api-key}",
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+    }
     assert casc["security"]["apiToken"] == {
         "creationOfLegacyTokenEnabled": False,
         "tokenGenerationOnCreationEnabled": False,
@@ -697,6 +725,9 @@ def test_stack_validate_uses_compose_and_rejects_insecure_secret_files(  # noqa:
     handoff_secret.write_text("handoff-secret\n")
     admin_secret.chmod(0o600)
     handoff_secret.chmod(0o644)
+    openai_secret = tmp_path / "openai-api-key"
+    openai_secret.write_text("openai-api-key\n")
+    openai_secret.chmod(0o600)
     agent_secrets = {
         name: tmp_path / f"{name}-agent-secret"
         for name in ("integration", "ci", "image-build", "cv", "cd")
@@ -726,6 +757,7 @@ def test_stack_validate_uses_compose_and_rejects_insecure_secret_files(  # noqa:
         "JENKINS_CD_WORK_LIMIT_SECONDS=900\n"
         f"JENKINS_ADMIN_PASSWORD_FILE={admin_secret}\n"
         f"JENKINS_HANDOFF_PASSWORD_FILE={handoff_secret}\n"
+        f"JENKINS_OPENAI_API_KEY_FILE={openai_secret}\n"
         f"JENKINS_INTEGRATION_AGENT_SECRET_FILE={agent_secrets['integration']}\n"
         f"JENKINS_CI_AGENT_SECRET_FILE={agent_secrets['ci']}\n"
         f"JENKINS_IMAGE_BUILD_AGENT_SECRET_FILE={agent_secrets['image-build']}\n"
@@ -776,6 +808,21 @@ def test_stack_validate_uses_compose_and_rejects_insecure_secret_files(  # noqa:
     assert "compose" in validation_log
     assert "config --quiet" in validation_log
     assert f"images={'|'.join(FAKE_AGENT_IMAGES)}" in validation_log
+
+    openai_secret.chmod(0o640)
+    completed = subprocess.run(
+        [JENKINS_ROOT / "bin" / "stack", "--config", config, "validate"],
+        check=False,
+        capture_output=True,
+        env={
+            "DOCKER_LOG": str(docker_log),
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        },
+        text=True,
+    )
+    assert completed.returncode == 2
+    assert "must not be accessible by group or other users" in completed.stderr
+    openai_secret.chmod(0o600)
 
     agent_secrets["cd"].unlink()
     preflight = subprocess.run(
