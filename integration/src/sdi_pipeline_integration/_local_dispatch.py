@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import shutil
 import stat
@@ -24,7 +23,7 @@ from ._domain_contracts import (
     ValidationEvidence,
 )
 from ._git_input import GitRepository
-from ._json_input import parse_json
+from ._json_input import canonical_json, parse_json
 from ._result_contracts import (
     FIXTURE_NOTICE,
     PIPELINE_RESULT_PATH,
@@ -82,19 +81,6 @@ def _descriptor_modes(
             raise InputError(msg)
         modes[expected_stage] = descriptor.implementation_mode
     return modes
-
-
-def _canonical_json(value: object) -> bytes:
-    return (
-        json.dumps(
-            value,
-            allow_nan=False,
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        + "\n"
-    ).encode()
 
 
 def _write_file(root: Path, relative_path: str, content: bytes) -> None:
@@ -351,7 +337,7 @@ def _assemble_bundle_staging(
     _write_file(
         bundle_staging,
         PIPELINE_RESULT_PATH,
-        _canonical_json(result.model_dump(mode="json", exclude_none=True)),
+        canonical_json(result.model_dump(mode="json", exclude_none=True)),
     )
     validate_bundle(bundle_staging)
     return result.model_dump(mode="json", exclude_none=True)
