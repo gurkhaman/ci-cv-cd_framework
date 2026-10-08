@@ -8,6 +8,7 @@ from __future__ import annotations
 from io import StringIO
 from typing import TYPE_CHECKING, Any, cast
 
+from pydantic import BaseModel, ValidationError
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 from ruamel.yaml.nodes import MappingNode, ScalarNode, SequenceNode
@@ -51,6 +52,17 @@ NESTING_END_TOKENS = (BlockEndToken, FlowMappingEndToken, FlowSequenceEndToken)
 
 class InputError(ValueError):
     """A safe validation error for an accepted input boundary."""
+
+
+def validate_contract[ModelT: BaseModel](
+    model: type[ModelT], document: object, source: str
+) -> ModelT:
+    """Validate a parsed document strictly against a contract, naming its source."""
+    try:
+        return model.model_validate(document, strict=True, extra="forbid")
+    except ValidationError as error:
+        msg = f"{source}: contract validation failed: {error}"
+        raise InputError(msg) from error
 
 
 def _yaml() -> YAML:

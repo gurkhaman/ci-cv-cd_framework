@@ -35,6 +35,11 @@ from ._generation import GenerationConfig
 from ._git_input import CommittedBlob, GitRepository, validate_repository_path
 from ._jenkins_agent_boundary import enforce_domain_execution_boundary
 from ._json_input import canonical_json, parse_json
+from ._result_contracts import (
+    MAX_TRANSFER_DIAGNOSTIC_BYTES,
+    MAX_TRANSFER_DOMAIN_BYTES,
+    MAX_TRANSFER_EVIDENCE_BYTES,
+)
 from ._run_input import PROTECTED_MAIN_REF, identify_committed_run
 from ._service_descriptions import (
     SERVICE_REPOSITORY_ROOT,
@@ -59,16 +64,18 @@ from ._stage_contracts import (
     contains_sensitive_material,
     require_unique_paths,
 )
-from ._yaml_input import InputError, parse_front_matter, parse_yaml
+from ._yaml_input import (
+    InputError,
+    parse_front_matter,
+    parse_yaml,
+    validate_contract,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
 MAX_RESPONSE_BYTES = 64 * 1024
 MAX_ACCEPTED_ENVELOPE_BYTES = 64 * 1024
-MAX_TRANSFER_DOMAIN_BYTES = 32 * 1024
-MAX_TRANSFER_EVIDENCE_BYTES = 256 * 1024
-MAX_TRANSFER_DIAGNOSTIC_BYTES = 16 * 1024
 MAX_CANDIDATE_ENTRIES = 32
 MAX_CANDIDATE_DEPTH = 4
 ADAPTER_SHUTDOWN_GRACE_SECONDS = 10
@@ -132,36 +139,26 @@ OUTPUT_MODELS: dict[str, type[BaseModel]] = {
 def _validate_yaml_model[ModelT: BaseModel](
     model: type[ModelT], blob: CommittedBlob
 ) -> ModelT:
-    try:
-        return model.model_validate(
-            parse_yaml(blob.content, blob.path), strict=True, extra="forbid"
-        )
-    except ValidationError as error:
-        msg = f"{blob.path}: contract validation failed: {error}"
-        raise InputError(msg) from error
+    return validate_contract(model, parse_yaml(blob.content, blob.path), blob.path)
 
 
 def _validate_source_model(
     model: type[BaseModel], source: StageInputSource
 ) -> BaseModel:
-    try:
-        if source.media_type == "application/yaml":
-            parsed = parse_yaml(source.content, source.source_path)
-        elif source.media_type == "text/markdown":
-            parsed, _body = parse_front_matter(source.content, source.source_path)
-        elif source.media_type == "application/json":
-            parsed = parse_json(
-                source.content,
-                source.source_path,
-                max_bytes=max(1, len(source.content)),
-            )
-        else:
-            msg = "Stage input uses an unsupported media type"
-            raise InputError(msg)
-        return model.model_validate(parsed, strict=True, extra="forbid")
-    except ValidationError as error:
-        msg = f"{source.source_path}: contract validation failed: {error}"
-        raise InputError(msg) from error
+    if source.media_type == "application/yaml":
+        parsed = parse_yaml(source.content, source.source_path)
+    elif source.media_type == "text/markdown":
+        parsed, _body = parse_front_matter(source.content, source.source_path)
+    elif source.media_type == "application/json":
+        parsed = parse_json(
+            source.content,
+            source.source_path,
+            max_bytes=max(1, len(source.content)),
+        )
+    else:
+        msg = "Stage input uses an unsupported media type"
+        raise InputError(msg)
+    return validate_contract(model, parsed, source.source_path)
 
 
 def _write_file(root: Path, relative_path: str, content: bytes) -> None:

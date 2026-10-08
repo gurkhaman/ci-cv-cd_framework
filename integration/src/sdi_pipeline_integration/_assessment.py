@@ -7,7 +7,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Literal, cast
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import Field
 
 from ._contracts import (
     Baseline,
@@ -22,7 +22,7 @@ from ._contracts import (
 from ._domain_contracts import Capability  # noqa: TC001
 from ._json_input import parse_json
 from ._service_descriptions import read_service_repository
-from ._yaml_input import InputError, parse_front_matter, parse_yaml
+from ._yaml_input import parse_front_matter, parse_yaml, validate_contract
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -551,16 +551,6 @@ def assess_proposals(
     )
 
 
-def _validate[ModelT: BaseModel](
-    model: type[ModelT], document: dict[str, object], path: Path
-) -> ModelT:
-    try:
-        return model.model_validate(document)
-    except ValidationError as error:
-        msg = f"{path}: contract validation failed: {error}"
-        raise InputError(msg) from error
-
-
 @dataclass(frozen=True)
 class AssessmentInputs:
     """The validated service repository, profile and requirements."""
@@ -579,16 +569,16 @@ def load_assessment_inputs(
 ) -> AssessmentInputs:
     """Read and validate the inputs every proposal is generated and checked against."""
     files = read_service_repository(service_repository)
-    profile = _validate(
+    profile = validate_contract(
         TargetExecutionProfile,
         parse_yaml(target_profile.read_bytes(), str(target_profile)),
-        target_profile,
+        str(target_profile),
     )
     front_matter, body = parse_front_matter(
         requirements_specification.read_bytes(), str(requirements_specification)
     )
-    requirements = _validate(
-        MobilityRequirementsSpecification, front_matter, requirements_specification
+    requirements = validate_contract(
+        MobilityRequirementsSpecification, front_matter, str(requirements_specification)
     )
     return AssessmentInputs(files, profile, requirements, body)
 
@@ -610,5 +600,5 @@ def assess_proposal_files(
         proposals.read_bytes(), str(proposals), max_bytes=MAX_PROPOSALS_BYTES
     )
     return assess_proposals(
-        _validate(CompositionProposals, document, proposals), inputs
+        validate_contract(CompositionProposals, document, str(proposals)), inputs
     )

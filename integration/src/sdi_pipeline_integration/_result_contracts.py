@@ -51,9 +51,15 @@ GitCommitSha = Annotated[
     str,
     StringConstraints(strict=True, pattern=r"^[0-9a-f]{40}$"),
 ]
-SmallDomainFileSize = Annotated[NonNegativeInt, Field(le=32768)]
-BoundedEvidenceSize = Annotated[NonNegativeInt, Field(le=262144)]
-BoundedDiagnosticSize = Annotated[NonNegativeInt, Field(le=16384)]
+# The largest files an accepted attempt may transfer into the bundle.
+MAX_TRANSFER_DOMAIN_BYTES = 32 * 1024
+MAX_TRANSFER_EVIDENCE_BYTES = 256 * 1024
+MAX_TRANSFER_DIAGNOSTIC_BYTES = 16 * 1024
+SmallDomainFileSize = Annotated[NonNegativeInt, Field(le=MAX_TRANSFER_DOMAIN_BYTES)]
+BoundedEvidenceSize = Annotated[NonNegativeInt, Field(le=MAX_TRANSFER_EVIDENCE_BYTES)]
+BoundedDiagnosticSize = Annotated[
+    NonNegativeInt, Field(le=MAX_TRANSFER_DIAGNOSTIC_BYTES)
+]
 INITIAL_SKIP_CODES = frozenset(
     {
         "sdi.stage.not-implemented",

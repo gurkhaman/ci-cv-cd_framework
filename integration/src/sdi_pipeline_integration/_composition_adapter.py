@@ -45,7 +45,12 @@ from ._service_descriptions import (
     parse_service_repository,
 )
 from ._stage_contracts import AdapterRequest, AdapterResponse
-from ._yaml_input import InputError, parse_front_matter, parse_yaml
+from ._yaml_input import (
+    InputError,
+    parse_front_matter,
+    parse_yaml,
+    validate_contract,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -118,14 +123,6 @@ GENERATION_FAILURES = {
     "refused": "generation-refused",
     "provider_error": "provider-error",
 }
-
-
-def _validated[ModelT: BaseModel](model: type[ModelT], document: object) -> ModelT:
-    try:
-        return model.model_validate(document, strict=True, extra="forbid")
-    except ValidationError as error:
-        msg = f"{model.__name__} contract validation failed: {error}"
-        raise InputError(msg) from error
 
 
 def _read_input(path: Path, size: int, sha256: str) -> bytes:
@@ -213,7 +210,7 @@ def _blueprint_documents(
         f"{identity['scenario_id']}-{identity['testcase_id']}-"
         f"{identity['combination_id']}-{preferred.proposal_id}"
     ).lower()
-    blueprint = _validated(
+    blueprint = validate_contract(
         CompositionBlueprint,
         identity
         | {
@@ -242,8 +239,9 @@ def _blueprint_documents(
                 for requirement_id in requirement_ids
             ],
         },
+        "composition-blueprint.json",
     )
-    deployment = _validated(
+    deployment = validate_contract(
         DeploymentSchema,
         identity
         | {
@@ -262,6 +260,7 @@ def _blueprint_documents(
                 for item in kept
             ],
         },
+        "deployment-schema.json",
     )
     return {"composition_blueprint": blueprint, "deployment_schema": deployment}
 
@@ -277,32 +276,39 @@ def _compose(run: _Run, input_root: Path) -> Outcome:
         slot: _read_input(input_root / item.path, item.byte_size, item.sha256)
         for slot, item in declared.items()
     }
-    manifest = _validated(
+    manifest = validate_contract(
         ServiceRepositoryManifest,
         parse_json(
             contents["service_repository"],
             "service-repository.json",
             max_bytes=len(contents["service_repository"]),
         ),
+        "service-repository.json",
     )
     snapshot = capture_service_repository(input_root / SERVICE_REPOSITORY_ROOT)
     if snapshot.manifest != manifest:
         msg = "copied descriptions do not match the service-repository manifest"
         raise InputError(msg)
-    run_request = _validated(
-        RunRequest, parse_yaml(contents["run_request"], "run-request.yaml")
+    run_request = validate_contract(
+        RunRequest,
+        parse_yaml(contents["run_request"], "run-request.yaml"),
+        "run-request.yaml",
     )
-    profile = _validated(
+    profile = validate_contract(
         TargetExecutionProfile,
         parse_yaml(contents["target_profile"], "target-profile.yaml"),
+        "target-profile.yaml",
     )
     front_matter, requirements_body = parse_front_matter(
         contents["requirements_specification"], "requirements-specification.md"
     )
-    requirements = _validated(MobilityRequirementsSpecification, front_matter)
-    config = _validated(
+    requirements = validate_contract(
+        MobilityRequirementsSpecification, front_matter, "requirements-specification.md"
+    )
+    config = validate_contract(
         GenerationConfig,
         parse_yaml(contents["generation_config"], "generation-config.yaml"),
+        "generation-config.yaml",
     )
     config = config.model_copy(
         update={
@@ -358,12 +364,16 @@ def _compose(run: _Run, input_root: Path) -> Outcome:
     proposals = generation.proposals
     if proposals is None:
         return "bounded-no-result", {
-            "composition_evidence": _validated(CompositionEvidence, evidence)
+            "composition_evidence": validate_contract(
+                CompositionEvidence, evidence, "composition-evidence.json"
+            )
         }
     assessment = assess_proposals(proposals, inputs)
     documents: dict[str, BaseModel] = {
-        "composition_evidence": _validated(
-            CompositionEvidence, evidence | {"assessment": assessment.to_evidence()}
+        "composition_evidence": validate_contract(
+            CompositionEvidence,
+            evidence | {"assessment": assessment.to_evidence()},
+            "composition-evidence.json",
         )
     }
     if assessment.preferred is None:
@@ -387,7 +397,7 @@ def run_adapter(*, request_path: Path, input_root: Path, output_root: Path) -> N
     except OSError as error:
         msg = "adapter request cannot be read"
         raise InputError(msg) from error
-    request = _validated(AdapterRequest, parsed)
+    request = validate_contract(AdapterRequest, parsed, str(request_path))
     if request.correlation.stage != "composition":
         msg = "the composition adapter serves only the composition Stage"
         raise InputError(msg)
