@@ -31,27 +31,50 @@ MAX_RETRIES = 0
 INSTRUCTIONS = """\
 You compose ROS 2 mobility services for one mission on one target.
 
-The input gives every service description in the service repository (validated
-front matter plus its Markdown body), the target execution profile and the
-mission's requirements specification.
+The input gives the target execution profile, the mission's requirements
+specification and every service description in the service repository. Take
+interfaces, artifacts, devices and depends_on only from each description's JSON
+front matter; the Markdown body says what the service does and its limits. Use
+only facts stated in the input. Placeholder provenance does not exclude a
+service.
 
-Return one to three alternative proposals, best first. Each proposal:
-- chooses services by service_id, each with one of its artifact_ids and one
-  profile host; use null for artifact_id or host only when none fits;
-- gives every requirement_id exactly one coverage entry: "supported" or
-  "uncertain" citing the chosen services that provide it, "missing" when no
-  chosen service provides it, or "outside_composition" when the requirement is
-  allocated to people or systems outside the composed services; "missing" and
-  "outside_composition" cite no services;
-- assigns each chosen service a short capability label;
-- explains the choice in the rationale.
+Return one to three proposals, best first: fewest gaps, then fewest requirements
+left "missing". Add a proposal only when it changes a choice you are unsure of
+(a service, artifact or host); never repeat one.
 
-Use only facts stated in the input. Choose services whose artifact
-architectures, host baseline and devices fit the host, whose inputs are
-provided by another chosen service or by the profile's orchestrator_provides
-with the same type and compatible QoS, whose depends_on services are also
-chosen, and whose cross-host bindings follow the profile's connections. The
-orchestrator's own inputs need providers among the chosen services.
+In each proposal, choose each service_id at most once, and only to cover a
+requirement or to provide an input or depends_on of another chosen service.
+For each chosen service give:
+- artifact_id: one of its artifact keys;
+- host: a profile host whose architecture is in the artifact's architectures
+  (or noarch), whose baseline agrees with the artifact's host_requirement on
+  fields both declare, and whose devices include every device the service
+  declares;
+- capability: a short label.
+A placement that does not fit removes the service and everything it provides;
+use null for artifact_id or host instead when nothing fits.
+
+Each of these is a gap:
+- a null artifact_id or host;
+- a service input (subscribes, service_clients, action_clients) or an
+  orchestrator_provides input with no provider. Providers match by exact ROS
+  name and type among the chosen services and the orchestrator's publishes and
+  servers; a best_effort or volatile publisher does not provide to a subscriber
+  requiring reliable or transient_local;
+- a binding between services on two different hosts whose pair is not in
+  connections;
+- a depends_on service that is not chosen.
+
+Give every requirement_id exactly one coverage entry, citing only services
+chosen in that proposal:
+- "outside_composition" when the specification allocates it only to the
+  orchestrator or to people; cite none;
+- "supported" when chosen services provide it; cite all of them;
+- "uncertain" when a chosen service may provide it but the input leaves it in
+  doubt; cite those services;
+- "missing" otherwise; cite none.
+
+In the rationale, state the main choices and every gap you could not avoid.
 """
 
 type Outcome = Literal["generated", "exhausted", "refused", "invalid", "provider_error"]
@@ -92,24 +115,25 @@ def _generation_model(
     )
 
 
-def _json_block(model: BaseModel) -> str:
-    facts = json.dumps(model.model_dump(mode="json", exclude_none=True), indent=2)
-    return f"```json\n{facts}\n```\n"
+def _json(model: BaseModel) -> str:
+    return json.dumps(model.model_dump(mode="json", exclude_none=True), indent=2)
 
 
 def _prompt_input(inputs: AssessmentInputs) -> str:
-    sections = [
-        f"## Service description {file.path}\n\n"
-        f"{_json_block(file.description)}\n{file.body.strip()}\n"
-        for file in inputs.files
+    requirement_ids = ", ".join(inputs.requirements.requirement_ids)
+    parts = [
+        f"<profile>\n{_json(inputs.profile)}\n</profile>",
+        (
+            f'<requirements ids="{requirement_ids}">\n'
+            f"{inputs.requirements_body.strip()}\n</requirements>"
+        ),
     ]
-    sections.append(f"## Target execution profile\n\n{_json_block(inputs.profile)}")
-    sections.append(
-        f"## Requirements specification\n\n"
-        f"requirement_ids: {', '.join(inputs.requirements.requirement_ids)}\n\n"
-        f"{inputs.requirements_body.strip()}\n"
+    parts.extend(
+        f'<service id="{file.description.service_id}" path="{file.path}">\n'
+        f"{_json(file.description)}\n\n{file.body.strip()}\n</service>"
+        for file in inputs.files
     )
-    return "\n".join(sections)
+    return "\n\n".join(parts) + "\n"
 
 
 def _response_record(body: dict[str, object]) -> dict[str, object]:
