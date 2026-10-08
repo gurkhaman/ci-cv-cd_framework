@@ -28,19 +28,19 @@ outputs:
     path: outputs/composition-blueprint.json
     media_type: application/json
     schema_version: sdi.composition-blueprint/v1
-    required: true
+    role: domain_output
     max_bytes: 32768
   - slot: deployment_schema
     path: outputs/deployment-schema.json
     media_type: application/json
     schema_version: sdi.deployment-schema/v1
-    required: true
+    role: domain_output
     max_bytes: 32768
   - slot: composition_evidence
     path: outputs/composition-evidence.json
     media_type: application/json
     schema_version: sdi.composition-evidence/v1
-    required: false
+    role: stage_evidence
     max_bytes: 262144
 diagnostic:
   path: diagnostic.txt

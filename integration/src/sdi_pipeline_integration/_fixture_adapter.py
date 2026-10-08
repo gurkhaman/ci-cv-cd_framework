@@ -189,7 +189,7 @@ def run_adapter(  # noqa: C901, PLR0911, PLR0912, PLR0915
 
     case, case_root = selected
     # Fixtures publish only Domain outputs, never optional Stage evidence.
-    domain_grants = [item for item in request.outputs if item.required]
+    domain_grants = [item for item in request.outputs if item.role == "domain_output"]
     output_by_slot = {item.slot: item for item in domain_grants}
     if case.behavior == "absent_response":
         return

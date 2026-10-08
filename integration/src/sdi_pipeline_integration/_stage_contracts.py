@@ -430,7 +430,9 @@ class OutputGrant(ContractModel):
     path: RepositoryPath
     media_type: NonBlank
     schema_version: NonBlank
-    required: bool
+    # A Domain output is required whenever the Domain outcome is not failed;
+    # Stage evidence is optional and never a Domain input.
+    role: Literal["domain_output", "stage_evidence"]
     max_bytes: PositiveInt
 
     @field_validator("path")
@@ -492,14 +494,14 @@ class StageProfile(ContractModel):
         if actual_inputs != expected_inputs:
             msg = f"{self.stage} input grants do not match the reviewed profile"
             raise ValueError(msg)
-        for required, expected_outputs in (
-            (True, EXPECTED_STAGE_OUTPUTS[self.stage]),
-            (False, EXPECTED_STAGE_EVIDENCE[self.stage]),
+        for role, expected_outputs in (
+            ("domain_output", EXPECTED_STAGE_OUTPUTS[self.stage]),
+            ("stage_evidence", EXPECTED_STAGE_EVIDENCE[self.stage]),
         ):
             actual_outputs = {
                 item.slot: (item.path, item.media_type, item.schema_version)
                 for item in self.outputs
-                if item.required is required
+                if item.role == role
             }
             if actual_outputs != expected_outputs:
                 msg = f"{self.stage} output grants do not match the reviewed profile"

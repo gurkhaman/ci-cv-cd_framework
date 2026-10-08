@@ -166,7 +166,7 @@ def test_cli_writes_and_freshness_checks_contract_schemas(tmp_path: Path) -> Non
     }
     assert forbidden_request_fields.isdisjoint(request_schema["properties"])
     output_grant = request_schema["$defs"]["OutputGrant"]
-    assert "required" in output_grant["required"]
+    assert "role" in output_grant["required"]
 
     receipt_schema = json.loads(
         (tmp_path / "handoff-receipt-v1.schema.json").read_text()

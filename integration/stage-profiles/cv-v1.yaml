@@ -28,7 +28,7 @@ outputs:
     path: outputs/validation-evidence.json
     media_type: application/json
     schema_version: sdi.validation-evidence/v1
-    required: true
+    role: domain_output
     max_bytes: 32768
 diagnostic:
   path: diagnostic.txt

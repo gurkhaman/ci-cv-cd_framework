@@ -14,14 +14,6 @@ from typing import Any, cast
 
 from pydantic import BaseModel, ValidationError
 
-from ._domain_contracts import (
-    CompositionBlueprint,
-    CompositionEvidence,
-    DeploymentResult,
-    DeploymentSchema,
-    ImageBuildResult,
-    ValidationEvidence,
-)
 from ._git_input import GitRepository
 from ._json_input import canonical_json, parse_json
 from ._result_contracts import (
@@ -40,6 +32,7 @@ from ._stage_contracts import (
     contains_sensitive_material,
 )
 from ._stage_runtime import (
+    OUTPUT_MODELS,
     StageExecution,
     capture_tree,
     committed_stage_sources,
@@ -61,13 +54,6 @@ DESCRIPTORS: tuple[tuple[StageName, str], ...] = (
     ("cv", "deployment/jenkins/adapters/cv-fixture-v1.yaml"),
     ("cd", "deployment/jenkins/adapters/cd-fixture-v1.yaml"),
 )
-DOMAIN_MODELS = {
-    "sdi.composition-blueprint/v1": CompositionBlueprint,
-    "sdi.deployment-schema/v1": DeploymentSchema,
-    "sdi.image-build-result/v1": ImageBuildResult,
-    "sdi.validation-evidence/v1": ValidationEvidence,
-    "sdi.deployment-result/v1": DeploymentResult,
-}
 
 
 def _descriptor_modes(
@@ -189,6 +175,9 @@ def validate_bundle(  # noqa: C901, PLR0912, PLR0915
     domain_documents: dict[StageName, dict[str, BaseModel]] = {
         stage: {} for stage, _ in DESCRIPTORS
     }
+    evidence_documents: dict[StageName, list[BaseModel]] = {
+        stage: [] for stage, _ in DESCRIPTORS
+    }
     for artifact in result.artifacts:
         content = captured[artifact.path]
         if (
@@ -197,19 +186,8 @@ def validate_bundle(  # noqa: C901, PLR0912, PLR0915
         ):
             msg = f"archive artifact does not match its inventory: {artifact.path}"
             raise InputError(msg)
-        if artifact.role == "stage_evidence":
-            try:
-                document = CompositionEvidence.model_validate(
-                    parse_json(content, artifact.path, max_bytes=artifact.byte_size),
-                    strict=True,
-                    extra="forbid",
-                )
-            except ValidationError as error:
-                msg = f"archive Stage evidence is invalid: {artifact.path}: {error}"
-                raise InputError(msg) from error
-            domain_documents[artifact.stage][artifact.slot] = document
-        elif artifact.role == "domain_output":
-            model = DOMAIN_MODELS.get(artifact.schema_version)
+        if artifact.role != "diagnostic":
+            model = OUTPUT_MODELS.get(artifact.schema_version)
             if model is None:
                 msg = f"archive artifact uses an unsupported schema: {artifact.path}"
                 raise InputError(msg)
@@ -220,8 +198,11 @@ def validate_bundle(  # noqa: C901, PLR0912, PLR0915
                     extra="forbid",
                 )
             except ValidationError as error:
-                msg = f"archive Domain output is invalid: {artifact.path}: {error}"
+                msg = f"archive artifact is invalid: {artifact.path}: {error}"
                 raise InputError(msg) from error
+            if artifact.role == "stage_evidence":
+                evidence_documents[artifact.stage].append(document)
+                continue
             if contains_sensitive_contract_material(document.model_dump(mode="json")):
                 msg = (
                     "archive Domain output contains sensitive material: "
@@ -263,7 +244,10 @@ def validate_bundle(  # noqa: C901, PLR0912, PLR0915
         }
         if any(
             getattr(document, "evidence_basis", None) != attempt.implementation_mode
-            for document in domain_documents[stage].values()
+            for document in [
+                *domain_documents[stage].values(),
+                *evidence_documents[stage],
+            ]
         ):
             msg = f"{stage} archive evidence basis does not match its adapter"
             raise InputError(msg)
@@ -274,14 +258,9 @@ def validate_bundle(  # noqa: C901, PLR0912, PLR0915
             {item.slot: item.sha256 for item in attempt.accepted_inputs},
             identity,
             domain_outcome=attempt.domain_outcome,
+            evidence=evidence_documents[stage],
         )
-        available_documents.update(
-            {
-                slot: document
-                for slot, document in domain_documents[stage].items()
-                if not isinstance(document, CompositionEvidence)
-            }
-        )
+        available_documents.update(domain_documents[stage])
     second_paths, second_capture = capture_tree(bundle_root, root_identity, grants)
     if second_paths != paths or second_capture != captured:
         msg = "archive candidate changed after validation"

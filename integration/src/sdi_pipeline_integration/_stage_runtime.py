@@ -62,7 +62,7 @@ from ._stage_contracts import (
 from ._yaml_input import InputError, parse_front_matter, parse_yaml
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
 
 MAX_RESPONSE_BYTES = 64 * 1024
 MAX_ACCEPTED_ENVELOPE_BYTES = 64 * 1024
@@ -372,7 +372,9 @@ def _capture_candidate(  # noqa: C901, PLR0912, PLR0913, PLR0915, PLR0917
     if not set(response.produced_outputs) <= set(output_by_slot):
         msg = "candidate response names an ungranted output slot"
         raise InputError(msg)
-    required_outputs = {item.slot for item in request.outputs if item.required}
+    required_outputs = {
+        item.slot for item in request.outputs if item.role == "domain_output"
+    }
     if response.execution_conclusion == "succeeded":
         if set(response.consumed_inputs) != set(input_slots):
             msg = "candidate response did not consume every declared input"
@@ -413,7 +415,7 @@ def _capture_candidate(  # noqa: C901, PLR0912, PLR0913, PLR0915, PLR0917
             raise InputError(msg) from error
         # Evidence carries the exact model request, whose service descriptions
         # name public upstream URLs; the forwarded-secret check above covers it.
-        if grant.required and contains_sensitive_contract_material(
+        if grant.role == "domain_output" and contains_sensitive_contract_material(
             validated_outputs[slot].model_dump(mode="json")
         ):
             msg = (
@@ -450,7 +452,11 @@ def _capture_candidate(  # noqa: C901, PLR0912, PLR0913, PLR0915, PLR0917
     if response.execution_conclusion == "succeeded":
         validate_stage_documents(
             request.correlation.stage,
-            validated_outputs,
+            {
+                slot: output
+                for slot, output in validated_outputs.items()
+                if output_by_slot[slot].role == "domain_output"
+            },
             input_models,
             {item.slot: item.sha256 for item in request.inputs},
             (
@@ -460,6 +466,11 @@ def _capture_candidate(  # noqa: C901, PLR0912, PLR0913, PLR0915, PLR0917
                 identified["profile_id"],
             ),
             domain_outcome=response.domain_outcome,
+            evidence=[
+                output
+                for slot, output in validated_outputs.items()
+                if output_by_slot[slot].role == "stage_evidence"
+            ],
         )
     second_paths, second_capture = capture_tree(
         output_root,
@@ -480,8 +491,13 @@ def validate_stage_documents(  # noqa: C901, PLR0912, PLR0913, PLR0915
     expected_identity: tuple[str, str, str, str],
     *,
     domain_outcome: DomainOutcome,
+    evidence: Sequence[BaseModel] = (),
 ) -> None:
-    for output in outputs.values():
+    """Check a Stage's outputs against each other and the accepted inputs.
+
+    Stage evidence shares the outputs' correlation but is never a Domain output.
+    """
+    for output in [*outputs.values(), *evidence]:
         if not isinstance(
             output,
             (
@@ -509,11 +525,6 @@ def validate_stage_documents(  # noqa: C901, PLR0912, PLR0913, PLR0915
         } != expected_input_digests:
             msg = "candidate Domain output input digests do not match the request"
             raise InputError(msg)
-    outputs = {
-        slot: output
-        for slot, output in outputs.items()
-        if not isinstance(output, CompositionEvidence)
-    }
     if domain_outcome == "failed":
         if outputs:
             msg = f"{stage} negative Domain outcome cannot carry Domain output"
@@ -634,13 +645,13 @@ def _accepted_envelope(  # noqa: PLR0913
     finished_at: datetime,
 ) -> AcceptedAttemptEnvelope:
     accepted_files: list[dict[str, object]] = []
-    for grant in sorted(request.outputs, key=lambda item: not item.required):
+    for grant in sorted(request.outputs, key=lambda item: item.role != "domain_output"):
         if grant.slot not in response.produced_outputs:
             continue
         content = captured[grant.path]
         accepted_files.append(
             {
-                "role": "domain_output" if grant.required else "stage_evidence",
+                "role": grant.role,
                 "slot": grant.slot,
                 "path": grant.path,
                 "media_type": grant.media_type,
@@ -1147,23 +1158,6 @@ def load_stage_execution(  # noqa: C901, PLR0912, PLR0915
                 msg = "accepted attempt diagnostic contains sensitive material"
                 raise InputError(msg)
             continue
-        if accepted.role == "stage_evidence":
-            evidence = _validate_source_model(
-                CompositionEvidence,
-                StageInputSource(
-                    source_path=accepted.path,
-                    media_type=accepted.media_type,
-                    schema_version=accepted.schema_version,
-                    content=content,
-                ),
-            )
-            if (
-                getattr(evidence, "evidence_basis", None)
-                != envelope.implementation_mode
-            ):
-                msg = "accepted attempt evidence basis does not match its envelope"
-                raise InputError(msg)
-            continue
         model = OUTPUT_MODELS.get(accepted.schema_version)
         if model is None:
             msg = "accepted attempt output uses an unsupported schema"
@@ -1180,11 +1174,13 @@ def load_stage_execution(  # noqa: C901, PLR0912, PLR0915
             producer_domain_outcome=envelope.domain_outcome,
         )
         validated = _validate_source_model(model, source)
-        if contains_sensitive_contract_material(validated.model_dump(mode="json")):
-            msg = "accepted attempt output contains sensitive material"
-            raise InputError(msg)
         if getattr(validated, "evidence_basis", None) != envelope.implementation_mode:
             msg = "accepted attempt evidence basis does not match its envelope"
+            raise InputError(msg)
+        if accepted.role == "stage_evidence":
+            continue
+        if contains_sensitive_contract_material(validated.model_dump(mode="json")):
+            msg = "accepted attempt output contains sensitive material"
             raise InputError(msg)
         outputs[accepted.slot] = source
 
@@ -1622,7 +1618,9 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
             finished_at=finished_at,
         )
 
-        output_by_slot = {item.slot: item for item in request.outputs if item.required}
+        output_by_slot = {
+            item.slot: item for item in request.outputs if item.role == "domain_output"
+        }
         output_sources = {
             slot: StageInputSource(
                 source_path=(
