@@ -21,13 +21,10 @@ from ._assessment import (
     CoverageClaim,
     Proposal,
     ServicePlacement,
-    load_assessment_inputs,
 )
 from ._contracts import ContractModel
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from pydantic import BaseModel
 
 MAX_RETRIES = 0
@@ -161,18 +158,11 @@ def _response_record(body: dict[str, object]) -> dict[str, object]:
 
 def generate_proposals(
     *,
-    service_repository: Path,
-    target_profile: Path,
-    requirements_specification: Path,
+    inputs: AssessmentInputs,
     config: GenerationConfig,
     evidence: dict[str, object],
 ) -> dict[str, object]:
     """Ask the configured model for proposals, recording everything in evidence."""
-    inputs = load_assessment_inputs(
-        service_repository=service_repository,
-        target_profile=target_profile,
-        requirements_specification=requirements_specification,
-    )
     text_format: type[BaseModel] = _generation_model(
         [file.description.service_id for file in inputs.files],
         inputs.requirements.requirement_ids,

@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from pydantic import ValidationError
 
-from ._assessment import assess_proposal_files
+from ._assessment import assess_proposal_files, load_assessment_inputs
 from ._generation import GenerationConfig, GenerationError, generate_proposals
 from ._github_actions import render_github_summary
 from ._github_dispatch import GitHubDispatchError, dispatch_s04
@@ -310,9 +310,11 @@ def _generate_proposals(arguments: argparse.Namespace) -> int:
         )
         try:
             proposals = generate_proposals(
-                service_repository=arguments.service_repository,
-                target_profile=arguments.target_profile,
-                requirements_specification=arguments.requirements_specification,
+                inputs=load_assessment_inputs(
+                    service_repository=arguments.service_repository,
+                    target_profile=arguments.target_profile,
+                    requirements_specification=arguments.requirements_specification,
+                ),
                 config=config,
                 evidence=evidence,
             )

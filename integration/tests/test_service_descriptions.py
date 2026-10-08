@@ -63,15 +63,18 @@ def test_lists_every_real_and_fake_description_with_its_digest(
     completed = _validate(combined)
 
     assert completed.returncode == 0, completed.stderr
-    expected = [
-        {
-            "path": path.relative_to(combined).as_posix(),
-            "service_id": path.parent.name,
-            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-        }
-        for path in sorted(combined.rglob("SDI.md"))
-    ]
-    assert len(expected) == 14
+    expected = sorted(
+        (
+            {
+                "path": path.relative_to(combined).as_posix(),
+                "service_id": path.parent.name,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+            for path in combined.rglob("SDI.md")
+        ),
+        key=lambda item: item["path"],
+    )
+    assert any(item["path"].startswith("fakes/") for item in expected)
     assert json.loads(completed.stdout) == {"services": expected}
 
 

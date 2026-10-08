@@ -12,17 +12,20 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
-import os
 import re
 import sys
-import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from pydantic import BaseModel, ValidationError
 
-from ._assessment import CompositionProposals, Proposal, assess_proposals
+from ._adapter_output import atomic_write
+from ._assessment import (
+    AssessmentInputs,
+    CompositionProposals,
+    Proposal,
+    assess_proposals,
+)
 from ._contracts import (
     MobilityRequirementsSpecification,
     RunRequest,
@@ -40,11 +43,12 @@ from ._generation import (
     generate_proposals,
 )
 from ._jenkins_agent_boundary import enforce_domain_execution_boundary
-from ._json_input import parse_json
+from ._json_input import canonical_json, parse_json
 from ._service_descriptions import (
     SERVICE_REPOSITORY_ROOT,
     ServiceRepositoryManifest,
-    read_service_repository,
+    capture_service_repository,
+    parse_service_repository,
 )
 from ._stage_contracts import AdapterRequest, AdapterResponse
 from ._yaml_input import InputError, parse_front_matter, parse_yaml
@@ -116,30 +120,6 @@ GENERATION_FAILURES = {
 }
 
 
-def _canonical_json(value: object) -> bytes:
-    return (
-        json.dumps(
-            value,
-            allow_nan=False,
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        + "\n"
-    ).encode()
-
-
-def _atomic_write(root: Path, relative_path: str, content: bytes) -> None:
-    destination = root / relative_path
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
-    with temporary.open("xb") as stream:
-        stream.write(content)
-        stream.flush()
-        os.fsync(stream.fileno())
-    temporary.replace(destination)
-
-
 def _validated[ModelT: BaseModel](model: type[ModelT], document: object) -> ModelT:
     try:
         return model.model_validate(document, strict=True, extra="forbid")
@@ -159,21 +139,6 @@ def _read_input(path: Path, size: int, sha256: str) -> bytes:
     return content
 
 
-def _check_descriptions(input_root: Path, manifest: ServiceRepositoryManifest) -> None:
-    """Require the copied descriptions to be exactly the manifest's files."""
-    root = input_root / SERVICE_REPOSITORY_ROOT
-    found = sorted(
-        path.relative_to(root).as_posix()
-        for path in root.rglob("*")
-        if not path.is_dir()
-    )
-    if found != [item.path for item in manifest.files]:
-        msg = "copied descriptions do not match the service-repository manifest"
-        raise InputError(msg)
-    for item in manifest.files:
-        _read_input(root / item.path, item.byte_size, item.sha256)
-
-
 class _Run:
     """One adapter invocation and the candidate files it publishes."""
 
@@ -187,12 +152,12 @@ class _Run:
         """Publish every candidate file, then the response."""
         conclusion, domain_outcome, category, summary = OUTCOMES[code]
         for slot, document in documents.items():
-            _atomic_write(
+            atomic_write(
                 self.output_root,
                 self.outputs[slot],
-                _canonical_json(document.model_dump(mode="json", exclude_none=True)),
+                canonical_json(document.model_dump(mode="json", exclude_none=True)),
             )
-        _atomic_write(
+        atomic_write(
             self.output_root, self.request.diagnostic.path, self._diagnostic(code)
         )
         response = AdapterResponse.model_validate(
@@ -213,10 +178,10 @@ class _Run:
             strict=True,
             extra="forbid",
         )
-        _atomic_write(
+        atomic_write(
             self.output_root,
             "response.json",
-            _canonical_json(response.model_dump(mode="json")),
+            canonical_json(response.model_dump(mode="json")),
         )
 
     def _diagnostic(self, code: str) -> bytes:
@@ -250,7 +215,7 @@ def _record_provider_facts(run: _Run, evidence: dict[str, object]) -> None:
     )
     if "request" in evidence:
         run.facts["request_sha256"] = hashlib.sha256(
-            _canonical_json(evidence["request"])
+            canonical_json(evidence["request"])
         ).hexdigest()
 
 
@@ -370,7 +335,10 @@ def _compose(run: _Run, input_root: Path) -> Outcome:
             max_bytes=len(contents["service_repository"]),
         ),
     )
-    _check_descriptions(input_root, manifest)
+    snapshot = capture_service_repository(input_root / SERVICE_REPOSITORY_ROOT)
+    if snapshot.manifest != manifest:
+        msg = "copied descriptions do not match the service-repository manifest"
+        raise InputError(msg)
     run_request = _validated(
         RunRequest, parse_yaml(contents["run_request"], "run-request.yaml")
     )
@@ -378,7 +346,7 @@ def _compose(run: _Run, input_root: Path) -> Outcome:
         TargetExecutionProfile,
         parse_yaml(contents["target_profile"], "target-profile.yaml"),
     )
-    front_matter, _body = parse_front_matter(
+    front_matter, requirements_body = parse_front_matter(
         contents["requirements_specification"], "requirements-specification.md"
     )
     requirements = _validated(MobilityRequirementsSpecification, front_matter)
@@ -410,11 +378,11 @@ def _compose(run: _Run, input_root: Path) -> Outcome:
         ],
     }
 
-    descriptions_root = input_root / SERVICE_REPOSITORY_ROOT
     try:
-        files = read_service_repository(descriptions_root)
+        files = parse_service_repository(snapshot.files)
     except InputError:
         return "invalid-service-description", {}
+    inputs = AssessmentInputs(files, profile, requirements, requirements_body)
     services = {file.description.service_id: file.description for file in files}
 
     generation: dict[str, object] = {}
@@ -434,13 +402,7 @@ def _compose(run: _Run, input_root: Path) -> Outcome:
     }
     try:
         generated = generate_proposals(
-            service_repository=descriptions_root,
-            target_profile=input_root / declared["target_profile"].path,
-            requirements_specification=(
-                input_root / declared["requirements_specification"].path
-            ),
-            config=config,
-            evidence=generation,
+            inputs=inputs, config=config, evidence=generation
         )
     except GenerationError as error:
         _record_provider_facts(run, generation)

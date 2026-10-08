@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import shutil
 import signal
@@ -35,14 +34,12 @@ from ._domain_contracts import (
 from ._generation import GenerationConfig
 from ._git_input import CommittedBlob, GitRepository, validate_repository_path
 from ._jenkins_agent_boundary import enforce_domain_execution_boundary
-from ._json_input import parse_json
+from ._json_input import canonical_json, parse_json
 from ._run_input import PROTECTED_MAIN_REF, identify_committed_run
 from ._service_descriptions import (
-    DESCRIPTION_FILENAME,
-    MAX_DESCRIPTION_BYTES,
-    MAX_DESCRIPTION_FILES,
     SERVICE_REPOSITORY_ROOT,
     ServiceRepositoryManifest,
+    capture_service_repository,
 )
 from ._stage_contracts import (
     ASCII_CONTROL_LIMIT,
@@ -130,19 +127,6 @@ OUTPUT_MODELS: dict[str, type[BaseModel]] = {
     "sdi.deployment-result/v1": DeploymentResult,
     "sdi.composition-evidence/v1": CompositionEvidence,
 }
-
-
-def _canonical_json(value: object) -> bytes:
-    return (
-        json.dumps(
-            value,
-            allow_nan=False,
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        + "\n"
-    ).encode()
 
 
 def _validate_yaml_model[ModelT: BaseModel](
@@ -818,7 +802,7 @@ def _publish_execution(attempt_root: Path, execution: StageExecution) -> None:
         _write_file(
             staging,
             "accepted-attempt.json",
-            _canonical_json(
+            canonical_json(
                 execution.envelope.model_dump(mode="json", exclude_none=True)
             ),
         )
@@ -928,55 +912,15 @@ def committed_stage_sources(
 
 def _service_repository_source(root: Path) -> StageInputSource:
     """Capture every description under a supplied directory and its manifest."""
-    if not root.is_dir() or root.is_symlink():
-        msg = f"{root}: service repository is not a directory"
-        raise InputError(msg)
-    files: list[tuple[str, bytes]] = []
-    for directory, subdirectories, filenames in os.walk(root):
-        current = Path(directory)
-        if any((current / name).is_symlink() for name in subdirectories):
-            msg = f"{current}: service repository contains a symbolic link"
-            raise InputError(msg)
-        if DESCRIPTION_FILENAME not in filenames:
-            continue
-        path = current / DESCRIPTION_FILENAME
-        metadata = path.lstat()
-        if not stat.S_ISREG(metadata.st_mode):
-            msg = f"{path}: description is not a regular file"
-            raise InputError(msg)
-        if len(files) >= MAX_DESCRIPTION_FILES:
-            msg = f"{root}: service repository exceeds {MAX_DESCRIPTION_FILES} files"
-            raise InputError(msg)
-        content = path.read_bytes()
-        if sum(len(item) for _, item in files) + len(content) > MAX_DESCRIPTION_BYTES:
-            msg = f"{root}: service repository exceeds {MAX_DESCRIPTION_BYTES} bytes"
-            raise InputError(msg)
-        files.append((path.relative_to(root).as_posix(), content))
-    files.sort()
-    try:
-        manifest = ServiceRepositoryManifest.model_validate(
-            {
-                "schema_version": "sdi.service-repository-manifest/v1",
-                "files": [
-                    {
-                        "path": path,
-                        "byte_size": len(content),
-                        "sha256": hashlib.sha256(content).hexdigest(),
-                    }
-                    for path, content in files
-                ],
-            }
-        )
-    except ValidationError as error:
-        msg = f"{root}: service repository manifest is invalid: {error}"
-        raise InputError(msg) from error
+    snapshot = capture_service_repository(root)
     return StageInputSource(
         source_path="service-repository.json",
         media_type="application/json",
         schema_version="sdi.service-repository-manifest/v1",
-        content=_canonical_json(manifest.model_dump(mode="json")),
+        content=canonical_json(snapshot.manifest.model_dump(mode="json")),
         attachments=tuple(
-            (f"{SERVICE_REPOSITORY_ROOT}/{path}", content) for path, content in files
+            (f"{SERVICE_REPOSITORY_ROOT}/{path}", content)
+            for path, content in snapshot.files.items()
         ),
     )
 
@@ -1531,7 +1475,7 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
         _write_file(
             work_root,
             "request.json",
-            _canonical_json(request.model_dump(mode="json")),
+            canonical_json(request.model_dump(mode="json")),
         )
         environment, secrets = _adapter_environment(descriptor, input_models)
         started_at = datetime.now(UTC)

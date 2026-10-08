@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import os
+import stat
 from dataclasses import dataclass
 from graphlib import CycleError, TopologicalSorter
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import Field, NonNegativeInt, ValidationError, model_validator
 from pydantic.json_schema import SkipJsonSchema  # noqa: TC002
@@ -22,6 +23,9 @@ from ._contracts import (
 )
 from ._stage_contracts import Sha256  # noqa: TC001
 from ._yaml_input import InputError, parse_front_matter
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 SERVICE_DESCRIPTION_SCHEMA_VERSION = "sdi.service-description/v1"
 # The directory under a Stage's input root that holds the copied descriptions.
@@ -162,12 +166,7 @@ class DescriptionFile:
     body: str
 
 
-def _read(root: Path, file: Path) -> DescriptionFile:
-    path = file.relative_to(root).as_posix()
-    if file.is_symlink():
-        msg = f"{path}: symbolic links are not read"
-        raise InputError(msg)
-    raw = file.read_bytes()
+def _parse(path: str, raw: bytes) -> DescriptionFile:
     front_matter, body = parse_front_matter(raw, path)
     try:
         description = ServiceDescription.model_validate(front_matter)
@@ -208,24 +207,6 @@ def _check_cross_file(files: list[DescriptionFile]) -> None:
         raise InputError(msg) from error
 
 
-def read_service_repository(root: Path) -> list[DescriptionFile]:
-    """Read and validate every SDI.md under a supplied directory."""
-    if not root.is_dir():
-        msg = f"{root}: service repository is not a directory"
-        raise InputError(msg)
-    found = sorted(
-        Path(directory) / DESCRIPTION_FILENAME
-        for directory, _subdirectories, filenames in os.walk(root)
-        if DESCRIPTION_FILENAME in filenames
-    )
-    if not found:
-        msg = f"{root}: no {DESCRIPTION_FILENAME} found"
-        raise InputError(msg)
-    files = [_read(root, file) for file in found]
-    _check_cross_file(files)
-    return files
-
-
 class ManifestFile(ContractModel):
     """One description file copied into a Stage's inputs."""
 
@@ -254,3 +235,72 @@ class ServiceRepositoryManifest(ContractModel):
             msg = "manifest files exceed the service repository byte limit"
             raise ValueError(msg)
         return self
+
+
+@dataclass(frozen=True)
+class ServiceRepositorySnapshot:
+    """The exact description bytes under a service repository and their manifest."""
+
+    manifest: ServiceRepositoryManifest
+    files: dict[str, bytes]
+
+
+def capture_service_repository(root: Path) -> ServiceRepositorySnapshot:
+    """Capture every SDI.md under a directory as regular files within the limits."""
+    if not root.is_dir() or root.is_symlink():
+        msg = f"{root}: service repository is not a directory"
+        raise InputError(msg)
+    files: dict[str, bytes] = {}
+    for directory, subdirectories, filenames in os.walk(root):
+        current = Path(directory)
+        if any((current / name).is_symlink() for name in subdirectories):
+            msg = f"{current}: service repository contains a symbolic link"
+            raise InputError(msg)
+        if DESCRIPTION_FILENAME not in filenames:
+            continue
+        path = current / DESCRIPTION_FILENAME
+        if not stat.S_ISREG(path.lstat().st_mode):
+            msg = f"{path}: description is not a regular file"
+            raise InputError(msg)
+        if len(files) >= MAX_DESCRIPTION_FILES:
+            msg = f"{root}: service repository exceeds {MAX_DESCRIPTION_FILES} files"
+            raise InputError(msg)
+        content = path.read_bytes()
+        if sum(map(len, files.values())) + len(content) > MAX_DESCRIPTION_BYTES:
+            msg = f"{root}: service repository exceeds {MAX_DESCRIPTION_BYTES} bytes"
+            raise InputError(msg)
+        files[path.relative_to(root).as_posix()] = content
+    if not files:
+        msg = f"{root}: no {DESCRIPTION_FILENAME} found"
+        raise InputError(msg)
+    files = dict(sorted(files.items()))
+    try:
+        manifest = ServiceRepositoryManifest.model_validate(
+            {
+                "schema_version": "sdi.service-repository-manifest/v1",
+                "files": [
+                    {
+                        "path": path,
+                        "byte_size": len(content),
+                        "sha256": hashlib.sha256(content).hexdigest(),
+                    }
+                    for path, content in files.items()
+                ],
+            }
+        )
+    except ValidationError as error:
+        msg = f"{root}: service repository manifest is invalid: {error}"
+        raise InputError(msg) from error
+    return ServiceRepositorySnapshot(manifest, files)
+
+
+def parse_service_repository(files: Mapping[str, bytes]) -> list[DescriptionFile]:
+    """Validate captured descriptions on their own and against each other."""
+    parsed = [_parse(path, content) for path, content in sorted(files.items())]
+    _check_cross_file(parsed)
+    return parsed
+
+
+def read_service_repository(root: Path) -> list[DescriptionFile]:
+    """Capture and validate every SDI.md under a supplied directory."""
+    return parse_service_repository(capture_service_repository(root).files)
