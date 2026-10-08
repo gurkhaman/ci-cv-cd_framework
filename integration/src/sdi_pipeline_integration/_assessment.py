@@ -25,7 +25,7 @@ from ._yaml_input import InputError, parse_front_matter, parse_yaml
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from ._service_descriptions import Artifact, ServiceDescription
+    from ._service_descriptions import Artifact, DescriptionFile, ServiceDescription
 
 MAX_PROPOSALS_BYTES = 1024 * 1024
 ROLE_PAIRS = (
@@ -488,6 +488,38 @@ def _validate[ModelT: BaseModel](
         raise InputError(msg) from error
 
 
+@dataclass(frozen=True)
+class AssessmentInputs:
+    """The validated service repository, profile and requirements."""
+
+    files: list[DescriptionFile]
+    profile: TargetExecutionProfile
+    requirements: MobilityRequirementsSpecification
+    requirements_body: str
+
+
+def load_assessment_inputs(
+    *,
+    service_repository: Path,
+    target_profile: Path,
+    requirements_specification: Path,
+) -> AssessmentInputs:
+    """Read and validate the inputs every proposal is generated and checked against."""
+    files = read_service_repository(service_repository)
+    profile = _validate(
+        TargetExecutionProfile,
+        parse_yaml(target_profile.read_bytes(), str(target_profile)),
+        target_profile,
+    )
+    front_matter, body = parse_front_matter(
+        requirements_specification.read_bytes(), str(requirements_specification)
+    )
+    requirements = _validate(
+        MobilityRequirementsSpecification, front_matter, requirements_specification
+    )
+    return AssessmentInputs(files, profile, requirements, body)
+
+
 def assess_proposal_files(
     *,
     service_repository: Path,
@@ -496,20 +528,10 @@ def assess_proposal_files(
     proposals: Path,
 ) -> dict[str, object]:
     """Read the supplied inputs and assess the proposals they hold."""
-    services = {
-        file.description.service_id: file.description
-        for file in read_service_repository(service_repository)
-    }
-    profile = _validate(
-        TargetExecutionProfile,
-        parse_yaml(target_profile.read_bytes(), str(target_profile)),
-        target_profile,
-    )
-    front_matter, _body = parse_front_matter(
-        requirements_specification.read_bytes(), str(requirements_specification)
-    )
-    requirements = _validate(
-        MobilityRequirementsSpecification, front_matter, requirements_specification
+    inputs = load_assessment_inputs(
+        service_repository=service_repository,
+        target_profile=target_profile,
+        requirements_specification=requirements_specification,
     )
     document = parse_json(
         proposals.read_bytes(), str(proposals), max_bytes=MAX_PROPOSALS_BYTES
@@ -517,7 +539,7 @@ def assess_proposal_files(
     return assess_proposals(
         _validate(CompositionProposals, document, proposals),
         document["proposals"],
-        services,
-        profile,
-        requirements.requirement_ids,
+        {file.description.service_id: file.description for file in inputs.files},
+        inputs.profile,
+        inputs.requirements.requirement_ids,
     )
