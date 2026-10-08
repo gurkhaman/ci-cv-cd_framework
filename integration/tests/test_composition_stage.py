@@ -6,6 +6,7 @@ contract, never which services the model chose or how it worded them.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import shutil
@@ -15,7 +16,14 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from tests._live_model import REPOSITORY_ROOT, live_config, openai_key
-from tests._stub_provider import BODIES, STUB_KEY, stub_config, stub_provider
+from tests._proposals import COMPLETE
+from tests._stub_provider import (
+    BODIES,
+    STUB_KEY,
+    proposals_body,
+    stub_config,
+    stub_provider,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -115,6 +123,22 @@ def _dispatch(
         text=True,
         env=environment | (keys or {}),
     )
+
+
+def _dispatch_stub(
+    tmp_path: Path, body: dict[str, object]
+) -> subprocess.CompletedProcess[str]:
+    with stub_provider(body) as base_url:
+        commit_sha = _repository(
+            tmp_path,
+            {"integration/generation-configs/stub.yaml": stub_config(base_url)},
+        )
+        return _dispatch(
+            tmp_path,
+            commit_sha,
+            generation_config="integration/generation-configs/stub.yaml",
+            keys={"VLLM_KEY": STUB_KEY},
+        )
 
 
 def _composition_files(result: dict[str, object]) -> set[str]:
@@ -248,17 +272,7 @@ def test_a_rejected_key_fails_execution_without_outputs(tmp_path: Path) -> None:
 def test_an_answer_without_proposals_fails_execution(
     tmp_path: Path, body: str, code: str
 ) -> None:
-    with stub_provider(BODIES[body]) as base_url:
-        commit_sha = _repository(
-            tmp_path,
-            {"integration/generation-configs/stub.yaml": stub_config(base_url)},
-        )
-        completed = _dispatch(
-            tmp_path,
-            commit_sha,
-            generation_config="integration/generation-configs/stub.yaml",
-            keys={"VLLM_KEY": STUB_KEY},
-        )
+    completed = _dispatch_stub(tmp_path, BODIES[body])
 
     assert completed.returncode == 1, completed.stderr
     result = json.loads(completed.stdout)
@@ -267,6 +281,46 @@ def test_an_answer_without_proposals_fails_execution(
     assert composition["domain_outcome"] == "not_evaluated"
     assert composition["reason"]["code"] == code
     assert _composition_files(result) == {"diagnostic"}
+    _validate_bundle(tmp_path)
+    assert STUB_KEY not in _bundle_text(tmp_path) + completed.stdout
+
+
+def test_publishes_the_preferred_stubbed_proposal(tmp_path: Path) -> None:
+    completed = _dispatch_stub(tmp_path, proposals_body([COMPLETE]))
+
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)
+    composition, image_build, *_ = result["attempts"]
+    assert composition["execution_conclusion"] == "succeeded"
+    assert composition["domain_outcome"] == "succeeded"
+    assert composition["reason"]["code"] == "sdi.composition.preferred-proposal"
+    assert _composition_files(result) == {
+        "composition_blueprint",
+        "deployment_schema",
+        "composition_evidence",
+        "diagnostic",
+    }
+    assert image_build["reason"]["code"] == "sdi.dependency.implemented-evidence"
+    _validate_bundle(tmp_path)
+    assert STUB_KEY not in _bundle_text(tmp_path) + completed.stdout
+
+
+def test_publishes_only_evidence_without_an_eligible_proposal(
+    tmp_path: Path,
+) -> None:
+    ineligible = copy.deepcopy(COMPLETE)
+    ineligible["coverage"][0] |= {"status": "missing", "services": ["v4l2-camera"]}
+
+    completed = _dispatch_stub(tmp_path, proposals_body([ineligible]))
+
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)
+    composition, image_build, *_ = result["attempts"]
+    assert composition["execution_conclusion"] == "succeeded"
+    assert composition["domain_outcome"] == "failed"
+    assert composition["reason"]["code"] == "sdi.composition.insufficient-proposals"
+    assert _composition_files(result) == {"composition_evidence", "diagnostic"}
+    assert image_build["reason"]["code"] == "sdi.dependency.prerequisite-blocked"
     _validate_bundle(tmp_path)
     assert STUB_KEY not in _bundle_text(tmp_path) + completed.stdout
 

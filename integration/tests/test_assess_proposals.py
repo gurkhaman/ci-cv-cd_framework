@@ -11,52 +11,13 @@ from typing import Any
 
 import pytest
 
+from tests._proposals import COMPLETE
+
 REPOSITORY_ROOT = Path(__file__).parents[2]
 SERVICE_REPOSITORY = REPOSITORY_ROOT / "service-repository"
 FAKE_DESCRIPTIONS = Path(__file__).parent / "data/service-descriptions"
 PROFILE = REPOSITORY_ROOT / "profiles/s-04/waffle-jetson-arm64.yaml"
 REQUIREMENTS = REPOSITORY_ROOT / "requirements/s-04/deliver-book-to-joe.md"
-
-NAVIGATION = ["nav2-navigation", "nav2-localization", "turtlebot3-bringup"]
-SPEECH = ["whisper-audio-listener", "whisper-server"]
-COMPLETE: dict[str, Any] = {
-    "rationale": "Navigation and speech on their natural hosts.",
-    "services": [
-        {
-            "service_id": service_id,
-            "artifact_id": artifact_id,
-            "host": host,
-            "capability": capability,
-        }
-        for service_id, artifact_id, host, capability in [
-            ("turtlebot3-bringup", "jazzy-debs", "waffle", "base and lidar"),
-            ("nav2-localization", "jazzy-debs", "orin", "localization"),
-            ("nav2-navigation", "jazzy-debs", "orin", "path planning"),
-            ("v4l2-camera", "jazzy-debs", "waffle", "camera images"),
-            ("face-recog", "jazzy-source", "orin", "face recognition"),
-            ("whisper-audio-listener", "jazzy-source", "waffle", "audio capture"),
-            ("whisper-server", "jazzy-cuda-source", "orin", "speech to text"),
-        ]
-    ],
-    "coverage": [
-        {
-            "requirement_id": requirement_id,
-            "status": status,
-            "services": services,
-            "reason": "Test-only claim.",
-        }
-        for requirement_id, status, services in [
-            ("secure-book", "outside_composition", []),
-            ("accept-spoken-request", "supported", SPEECH),
-            ("resolve-rendezvous", "uncertain", ["whisper-server"]),
-            ("navigate-to-rendezvous", "supported", NAVIGATION),
-            ("verify-recipient-face", "supported", ["face-recog", "v4l2-camera"]),
-            ("transfer-book", "outside_composition", []),
-            ("acknowledge-receipt", "supported", SPEECH),
-            ("return-to-origin", "supported", NAVIGATION),
-        ]
-    ],
-}
 
 
 def _variant(

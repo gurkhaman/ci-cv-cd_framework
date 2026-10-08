@@ -1,10 +1,11 @@
-"""A local Responses endpoint for outcomes the real model cannot produce on demand.
+"""A local Responses endpoint for answers the real model cannot give on demand.
 
 Live tests cover generated, exhausted and rejected-key outcomes against the real
-provider. A refusal, a content-filter stop, output outside the proposal schema
-and a failed response cannot be requested from it, so these tests point a
-generation config's base_url at this stub, which answers every request with one
-recorded Responses body. The real SDK still parses every answer.
+provider. A refusal, a content-filter stop, output outside the proposal schema,
+a failed response and a chosen set of proposals cannot be requested from it, so
+these tests point a generation config's base_url at this stub, which answers
+every request with one recorded Responses body. The real SDK still parses every
+answer.
 """
 
 from __future__ import annotations
@@ -76,6 +77,11 @@ BODIES: dict[str, dict[str, object]] = {
         error={"code": "server_error", "message": "Test-only failure."},
     ),
 }
+
+
+def proposals_body(proposals: list[dict[str, object]]) -> dict[str, object]:
+    """Return a completed answer carrying the given proposals."""
+    return _response("completed", _text(json.dumps({"proposals": proposals})))
 
 
 class _Handler(BaseHTTPRequestHandler):
