@@ -354,6 +354,8 @@ def test_an_invalid_description_fails_before_generation(tmp_path: Path) -> None:
     assert composition["reason"]["code"] == (
         "sdi.composition.invalid-service-description"
     )
+    diagnostic = (tmp_path / "bundle/stages/composition/diagnostic.txt").read_text()
+    assert "invalid_description: broken/SDI.md" in diagnostic
 
 
 @pytest.mark.parametrize("defect", ["symlinked-description", "unbound-key"])

@@ -144,6 +144,8 @@ class _Run:
         self.output_root = output_root
         self.outputs = {item.slot: item.path for item in request.outputs}
         self.facts: dict[str, object] = {}
+        # A manifest path, already checked against the manifest's path pattern.
+        self.invalid_description: str | None = None
 
     def publish(self, code: str, documents: dict[str, BaseModel]) -> None:
         """Publish every candidate file, then the response."""
@@ -191,6 +193,8 @@ class _Run:
             if PROVIDER_FACT.fullmatch(text) is None:
                 text = "unrecorded"
             lines.append(f"{name}: {text}")
+        if self.invalid_description is not None:
+            lines.append(f"invalid_description: {self.invalid_description}")
         content = "\n".join(lines) + "\n"
         return content.encode()[: self.request.diagnostic.max_bytes]
 
@@ -337,7 +341,11 @@ def _compose(run: _Run, input_root: Path) -> Outcome:
 
     try:
         files = parse_service_repository(snapshot.files)
-    except InputError:
+    except InputError as error:
+        # Per-file errors name their description first; cross-file ones may not.
+        path = str(error).split(":", 1)[0]
+        if path in snapshot.files:
+            run.invalid_description = path
         return "invalid-service-description", {}
     inputs = AssessmentInputs(files, profile, requirements, requirements_body)
 
