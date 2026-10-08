@@ -13,6 +13,7 @@ from tests._fixture_inputs import (
     FIXTURE_GENERATION_CONFIG,
     SUPPLIED_INPUT_ARGUMENTS,
     write_fixture_composition_descriptor,
+    write_scripted_adapter,
 )
 
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
@@ -132,25 +133,10 @@ def test_records_an_undeclared_candidate_without_salvaging_files(
     tmp_path: Path,
 ) -> None:
     repository, _ = _commit_fixture_repository(tmp_path)
-    profile_path = repository / "integration/stage-profiles/composition-v1.yaml"
-    profile_digest = hashlib.sha256(profile_path.read_bytes()).hexdigest()
     adapter = tmp_path / "nonconforming-adapter"
-    adapter.write_text(
-        """#!/usr/bin/env python3
-import argparse
-import json
-from pathlib import Path
-
-parser = argparse.ArgumentParser()
-commands = parser.add_subparsers(dest="command", required=True)
-run = commands.add_parser("run")
-run.add_argument("--request", required=True)
-run.add_argument("--input-root", required=True)
-run.add_argument("--output-root", required=True)
-arguments = parser.parse_args()
-request = json.loads(Path(arguments.request).read_text())
-output = Path(arguments.output_root)
-(output / "undeclared.txt").write_text("must not be accepted")
+    write_scripted_adapter(
+        adapter,
+        """(output / "undeclared.txt").write_text("must not be accepted")
 response = {
     "schema_version": "sdi.stage-adapter-response/v1",
     "correlation": request["correlation"],
@@ -167,25 +153,8 @@ response = {
 }
 (output / "response.json").write_text(json.dumps(response))
 """,
-        encoding="utf-8",
     )
-    adapter.chmod(0o755)
-    descriptor_path = repository / "deployment/jenkins/adapters/composition-v1.yaml"
-    descriptor_path.write_text(
-        f"""schema_version: sdi.adapter-descriptor/v1
-stage: composition
-implementation_mode: fixture
-image: ghcr.io/gurkhaman/sdi-stage-fixture@sha256:{"1" * 64}
-entrypoint: {adapter}
-process_contract_version: sdi.stage-adapter-process/v1
-stage_profile: integration/stage-profiles/composition-v1.yaml
-stage_profile_version: sdi.composition-stage-profile/v1
-stage_profile_sha256: {profile_digest}
-agent_label: composition
-secret_bindings: []
-""",
-        encoding="utf-8",
-    )
+    write_fixture_composition_descriptor(repository, entrypoint=adapter)
     _git(repository, "add", ".")
     _git(repository, "commit", "-m", "Select conformance adapter")
     commit_sha = _git(repository, "rev-parse", "HEAD")
@@ -207,29 +176,56 @@ secret_bindings: []
     )
 
 
+def test_classifies_off_contract_output_by_its_contract_failure(
+    tmp_path: Path,
+) -> None:
+    repository, _ = _commit_fixture_repository(tmp_path)
+    adapter = tmp_path / "off-contract-adapter"
+    # Pydantic quotes the offending input, so the failure text names a device.
+    write_scripted_adapter(
+        adapter,
+        """(output / "outputs").mkdir()
+(output / "outputs/composition-evidence.json").write_text(
+    json.dumps({"devices": ["camera"]})
+)
+response = {
+    "schema_version": "sdi.stage-adapter-response/v1",
+    "correlation": request["correlation"],
+    "execution_conclusion": "succeeded",
+    "domain_outcome": "failed",
+    "reason": {
+        "category": "domain",
+        "code": "sdi.fixture.off-contract",
+        "summary": "The candidate evidence is outside its contract.",
+    },
+    "consumed_inputs": [item["slot"] for item in request["inputs"]],
+    "produced_outputs": ["composition_evidence"],
+    "diagnostic": {"present": False, "truncated": False},
+}
+(output / "response.json").write_text(json.dumps(response))
+""",
+    )
+    write_fixture_composition_descriptor(repository, entrypoint=adapter)
+    _git(repository, "add", ".")
+    _git(repository, "commit", "-m", "Select off-contract adapter")
+    commit_sha = _git(repository, "rev-parse", "HEAD")
+
+    completed = _execute(repository, commit_sha, tmp_path / "attempt")
+
+    assert completed.returncode == 0, completed.stderr
+    envelope = json.loads(completed.stdout)
+    assert envelope["adapter_response_accepted"] is False
+    assert envelope["reason"]["code"] == "sdi.adapter.schema-mismatch"
+
+
 def test_records_a_replaced_candidate_root_without_accepting_its_response(
     tmp_path: Path,
 ) -> None:
     repository, _ = _commit_fixture_repository(tmp_path)
-    profile_path = repository / "integration/stage-profiles/composition-v1.yaml"
-    profile_digest = hashlib.sha256(profile_path.read_bytes()).hexdigest()
     adapter = tmp_path / "root-replacing-adapter"
-    adapter.write_text(
-        """#!/usr/bin/env python3
-import argparse
-import json
-from pathlib import Path
-
-parser = argparse.ArgumentParser()
-commands = parser.add_subparsers(dest="command", required=True)
-run = commands.add_parser("run")
-run.add_argument("--request", required=True)
-run.add_argument("--input-root", required=True)
-run.add_argument("--output-root", required=True)
-arguments = parser.parse_args()
-request = json.loads(Path(arguments.request).read_text())
-output = Path(arguments.output_root)
-output.rmdir()
+    write_scripted_adapter(
+        adapter,
+        """output.rmdir()
 replacement = output.parent / "replacement"
 replacement.mkdir()
 output.symlink_to(replacement, target_is_directory=True)
@@ -249,25 +245,8 @@ response = {
 }
 (replacement / "response.json").write_text(json.dumps(response))
 """,
-        encoding="utf-8",
     )
-    adapter.chmod(0o755)
-    descriptor_path = repository / "deployment/jenkins/adapters/composition-v1.yaml"
-    descriptor_path.write_text(
-        f"""schema_version: sdi.adapter-descriptor/v1
-stage: composition
-implementation_mode: fixture
-image: ghcr.io/gurkhaman/sdi-stage-fixture@sha256:{"1" * 64}
-entrypoint: {adapter}
-process_contract_version: sdi.stage-adapter-process/v1
-stage_profile: integration/stage-profiles/composition-v1.yaml
-stage_profile_version: sdi.composition-stage-profile/v1
-stage_profile_sha256: {profile_digest}
-agent_label: composition
-secret_bindings: []
-""",
-        encoding="utf-8",
-    )
+    write_fixture_composition_descriptor(repository, entrypoint=adapter)
     _git(repository, "add", ".")
     _git(repository, "commit", "-m", "Select root-replacing adapter")
     commit_sha = _git(repository, "rev-parse", "HEAD")

@@ -1211,6 +1211,13 @@ def _candidate_rejection_reason(message: str) -> tuple[str, str]:  # noqa: PLR09
             "sdi.adapter.response-malformed",
             "The Stage adapter published a malformed candidate response.",
         )
+    # Contract failures quote the offending input, which may contain any of the
+    # words matched below, so they are classified first.
+    if "contract validation" in lowered or "unsupported schema" in lowered:
+        return (
+            "sdi.adapter.schema-mismatch",
+            "The candidate output did not satisfy its reviewed contract.",
+        )
     if "correlation" in lowered or "identity" in lowered:
         return (
             "sdi.adapter.identity-mismatch",
@@ -1243,11 +1250,6 @@ def _candidate_rejection_reason(message: str) -> tuple[str, str]:  # noqa: PLR09
         return (
             "sdi.adapter.response-race",
             "The candidate changed during transactional validation.",
-        )
-    if "contract validation" in lowered or "unsupported schema" in lowered:
-        return (
-            "sdi.adapter.schema-mismatch",
-            "The candidate output did not satisfy its reviewed contract.",
         )
     return (
         "sdi.adapter.candidate-rejected",
