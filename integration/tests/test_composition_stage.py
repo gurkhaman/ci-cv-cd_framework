@@ -11,7 +11,7 @@ import json
 import os
 import shutil
 import subprocess
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -154,6 +154,12 @@ def _bundle_text(tmp_path: Path) -> str:
     )
 
 
+def _evidence(tmp_path: Path) -> dict[str, Any]:
+    return json.loads(
+        (tmp_path / "bundle/stages/composition/composition-evidence.json").read_text()
+    )
+
+
 def _validate_bundle(tmp_path: Path) -> None:
     validated = subprocess.run(
         [
@@ -206,6 +212,16 @@ def test_composes_the_waffle_orin_run_with_a_real_model(tmp_path: Path) -> None:
     assert [cv["lifecycle_state"], cd["lifecycle_state"]] == ["skipped", "skipped"]
     _validate_bundle(tmp_path)
     assert api_key not in _bundle_text(tmp_path) + completed.stdout + completed.stderr
+    evidence = _evidence(tmp_path)
+    if composition["reason"]["code"] == "sdi.composition.bounded-no-result":
+        return
+    proposals = cast(
+        "list[dict[str, list[dict[str, object]] | None]]",
+        evidence["assessment"]["proposals"],
+    )
+    for proposal in proposals:
+        for service in proposal["services"] or []:
+            assert (service["route"] is None) == (service["artifact_id"] is None)
 
 
 def test_exhausted_output_is_a_bounded_domain_failure(tmp_path: Path) -> None:
@@ -235,9 +251,7 @@ def test_exhausted_output_is_a_bounded_domain_failure(tmp_path: Path) -> None:
     assert composition["domain_outcome"] == "failed"
     assert composition["reason"]["code"] == "sdi.composition.bounded-no-result"
     assert _composition_files(result) == {"composition_evidence", "diagnostic"}
-    evidence = json.loads(
-        (tmp_path / "bundle/stages/composition/composition-evidence.json").read_text()
-    )
+    evidence = _evidence(tmp_path)
     assert evidence["generation"]["outcome"] == "exhausted"
     assert evidence["generation"]["max_output_tokens"] == 16
     _validate_bundle(tmp_path)

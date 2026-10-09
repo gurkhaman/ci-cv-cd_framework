@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import re
 from collections import Counter
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Literal, cast
@@ -21,13 +22,18 @@ from ._contracts import (
 )
 from ._domain_contracts import Capability  # noqa: TC001
 from ._json_input import parse_json
-from ._service_descriptions import read_service_repository
+from ._service_descriptions import AptRoute, ImageRoute, read_service_repository
 from ._yaml_input import parse_front_matter, parse_yaml, validate_contract
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from ._service_descriptions import Artifact, DescriptionFile, ServiceDescription
+    from ._service_descriptions import (
+        Artifact,
+        DescriptionFile,
+        Route,
+        ServiceDescription,
+    )
 
 MAX_PROPOSALS_BYTES = 1024 * 1024
 ROLE_PAIRS = (
@@ -44,6 +50,9 @@ GAP_KINDS = frozenset(
         "unresolved-connection",
     }
 )
+# A digest or a full commit names fixed content; anything else may move.
+IMAGE_DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
+FULL_COMMIT = re.compile(r"^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$")
 
 type CoverageStatus = Literal[
     "supported", "missing", "uncertain", "outside_composition"
@@ -108,6 +117,7 @@ class PlacedService:
     service_id: str
     capability: str
     artifact_id: str | None
+    route: Route | None
     host: str | None
     placement: PlacementStatus
 
@@ -145,6 +155,9 @@ class AssessedProposal:
                 {
                     "service_id": item.service_id,
                     "artifact_id": item.artifact_id,
+                    "route": None
+                    if item.route is None
+                    else item.route.model_dump(mode="json"),
                     "host": item.host,
                     "placement": item.placement,
                 }
@@ -277,6 +290,27 @@ def _artifact(
     return None, [_finding("missing-artifact", message, service_id=service_id)]
 
 
+def _mutability(route: Route) -> str | None:
+    """Say why a declared route may install different content later."""
+    if isinstance(route, AptRoute):
+        patterns = [package for package in route.packages if "*" in package]
+        if patterns:
+            return (
+                f"apt pins {', '.join(patterns)} are version patterns resolved at "
+                "install time; the apt repository may keep only its latest version"
+            )
+        return (
+            "apt version pins are not content-addressed; the repository may drop them"
+        )
+    if isinstance(route, ImageRoute):
+        if IMAGE_DIGEST.search(route.reference) is None:
+            return f"image {route.reference} is not named by digest"
+        return None
+    if FULL_COMMIT.fullmatch(route.revision) is None:
+        return f"source revision {route.revision} is not a full commit"
+    return None
+
+
 def _place(
     placement: ServicePlacement,
     description: ServiceDescription,
@@ -291,6 +325,7 @@ def _place(
         service_id=service_id,
         capability=placement.capability,
         artifact_id=placement.artifact_id if artifact is not None else None,
+        route=artifact.route if artifact is not None else None,
         host=placement.host if host is not None else None,
     )
     if host is None:
@@ -479,6 +514,13 @@ def _check(
             _Participant(placement.service_id, outcome.host, description)
         )
         dependencies[placement.service_id] = description.depends_on or []
+        mutability = None if outcome.route is None else _mutability(outcome.route)
+        if mutability is not None:
+            findings.append(
+                _finding(
+                    "mutable-artifact", mutability, service_id=placement.service_id
+                )
+            )
         if not any(
             getattr(description, role) is not None
             for pair in ROLE_PAIRS

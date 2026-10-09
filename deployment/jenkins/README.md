@@ -151,7 +151,10 @@ pipeline composes with `integration/generation-configs/luna.yaml`, because the
 agents cannot reach the self-hosted Qwen endpoint, and binds the Jenkins secret
 text credential `sdi-openai-api-key` as `OPENAI_API_KEY` around the composition
 Stage only. JCasC creates that credential from the file named by
-`JENKINS_OPENAI_API_KEY_FILE`, which holds only the key. Allow the `ci` agent
+`JENKINS_OPENAI_API_KEY_FILE`, which holds only the key. JCasC reads that file
+only at controller startup and overwrites UI edits to the credential, so rotate
+the key while no build runs: rewrite the file, keep it mode `0600`, then run
+`bin/stack stop` and `bin/stack start`. Allow the `ci` agent
 HTTPS egress to `api.openai.com`. Without a valid key or that egress,
 composition fails with `sdi.composition.provider-error` and the build is red.
 The pipeline passes the checked-out `service-repository/` to every Stage
