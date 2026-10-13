@@ -301,7 +301,7 @@ def test_an_answer_without_proposals_fails_execution(
         "reasoning_effort: low",
         "max_output_tokens: 1000",
         "timeout_seconds: 30",
-        "omitted: request and response bodies of a failed attempt",
+        "omitted: composition evidence, which failed attempts do not publish",
     ):
         assert f"\n{fact}\n" in diagnostic
     _validate_bundle(tmp_path)

@@ -44,7 +44,11 @@ from ._service_descriptions import (
     capture_service_repository,
     parse_service_repository,
 )
-from ._stage_contracts import AdapterRequest, AdapterResponse
+from ._stage_contracts import (
+    AdapterRequest,
+    AdapterResponse,
+    contains_sensitive_material,
+)
 from ._yaml_input import (
     InputError,
     parse_front_matter,
@@ -191,13 +195,17 @@ class _Run:
             if isinstance(value, bool) or not isinstance(value, (str, int)):
                 continue
             text = str(value)
-            if DIAGNOSTIC_FACT.fullmatch(text) is None:
+            if DIAGNOSTIC_FACT.fullmatch(text) is None or contains_sensitive_material(
+                text
+            ):
                 text = "unrecorded"
             lines.append(f"{name}: {text}")
         if self.invalid_description is not None:
             lines.append(f"invalid_description: {self.invalid_description}")
         if OUTCOMES[code][0] == "failed":
-            lines.append("omitted: request and response bodies of a failed attempt")
+            lines.append(
+                "omitted: composition evidence, which failed attempts do not publish"
+            )
         content = "\n".join(lines) + "\n"
         return content.encode()[: self.request.diagnostic.max_bytes]
 

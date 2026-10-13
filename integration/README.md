@@ -105,8 +105,7 @@ no description. Reason summaries and the diagnostic come from fixed templates
 and never repeat provider error text. Once the generation config is read, the
 diagnostic names its model, reasoning effort, output limit and effective
 timeout, so a failed attempt still records the settings it ran with. A failed
-attempt publishes no evidence, and its diagnostic says that the request and
-response bodies were omitted.
+attempt publishes no evidence, and its diagnostic says so.
 
 Fixture cases match exact input digests and cannot recognize real output, so a
 Fixture Stage whose inputs include implemented output is skipped with
