@@ -1,4 +1,34 @@
 {
+  "$defs": {
+    "EmbeddingsConfig": {
+      "additionalProperties": false,
+      "description": "The endpoint that embeds descriptions and queries for dense discovery.",
+      "properties": {
+        "api_key_env": {
+          "minLength": 1,
+          "title": "Api Key Env",
+          "type": "string"
+        },
+        "base_url": {
+          "minLength": 1,
+          "title": "Base Url",
+          "type": "string"
+        },
+        "model": {
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        }
+      },
+      "required": [
+        "model",
+        "base_url",
+        "api_key_env"
+      ],
+      "title": "EmbeddingsConfig",
+      "type": "object"
+    }
+  },
   "additionalProperties": false,
   "description": "The model, limits and endpoint for one generation request.",
   "properties": {
@@ -11,6 +41,16 @@
       "minLength": 1,
       "title": "Base Url",
       "type": "string"
+    },
+    "embeddings": {
+      "$ref": "#/$defs/EmbeddingsConfig",
+      "title": "Embeddings"
+    },
+    "max_context_bytes": {
+      "default": 98304,
+      "exclusiveMinimum": 0,
+      "title": "Max Context Bytes",
+      "type": "integer"
     },
     "max_output_tokens": {
       "exclusiveMinimum": 0,

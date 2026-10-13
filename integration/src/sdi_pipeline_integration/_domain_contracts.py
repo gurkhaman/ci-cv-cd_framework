@@ -271,7 +271,7 @@ class DeploymentResult(ContractModel):
 
 
 class EvidenceDescription(ContractModel):
-    """One service description supplied to generation and assessment."""
+    """One repository service description; discovery records which it supplied."""
 
     path: NonBlank
     sha256: Sha256
@@ -303,6 +303,7 @@ class CompositionEvidence(ContractModel):
     source_inputs: Annotated[list[SourceInputDigest], Field(min_length=5, max_length=5)]
     descriptions: Annotated[list[EvidenceDescription], Field(min_length=1)]
     generation: GenerationRecord
+    discovery: dict[str, JsonValue]
     assessment: dict[str, JsonValue] | SkipJsonSchema[None] = None
 
     @model_validator(mode="before")

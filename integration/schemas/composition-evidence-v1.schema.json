@@ -2,7 +2,7 @@
   "$defs": {
     "EvidenceDescription": {
       "additionalProperties": false,
-      "description": "One service description supplied to generation and assessment.",
+      "description": "One repository service description; discovery records which it supplied.",
       "properties": {
         "path": {
           "minLength": 1,
@@ -141,6 +141,13 @@
       "title": "Descriptions",
       "type": "array"
     },
+    "discovery": {
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      },
+      "title": "Discovery",
+      "type": "object"
+    },
     "evidence_basis": {
       "const": "implemented",
       "title": "Evidence Basis",
@@ -189,7 +196,8 @@
     "profile_id",
     "source_inputs",
     "descriptions",
-    "generation"
+    "generation",
+    "discovery"
   ],
   "title": "CompositionEvidence",
   "type": "object"

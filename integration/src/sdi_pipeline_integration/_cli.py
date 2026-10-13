@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, cast
 from pydantic import ValidationError
 
 from ._assessment import assess_proposal_files, load_assessment_inputs
+from ._discovery import discover
 from ._generation import MAX_RETRIES, GenerationConfig, generate_proposals
 from ._github_actions import render_github_summary
 from ._github_dispatch import GitHubDispatchError, dispatch_s04
@@ -309,16 +310,32 @@ def _generate_proposals(arguments: argparse.Namespace) -> int:
             ),
             str(arguments.generation_config),
         )
-        result = generate_proposals(
-            inputs=load_assessment_inputs(
-                service_repository=arguments.service_repository,
-                target_profile=arguments.target_profile,
-                requirements_specification=arguments.requirements_specification,
-            ),
-            config=config,
+        inputs = load_assessment_inputs(
+            service_repository=arguments.service_repository,
+            target_profile=arguments.target_profile,
+            requirements_specification=arguments.requirements_specification,
         )
+        discovery = discover(
+            inputs,
+            embeddings=config.embeddings,
+            max_context_bytes=config.max_context_bytes,
+        )
+        settings = config.model_dump(exclude_none=True) | {"max_retries": MAX_RETRIES}
+        if not discovery.selected:
+            _write_json(
+                arguments.evidence,
+                {
+                    "settings": settings,
+                    "outcome": "discovery-no-result",
+                    "discovery": discovery.record,
+                },
+            )
+            sys.stderr.write("sdi-integration: discovery-no-result\n")
+            return 1
+        result = generate_proposals(inputs=inputs, discovery=discovery, config=config)
         evidence = {
-            "settings": config.model_dump() | {"max_retries": MAX_RETRIES},
+            "settings": settings,
+            "discovery": discovery.record,
             "outcome": result.outcome,
             "reason": result.reason,
         } | {

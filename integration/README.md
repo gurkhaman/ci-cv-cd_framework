@@ -68,14 +68,30 @@ sdi-composition-adapter run \
 
 The composition descriptor selects `sdi-composition-adapter` with
 `implementation_mode: implemented`. The adapter validates the copied
-descriptions, asks the configured model for proposals, assesses them with the
+descriptions, discovers the ones the mission needs, asks the configured model
+for proposals over those, assesses them against the whole repository with the
 same rules as `assess-proposals`, and publishes the preferred proposal as the
-composition blueprint and deployment schema. The blueprint records the
+composition blueprint and deployment schema. The preferred proposal supports the
+most requirements, then has the fewest gaps; no performance evidence is
+available, so equal proposals keep the model's order. The blueprint records the
 `proposal_id` and each requirement's checked coverage status; each placement is
 `resolved` or `unresolved`.
 
-The runtime forwards only the key variable named by the generation config, and
-only when the descriptor's `secret_bindings` lists it; otherwise the run stops
+Discovery queries the service repository once per requirement, with its ID and
+original Shall statement, and once with the profile's architectures, devices,
+baselines and orchestrator interfaces. SQLite FTS5 BM25 ranks every
+description's title, interfaces and body; when the generation config has an
+`embeddings` block, cosine similarity over that endpoint's embeddings ranks them
+too, and reciprocal rank fusion merges the two. The orchestrator's inputs, then
+each query's top three services in turn, are admitted along with every service
+that provides one of their inputs or that their `depends_on` names. Admission
+stops at `max_context_bytes` (96 KiB of descriptions by default) and nothing
+fills the rest, so the model sees and may choose only the selected
+descriptions. When embeddings are unconfigured, their key is unset or the call
+fails, discovery is lexical only and says why.
+
+The runtime forwards only the key variables named by the generation config, and
+only when the descriptor's `secret_bindings` lists them; otherwise the run stops
 before launch. `HTTPS_PROXY`, `NO_PROXY`, and `SSL_CERT_FILE` are forwarded when
 set. A candidate holding the forwarded key's exact bytes is rejected.
 
@@ -85,6 +101,7 @@ set. A candidate holding the forwarded key's exact bytes is rejected.
 | `sdi.composition.bounded-no-result` | succeeded | failed | evidence |
 | `sdi.composition.scoped-rejection` | succeeded | failed | evidence |
 | `sdi.composition.insufficient-proposals` | succeeded | failed | evidence |
+| `sdi.composition.discovery-no-result` | failed | not evaluated | diagnostic |
 | `sdi.composition.invalid-service-description` | failed | not evaluated | diagnostic |
 | `sdi.composition.generation-invalid` | failed | not evaluated | diagnostic |
 | `sdi.composition.generation-refused` | failed | not evaluated | diagnostic |
@@ -93,18 +110,25 @@ set. A candidate holding the forwarded key's exact bytes is rejected.
 A bounded result means generation reached `max_output_tokens`. A scoped
 rejection means every proposal lost all of its services to placement removals.
 `composition-evidence.json` (`sdi.composition-evidence/v1`, at most 256 KiB)
-records the description digests, the generation settings, the exact model
-request and response summary, and the complete assessment. It is never an input
+records the repository's description digests, the discovery trace, the
+generation settings, the exact model request and response summary, and the
+complete assessment with its ranking order and, for each other eligible
+proposal, the criterion that ranked it lower. The discovery trace holds each
+query, its top ten fused, lexical and dense ranks, every selected description
+with its reason and size, every omitted one with its reason (`not retrieved` or
+`budget`), the input references left unexpanded, and the budget used. When no
+proposal is preferred and discovery omitted descriptions, the assessment reason
+says the result holds within the bounded supplied context. It is never an input
 to a later Stage. Each assessed service carries its chosen artifact's `route` as
 declared. A `mutable-artifact` finding marks a route that may install different
 content later: any apt route, an image without a digest, or a source revision
 that is not a full commit. It is read from the declared route only, never
-resolved against a registry, and never counts as a gap. Discovery reads every
-description and fails rather than truncates at its limits, so the evidence omits
-no description. Reason summaries and the diagnostic come from fixed templates
+resolved against a registry, and never counts as a gap. Reading the repository
+fails rather than truncates at its limits, so the digests omit no description.
+Reason summaries and the diagnostic come from fixed templates
 and never repeat provider error text. Once the generation config is read, the
-diagnostic names its model, reasoning effort, output limit and effective
-timeout, so a failed attempt still records the settings it ran with. A failed
+diagnostic names its model, reasoning effort, output limit, effective timeout
+and context budget, so a failed attempt still records the settings it ran with. A failed
 attempt publishes no evidence, and its diagnostic says so.
 
 Fixture cases match exact input digests and cannot recognize real output, so a
@@ -132,7 +156,9 @@ uv run --project integration sdi-integration dispatch-local \
 ```
 
 Use `qwen.yaml` while the self-hosted endpoint answers and rerun with
-`luna.yaml` when it does not; export the key the chosen config names. The result
+`luna.yaml` when it does not; export the key the chosen config names. `luna.yaml`
+also embeds with OpenAI's `text-embedding-3-small`; `qwen.yaml` names no
+embeddings endpoint, so its discovery is lexical only. The result
 is the manifest; its checksummed inventory covers every other archive file
 without a recursive self-digest. Revalidate the complete archive independently
 with:
