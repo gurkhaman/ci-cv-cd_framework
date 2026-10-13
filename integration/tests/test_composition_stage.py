@@ -295,6 +295,15 @@ def test_an_answer_without_proposals_fails_execution(
     assert composition["domain_outcome"] == "not_evaluated"
     assert composition["reason"]["code"] == code
     assert _composition_files(result) == {"diagnostic"}
+    diagnostic = (tmp_path / "bundle/stages/composition/diagnostic.txt").read_text()
+    for fact in (
+        "model: stub/model",
+        "reasoning_effort: low",
+        "max_output_tokens: 1000",
+        "timeout_seconds: 30",
+        "omitted: composition evidence, which failed attempts do not publish",
+    ):
+        assert f"\n{fact}\n" in diagnostic
     _validate_bundle(tmp_path)
     assert STUB_KEY not in _bundle_text(tmp_path) + completed.stdout
 

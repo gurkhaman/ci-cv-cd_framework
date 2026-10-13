@@ -44,7 +44,11 @@ from ._service_descriptions import (
     capture_service_repository,
     parse_service_repository,
 )
-from ._stage_contracts import AdapterRequest, AdapterResponse
+from ._stage_contracts import (
+    AdapterRequest,
+    AdapterResponse,
+    contains_sensitive_material,
+)
 from ._yaml_input import (
     InputError,
     parse_front_matter,
@@ -61,7 +65,8 @@ if TYPE_CHECKING:
 MAX_REQUEST_BYTES = 128 * 1024
 # Leave the runtime time to capture the candidate before its work limit expires.
 TIMEOUT_RESERVE_SECONDS = 30
-PROVIDER_FACT = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+# Model names may carry an organization prefix, as in Qwen/Qwen3.8-27B.
+DIAGNOSTIC_FACT = re.compile(r"^[A-Za-z0-9_./-]{1,128}$")
 
 OUTCOMES: dict[str, tuple[str, str, str, str]] = {
     "preferred-proposal": (
@@ -184,17 +189,23 @@ class _Run:
         )
 
     def _diagnostic(self, code: str) -> bytes:
-        """Fill the fixed diagnostic template with checked provider facts only."""
+        """Fill the fixed diagnostic template with checked run facts only."""
         lines = [f"outcome: sdi.composition.{code}"]
         for name, value in self.facts.items():
             if isinstance(value, bool) or not isinstance(value, (str, int)):
                 continue
             text = str(value)
-            if PROVIDER_FACT.fullmatch(text) is None:
+            if DIAGNOSTIC_FACT.fullmatch(text) is None or contains_sensitive_material(
+                text
+            ):
                 text = "unrecorded"
             lines.append(f"{name}: {text}")
         if self.invalid_description is not None:
             lines.append(f"invalid_description: {self.invalid_description}")
+        if OUTCOMES[code][0] == "failed":
+            lines.append(
+                "omitted: composition evidence, which failed attempts do not publish"
+            )
         content = "\n".join(lines) + "\n"
         return content.encode()[: self.request.diagnostic.max_bytes]
 
@@ -327,7 +338,13 @@ def _compose(run: _Run, input_root: Path) -> Outcome:
         }
     )
     config_sha256 = declared["generation_config"].sha256
-    run.facts["config_sha256"] = config_sha256
+    run.facts |= {
+        "config_sha256": config_sha256,
+        "model": config.model,
+        "reasoning_effort": config.reasoning_effort,
+        "max_output_tokens": config.max_output_tokens,
+        "timeout_seconds": config.timeout_seconds,
+    }
     identity: dict[str, object] = {
         "evidence_basis": "implemented",
         "scenario_id": run_request.scenario_id,

@@ -125,7 +125,7 @@ def test_reports_why_the_provider_returned_no_proposals(
     evidence_text = (tmp_path / "evidence.json").read_text()
     evidence = json.loads(evidence_text)
     assert evidence["outcome"] == outcome
-    assert evidence["request"]["model"] == "stub-model"
+    assert evidence["request"]["model"] == "stub/model"
     assert evidence["response"]["id"] == "resp_stub"
     assert STUB_KEY not in evidence_text + completed.stdout + completed.stderr
 

@@ -31,7 +31,7 @@ def _response(
         "id": "resp_stub",
         "object": "response",
         "created_at": 0,
-        "model": "stub-model",
+        "model": "stub/model",
         "status": status,
         "error": None,
         "incomplete_details": None,
@@ -117,7 +117,7 @@ def stub_config(base_url: str) -> str:
     """Return a generation config that sends requests to the stub."""
     return (
         "schema_version: sdi.generation-config/v1\n"
-        "model: stub-model\n"
+        "model: stub/model\n"
         "reasoning_effort: low\n"
         "max_output_tokens: 1000\n"
         "timeout_seconds: 30\n"
