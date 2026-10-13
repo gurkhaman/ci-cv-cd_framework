@@ -845,6 +845,8 @@ def test_host_runner_interface_is_pinned_user_managed_and_handoff_only() -> None
     assert "JENKINS_HOME" in script
     assert "/var/run/docker.sock" in script
     assert "sudo systemctl" not in script
+    assert "show_registration\n        systemctl --user status" in script
+    assert '"$RUNNER_HOME/.runner"' in script
     assert "sudo ./" not in script
     assert all(
         command in script

@@ -158,7 +158,7 @@ def test_domain_agents_use_their_descriptor_selected_runtime_image() -> None:
     dockerfile = (JENKINS_ROOT / "agents" / "Dockerfile").read_text()
     assert "FROM ${RUNTIME_IMAGE} AS runtime" in dockerfile
     assert "FROM ${REMOTING_IMAGE} AS remoting" in dockerfile
-    assert "FROM runtime\n" in dockerfile
+    assert "FROM runtime\nLABEL org.sdi.project=ci-cv-cd_framework\n" in dockerfile
     assert "FROM ${UV_IMAGE} AS uv" in dockerfile
     assert "uv sync --frozen --no-dev --no-editable" in dockerfile
     assert "/etc/sdi/jenkins-agent-role" in dockerfile

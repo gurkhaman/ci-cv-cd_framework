@@ -34,6 +34,9 @@ cleanup() {
             status=$cleanup_status
         fi
     fi
+    docker image prune --force \
+        --filter label=org.sdi.project=ci-cv-cd_framework >/dev/null || \
+        printf '%s\n' 'smoke: failed to prune superseded SDI images' >&2
     exit "$status"
 }
 trap cleanup EXIT
