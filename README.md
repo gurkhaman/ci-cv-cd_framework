@@ -99,10 +99,10 @@ uv run --project integration sdi-integration --help
 - `requirements/`, `profiles/`, and `runs/`: version-controlled, dispatchable
   inputs introduced by the run-contract implementation.
 - `deployment/jenkins/`: the pinned zero-executor Jenkins controller, five
-  isolated inbound agents, exact plugin lock, configuration, fixed job, and
-  lifecycle interface.
+  isolated inbound agents, exact plugin lock, configuration, fixed upstream and
+  fork jobs, and lifecycle interface.
 - `deployment/github-runner/`: the pinned low-privilege user-service interface
-  for the handoff-only self-hosted runner.
+  for the handoff-only self-hosted runners, one per repository.
 - `.github/workflows/`: the protected path-only Pipeline integration workflow.
 - `docs/`: role-neutral setup, operation, maintenance, and readiness guidance.
 - `CV/gazebo/`: retained Gazebo source assets. They are not connected to the

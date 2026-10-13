@@ -46,14 +46,25 @@ def isTimeoutInterruption = { interruption ->
     }
 }
 
+// Each job clones its own repository, so the protected-main ancestry check runs
+// against the repository that submitted the run. The job names match
+// deployment/jenkins/jobs/pipeline-integration.groovy; this installation does
+// not bind the scm variable, so the URL is selected by job name.
 def checkoutSubmittedCommit = {
+    def repositoryUrl = [
+        'pipeline-integration': env.SDI_REPOSITORY_URL,
+        'pipeline-integration-fork': env.SDI_FORK_REPOSITORY_URL,
+    ][env.JOB_NAME]
+    if (!repositoryUrl) {
+        error("Job ${env.JOB_NAME} has no configured repository")
+    }
     checkout([
         $class: 'GitSCM',
         branches: [[name: env.RESOLVED_COMMIT_SHA]],
         extensions: [[$class: 'CloneOption', honorRefspec: true, noTags: true]],
         userRemoteConfigs: [[
             refspec: '+refs/heads/main:refs/remotes/origin/main',
-            url: env.SDI_REPOSITORY_URL,
+            url: repositoryUrl,
         ]],
     ])
     sh '''set -eu
