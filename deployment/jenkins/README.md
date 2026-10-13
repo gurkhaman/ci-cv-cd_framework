@@ -189,7 +189,8 @@ all agents connect over WebSocket. `stop` removes all containers and networks
 but retains only the `jenkins-home` named volume. Agent workspaces are separate
 tmpfs mounts, have no shared or persistent filesystem, and disappear whenever
 their container is replaced. Their five separate networks allow GitHub checkout
-without making peer agents reachable.
+without making peer agents reachable. Every image the stack builds carries the
+label `org.sdi.project=ci-cv-cd_framework`.
 
 Agent images install the integration package when they are built, so a
 pipeline run checks out the submitted commit but runs the adapter code baked
@@ -409,7 +410,10 @@ unavailable agents, and admissible busy agents.
 The smoke then mutates controller and node configuration, deletes one managed
 node and the fixed job, restarts all six containers while preserving the
 controller volume, and proves JCasC and Job DSL restore repository state. Agent
-tmpfs workspaces are recreated empty. Cleanup removes the isolated smoke volume.
+tmpfs workspaces are recreated empty. Cleanup removes the isolated smoke volume
+and prunes dangling images labelled `org.sdi.project=ci-cv-cd_framework`, such
+as superseded builds of the fixed image tags. Unlabelled images, base images,
+and the build cache are untouched.
 
 `integration/scripts/verify` includes this smoke check after the Python package
 checks. The smoke also replaces the controller passwords and Jenkins inbound

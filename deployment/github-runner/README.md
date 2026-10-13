@@ -59,6 +59,10 @@ deployment/github-runner/bin/runner start
 deployment/github-runner/bin/runner status
 ```
 
+`status` prints the registered repository URL and runner name from the
+runner's own `.runner` file, or states that the runner is not configured, before
+the user service status.
+
 The registration token is configuration-time input, not a service environment
 value. The runner receives only the custom label `sdi-jenkins-handoff`; default
 labels are disabled. Automatic updates are disabled. The user service enables

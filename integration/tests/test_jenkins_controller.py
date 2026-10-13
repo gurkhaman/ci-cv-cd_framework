@@ -256,6 +256,7 @@ def _assert_stack_lifecycle_log(lifecycle_log: str) -> None:
 def test_controller_image_and_complete_plugin_set_are_exactly_pinned() -> None:
     dockerfile = (JENKINS_ROOT / "controller" / "Dockerfile").read_text()
     assert f"FROM {EXPECTED_CONTROLLER_IMAGE}" in dockerfile
+    assert "LABEL org.sdi.project=ci-cv-cd_framework" in dockerfile
     assert "jenkins-plugin-cli --latest=false" in dockerfile
 
     plugin_lines = [
@@ -969,3 +970,13 @@ def test_stack_validate_uses_compose_and_rejects_insecure_secret_files(  # noqa:
         text=True,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+def test_smoke_prunes_only_dangling_sdi_images() -> None:
+    smoke = (JENKINS_ROOT / "bin" / "smoke").read_text()
+    assert (
+        "docker image prune --force \\\n"
+        "        --filter label=org.sdi.project=ci-cv-cd_framework"
+    ) in smoke
+    assert "prune --all" not in smoke
+    assert "builder prune" not in smoke
