@@ -191,10 +191,11 @@ tmpfs mounts, have no shared or persistent filesystem, and disappear whenever
 their container is replaced. Their five separate networks allow GitHub checkout
 without making peer agents reachable.
 
-Agent images install the integration package when they are built, so a build
-checks out the submitted commit but runs the adapter code baked into its agent.
-After merging any change under `integration/`, run `stack stop` and then
-`stack start` so the next build runs the merged code.
+Agent images install the integration package when they are built, so a
+pipeline run checks out the submitted commit but runs the adapter code baked
+into its agent image. After merging any change under `integration/`, shut the
+stack down as in [Safe Shutdown](#safe-shutdown) and run `stack start`, which
+rebuilds the agent images, so the next run uses the merged code.
 
 The root pipeline deletes every allocated workspace before checkout and in a
 `finally` block. Each agent independently checks out and verifies the submitted
