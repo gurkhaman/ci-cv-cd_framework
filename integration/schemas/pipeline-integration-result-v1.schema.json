@@ -723,7 +723,7 @@
       "type": "string"
     },
     "fixture_notice": {
-      "const": "Deterministic pipeline-interface Fixtures may have simulated outcomes; no real Domain capability, Validation verdict, deployment outcome, or KPI was evaluated.",
+      "const": "Stages reported with implementation mode `fixture` are deterministic pipeline-interface Fixtures whose outcomes may be simulated and evaluate no real Domain capability; no Validation verdict, deployment outcome, or KPI was evaluated.",
       "title": "Fixture Notice",
       "type": "string"
     },

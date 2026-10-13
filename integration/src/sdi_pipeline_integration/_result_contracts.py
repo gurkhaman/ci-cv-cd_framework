@@ -42,9 +42,10 @@ from ._stage_contracts import (
 PIPELINE_RESULT_SCHEMA_VERSION = "sdi.pipeline-integration-result/v1"
 PIPELINE_RESULT_PATH = "pipeline-integration-result.json"
 FIXTURE_NOTICE = (
-    "Deterministic pipeline-interface Fixtures may have simulated outcomes; no "
-    "real Domain capability, Validation verdict, deployment outcome, or KPI was "
-    "evaluated."
+    "Stages reported with implementation mode `fixture` are deterministic "
+    "pipeline-interface Fixtures whose outcomes may be simulated and evaluate no "
+    "real Domain capability; no Validation verdict, deployment outcome, or KPI "
+    "was evaluated."
 )
 EXPECTED_STAGES: tuple[StageName, ...] = ("composition", "image_build", "cv", "cd")
 GitCommitSha = Annotated[
@@ -177,9 +178,10 @@ class PipelineIntegrationResult(ContractModel):
     ]
     artifacts: list[BundleArtifact]
     fixture_notice: Literal[
-        "Deterministic pipeline-interface Fixtures may have simulated outcomes; no "
-        "real Domain capability, Validation verdict, deployment outcome, or KPI was "
-        "evaluated."
+        "Stages reported with implementation mode `fixture` are deterministic "
+        "pipeline-interface Fixtures whose outcomes may be simulated and evaluate no "
+        "real Domain capability; no Validation verdict, deployment outcome, or KPI "
+        "was evaluated."
     ]
     kpi_evaluation: Literal["not_evaluated"]
 
