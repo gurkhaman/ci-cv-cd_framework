@@ -91,8 +91,16 @@ generated example. Use:
 
 ```text
 JENKINS_REPOSITORY_URL=https://github.com/open-SDI/ci-cv-cd_framework.git
+JENKINS_FORK_REPOSITORY_URL=https://github.com/<fork-owner>/ci-cv-cd_framework.git
 JENKINS_AGENT_CONTROLLER_URL=http://controller:8080
 ```
+
+`JENKINS_FORK_REPOSITORY_URL` must name a different repository, normally the
+maintainer's fork. The fork job `pipeline-integration-fork` stays idle unless a
+fork runner is registered; this runbook installs only the upstream runner, as
+`sdi-runner`. Before any upstream dispatch, a sync pull request must bring
+upstream `main` level with the fork `main` commit the agent images were built
+from.
 
 Select distinct Jenkins administrator and handoff-machine-user IDs. Create two
 different bootstrap passwords in owner-only files outside the checkout. A
@@ -159,9 +167,9 @@ deployment/github-runner/bin/runner start
 deployment/github-runner/bin/runner status
 ```
 
-Confirm that exactly one online runner has only the custom label
-`sdi-jenkins-handoff`. The token is configuration-time input and must not be
-stored in the service environment.
+Confirm that exactly one online runner in the repository has only the custom
+label `sdi-jenkins-handoff`. The token is configuration-time input and must not
+be stored in the service environment.
 
 ## 5. Configure GitHub
 

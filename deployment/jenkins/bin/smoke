@@ -59,6 +59,7 @@ printf '%s\n' \
     'JENKINS_ADMIN_ID=smoke-administrator' \
     'JENKINS_HANDOFF_ID=smoke-github-handoff' \
     'JENKINS_REPOSITORY_URL=https://github.com/open-SDI/ci-cv-cd_framework.git' \
+    'JENKINS_FORK_REPOSITORY_URL=https://github.com/gurkhaman/ci-cv-cd_framework.git' \
     'JENKINS_AGENT_CONTROLLER_URL=http://controller:8080' \
     'JENKINS_PIPELINE_RUN_LIMIT_SECONDS=5400' \
     'JENKINS_COMPOSITION_WORK_LIMIT_SECONDS=600' \
