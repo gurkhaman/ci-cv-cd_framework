@@ -13,6 +13,7 @@ from typing import cast
 
 import pytest
 
+from sdi_pipeline_integration._stage_contracts import EXPECTED_STAGE_INPUT_SLOTS
 from sdi_pipeline_integration._stage_runtime import ADAPTER_SHUTDOWN_GRACE_SECONDS
 from tests._fixture_inputs import (
     FIXTURE_COMPOSITION_CONFIG,
@@ -226,30 +227,7 @@ def test_dispatches_a_contract_valid_deterministic_four_stage_fixture(
     assert [
         [item["slot"] for item in attempt["accepted_inputs"]]
         for attempt in first_result["attempts"]
-    ] == [
-        [
-            "run_request",
-            "requirements_specification",
-            "target_profile",
-            "service_repository",
-            "composition_settings",
-        ],
-        ["target_profile", "composition_blueprint", "deployment_schema"],
-        [
-            "requirements_specification",
-            "target_profile",
-            "composition_blueprint",
-            "deployment_schema",
-            "image_build_result",
-        ],
-        [
-            "target_profile",
-            "composition_blueprint",
-            "deployment_schema",
-            "image_build_result",
-            "validation_evidence",
-        ],
-    ]
+    ] == [list(slots) for slots in EXPECTED_STAGE_INPUT_SLOTS.values()]
 
     expected_paths = {
         "pipeline-integration-result.json",
@@ -1079,6 +1057,33 @@ def test_bundle_validation_rejects_machine_specific_provenance_paths(
     assert validated.returncode == 2
     assert validated.stdout == ""
     assert "repository-relative" in validated.stderr
+
+
+def test_bundle_validation_rejects_reordered_or_unknown_input_provenance(
+    tmp_path: Path,
+) -> None:
+    repository, commit_sha = _commit_fixture_repository(tmp_path)
+    bundle_root = tmp_path / "bundle"
+    dispatched = _dispatch(repository, commit_sha, bundle_root)
+    assert dispatched.returncode == 0, dispatched.stderr
+    result_path = bundle_root / "pipeline-integration-result.json"
+    result = json.loads(result_path.read_text())
+    provenance = result["input_provenance"]
+    unknown = [{**provenance[0], "schema_version": "sdi.unknown-input/v1"}]
+
+    for variant in ([*provenance[1:], provenance[0]], [*unknown, *provenance[1:]]):
+        result_path.write_text(
+            json.dumps(result | {"input_provenance": variant}), encoding="utf-8"
+        )
+        validated = subprocess.run(
+            ["sdi-integration", "validate-bundle", "--bundle-root", str(bundle_root)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert validated.returncode == 2
+        assert "not the identified input set" in validated.stderr
 
 
 @pytest.mark.parametrize(
