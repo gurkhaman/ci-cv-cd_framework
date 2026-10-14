@@ -102,12 +102,16 @@ set. A candidate holding the forwarded key's exact bytes is rejected.
 | `sdi.composition.scoped-rejection` | succeeded | failed | evidence |
 | `sdi.composition.insufficient-proposals` | succeeded | failed | evidence |
 | `sdi.composition.discovery-no-result` | failed | not evaluated | diagnostic |
+| `sdi.composition.discovery-over-budget` | failed | not evaluated | diagnostic |
 | `sdi.composition.invalid-service-description` | failed | not evaluated | diagnostic |
 | `sdi.composition.generation-invalid` | failed | not evaluated | diagnostic |
 | `sdi.composition.generation-refused` | failed | not evaluated | diagnostic |
 | `sdi.composition.provider-error` | failed | not evaluated | diagnostic |
 
-A bounded result means generation reached `max_output_tokens`. A scoped
+Discovery fails with no result when no query retrieves any description, and
+over budget when it retrieved some but none fits `max_context_bytes`; the
+diagnostic counts the descriptions selected, omitted and left out for the
+budget. A bounded result means generation reached `max_output_tokens`. A scoped
 rejection means every proposal lost all of its services to placement removals.
 `composition-evidence.json` (`sdi.composition-evidence/v1`, at most 256 KiB)
 records the repository's description digests, the discovery trace, the

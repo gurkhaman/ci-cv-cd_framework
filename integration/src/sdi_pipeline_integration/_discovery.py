@@ -202,6 +202,17 @@ class Discovery:
         """Say whether every repository description was supplied."""
         return not self.omitted
 
+    @property
+    def over_budget(self) -> int:
+        """Count the descriptions retrieved but left out for the budget."""
+        omitted = cast("list[dict[str, str]]", self.record["omitted"])
+        return sum(1 for item in omitted if item["reason"] == "budget")
+
+    @property
+    def empty_outcome(self) -> str:
+        """Say why nothing was selected: no match, or no room in the budget."""
+        return "discovery-over-budget" if self.over_budget else "discovery-no-result"
+
 
 class _Selection:
     """Admission of services within the byte budget, with their expansion."""

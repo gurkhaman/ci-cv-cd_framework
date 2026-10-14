@@ -326,11 +326,11 @@ def _generate_proposals(arguments: argparse.Namespace) -> int:
                 arguments.evidence,
                 {
                     "settings": settings,
-                    "outcome": "discovery-no-result",
+                    "outcome": discovery.empty_outcome,
                     "discovery": discovery.record,
                 },
             )
-            sys.stderr.write("sdi-integration: discovery-no-result\n")
+            sys.stderr.write(f"sdi-integration: {discovery.empty_outcome}\n")
             return 1
         result = generate_proposals(inputs=inputs, discovery=discovery, config=config)
         evidence = {

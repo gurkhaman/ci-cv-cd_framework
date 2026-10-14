@@ -407,6 +407,24 @@ def test_a_result_within_a_bounded_context_says_so(tmp_path: Path) -> None:
     _validate_bundle(tmp_path)
 
 
+def test_a_budget_no_description_fits_fails_before_generation(
+    tmp_path: Path,
+) -> None:
+    completed = _dispatch_stub(
+        tmp_path, proposals_body([COMPLETE]), "max_context_bytes: 100\n"
+    )
+
+    assert completed.returncode == 1, completed.stderr
+    composition = json.loads(completed.stdout)["attempts"][0]
+    assert composition["execution_conclusion"] == "failed"
+    assert composition["reason"]["code"] == "sdi.composition.discovery-over-budget"
+    assert _composition_files(json.loads(completed.stdout)) == {"diagnostic"}
+    diagnostic = (tmp_path / "bundle/stages/composition/diagnostic.txt").read_text()
+    assert "\ndiscovery_selected: 0\n" in diagnostic
+    assert "\ndiscovery_over_budget: 0\n" not in diagnostic
+    _validate_bundle(tmp_path)
+
+
 def test_an_invalid_description_fails_before_generation(tmp_path: Path) -> None:
     service_repository = tmp_path / "service-repository"
     shutil.copytree(SERVICE_REPOSITORY, service_repository)

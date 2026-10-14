@@ -100,7 +100,13 @@ OUTCOMES: dict[str, tuple[str, str, str, str]] = {
         "failed",
         "not_evaluated",
         "input",
-        "Discovery selected no service description within the context budget.",
+        "Discovery retrieved no service description.",
+    ),
+    "discovery-over-budget": (
+        "failed",
+        "not_evaluated",
+        "input",
+        "No retrieved service description fits the context budget.",
     ),
     "invalid-service-description": (
         "failed",
@@ -386,8 +392,9 @@ def _compose(run: _Run, input_root: Path) -> Outcome:
         "discovery_omitted": len(discovery.omitted),
         "dense_status": str(cast("dict[str, object]", record["dense"])["status"]),
     }
+    run.facts["discovery_over_budget"] = discovery.over_budget
     if not discovery.selected:
-        return "discovery-no-result", {}
+        return discovery.empty_outcome, {}
     generation = generate_proposals(inputs=inputs, discovery=discovery, config=config)
     run.facts |= generation.provider_facts()
     if generation.outcome not in {"generated", "exhausted"}:
