@@ -24,18 +24,22 @@ if (runLimitSeconds < 180) {
 def stages = [
     [name: 'Composition', stage: 'composition', label: 'composition',
      descriptor: 'deployment/jenkins/adapters/composition-v1.yaml',
+     suppliedArguments: '--service-repository service-repository',
      workLimitSeconds: readPositiveSeconds(
          'JENKINS_COMPOSITION_WORK_LIMIT_SECONDS', env.JENKINS_COMPOSITION_WORK_LIMIT_SECONDS)],
     [name: 'Image build', stage: 'image_build', label: 'image-build',
      descriptor: 'deployment/jenkins/adapters/image-build-fixture-v1.yaml',
+     suppliedArguments: '',
      workLimitSeconds: readPositiveSeconds(
          'JENKINS_IMAGE_BUILD_WORK_LIMIT_SECONDS', env.JENKINS_IMAGE_BUILD_WORK_LIMIT_SECONDS)],
     [name: 'Continuous Validation', stage: 'cv', label: 'cv',
      descriptor: 'deployment/jenkins/adapters/cv-fixture-v1.yaml',
+     suppliedArguments: '',
      workLimitSeconds: readPositiveSeconds(
          'JENKINS_CV_WORK_LIMIT_SECONDS', env.JENKINS_CV_WORK_LIMIT_SECONDS)],
     [name: 'Continuous Deployment', stage: 'cd', label: 'cd',
      descriptor: 'deployment/jenkins/adapters/cd-fixture-v1.yaml',
+     suppliedArguments: '',
      workLimitSeconds: readPositiveSeconds(
          'JENKINS_CD_WORK_LIMIT_SECONDS', env.JENKINS_CD_WORK_LIMIT_SECONDS)],
 ]
@@ -75,20 +79,16 @@ git update-ref refs/heads/main "$RESOLVED_COMMIT_SHA"
 '''
 }
 
-// The Domain agents reach only the OpenAI endpoint, so Jenkins composes with
-// the config's default luna generator and passes no generator. The config is
-// read from the submitted commit, and its key comes from the sdi-openai-api-key
-// credential bound around the composition Stage only.
-def compositionConfigPath = 'integration/composition-config.yaml'
-
+// Only composition is given the checked-out service repository. The Domain
+// agents reach only the OpenAI endpoint, so Jenkins composes with the committed
+// composition config's default luna generator and names neither; its key comes
+// from the sdi-openai-api-key credential bound around the composition Stage only.
 def commonArguments = '''\
   --repository . \
   --requested-ref "$REQUESTED_GIT_REF" \
   --resolved-commit "$RESOLVED_COMMIT_SHA" \
   --run-request-path "$RUN_REQUEST_PATH" \
-  --execution-id "$EXECUTION_ID" \
-  --service-repository service-repository \
-  --composition-config ''' + "'${compositionConfigPath}'"
+  --execution-id "$EXECUTION_ID"'''
 
 def resourceNodes = [:]
 def acceptedStages = []
@@ -174,6 +174,7 @@ ${commonArguments} \\
                         sh(returnStatus: true, script: """set -eu
 sdi-integration execute-jenkins-stage \\
 ${commonArguments} \\
+  ${definition.suppliedArguments} \\
   --descriptor-path '${definition.descriptor}' \\
   --attempt-root 'transfers/${definition.stage}' \\
   ${priorArguments} \\

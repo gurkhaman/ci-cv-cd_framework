@@ -505,6 +505,14 @@ def test_root_pipeline_is_a_thin_scheduler_over_public_cli_operations() -> None:
         ("cd", 1),
     ]
     assert pipeline.count("execute-jenkins-stage") == 1
+    composition_definition = pipeline[
+        pipeline.index("name: 'Composition'") : pipeline.index("name: 'Image build'")
+    ]
+    assert pipeline.count("--service-repository") == 1
+    assert "--service-repository service-repository" in composition_definition
+    assert "${definition.suppliedArguments}" in pipeline
+    assert "--composition-config" not in pipeline
+    assert "--generator" not in pipeline
     assert "preflight-jenkins-run" in pipeline
     assert "attempt-allows-continuation" in pipeline
     assert "finalize-jenkins-run" in pipeline

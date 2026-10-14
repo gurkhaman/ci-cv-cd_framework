@@ -143,7 +143,7 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     execute.add_argument("--run-request-path", required=True)
     execute.add_argument("--descriptor-path", required=True)
     execute.add_argument("--attempt-root", type=Path, required=True)
-    _add_supplied_input_arguments(execute)
+    _add_supplied_input_arguments(execute, require_service_repository=False)
     preflight = commands.add_parser(
         "preflight-jenkins-run",
         help="revalidate one Jenkins submission and its complete execution topology",
@@ -158,7 +158,7 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     preflight.add_argument("--image-build-node", required=True)
     preflight.add_argument("--cv-node", required=True)
     preflight.add_argument("--cd-node", required=True)
-    _add_supplied_input_arguments(preflight)
+    _add_composition_selection_arguments(preflight)
     handoff = commands.add_parser(
         "handoff-jenkins",
         help="submit one run and retrieve its exact validated Jenkins bundle",
@@ -180,7 +180,7 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     )
     jenkins_execute.add_argument("--work-limit-seconds", type=int, required=True)
     jenkins_execute.add_argument("--run-deadline-epoch-millis", required=True)
-    _add_supplied_input_arguments(jenkins_execute)
+    _add_supplied_input_arguments(jenkins_execute, require_service_repository=False)
     attempt_status = commands.add_parser(
         "attempt-allows-continuation",
         help="derive whether an accepted attempt permits the next Stage",
@@ -199,7 +199,6 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     finalize.add_argument("--attempt-root", type=Path, action="append", default=[])
     finalize.add_argument("--run-deadline-expired", action="store_true")
     finalize.add_argument("--bundle-root", type=Path, required=True)
-    _add_supplied_input_arguments(finalize)
     conclusion = commands.add_parser(
         "bundle-conclusion",
         help="validate a bundle and derive its Jenkins machinery conclusion",
@@ -215,7 +214,7 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     dispatch.add_argument("--resolved-commit", required=True)
     dispatch.add_argument("--run-request-path", required=True)
     dispatch.add_argument("--bundle-root", type=Path, required=True)
-    _add_supplied_input_arguments(dispatch)
+    _add_supplied_input_arguments(dispatch, require_service_repository=True)
     validate = commands.add_parser(
         "validate-bundle",
         help="validate one complete Pipeline integration archive candidate",
@@ -259,16 +258,21 @@ def _add_submitted_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--execution-id", required=True)
 
 
-def _add_supplied_input_arguments(parser: argparse.ArgumentParser) -> None:
+def _add_supplied_input_arguments(
+    parser: argparse.ArgumentParser, *, require_service_repository: bool
+) -> None:
     parser.add_argument(
         "--service-repository",
         type=Path,
-        required=True,
+        required=require_service_repository,
         help="directory of SDI.md service descriptions given to composition",
     )
+    _add_composition_selection_arguments(parser)
+
+
+def _add_composition_selection_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--composition-config",
-        default=DEFAULT_COMPOSITION_CONFIG,
         help="repository path of the composition config, read at the resolved "
         f"commit (default {DEFAULT_COMPOSITION_CONFIG})",
     )
@@ -526,7 +530,10 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
                     "cv": arguments.cv_node,
                     "cd": arguments.cd_node,
                 },
-                supplied=_supplied_inputs(arguments),
+                supplied=SuppliedInputs(
+                    composition_config=arguments.composition_config,
+                    generator=arguments.generator,
+                ),
             )
         except (InputError, OSError, ValidationError) as error:
             sys.stderr.write(f"sdi-integration: {error}\n")

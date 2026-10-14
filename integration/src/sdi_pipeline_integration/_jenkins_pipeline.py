@@ -22,6 +22,7 @@ from ._stage_runtime import (
     execute_identified_stage,
     load_stage_adapter,
     load_stage_execution,
+    reject_ungranted_supplied_inputs,
     skipped_stage_execution,
     stage_inputs,
 )
@@ -246,11 +247,10 @@ def execute_jenkins_stage(  # noqa: PLR0913
         execution_id=execution_id,
     )
     stage = DESCRIPTOR_STAGES.get(descriptor_path)
-    granted = (
-        {}
-        if stage is None
-        else stage_inputs(repository, identified, supplied, stage=stage)
-    )
+    granted: dict[str, StageInputSource] = {}
+    if stage is not None:
+        reject_ungranted_supplied_inputs(supplied, stage=stage)
+        granted = stage_inputs(repository, identified, supplied, stage=stage)
     executions, outputs = _load_execution_prefix(
         prior_attempt_roots,
         execution_id,
