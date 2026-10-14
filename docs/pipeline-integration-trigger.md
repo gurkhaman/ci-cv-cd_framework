@@ -179,7 +179,8 @@ the available receipt retrievable when GitHub still permits post-cancellation
 steps to complete.
 
 The composition Stage is implemented and calls the default generator of the
-pipeline's composition config. Image build, CV, and CD use deterministic
+committed composition config over the checked-out service repository, which no
+other Stage is given. Image build, CV, and CD use deterministic
 Fixtures, which never consume real composition output, so a successful
 composition leaves them skipped. Fixture files prove only the pipeline interface
 and evidence handling. They are not proof of a real Domain capability, CV

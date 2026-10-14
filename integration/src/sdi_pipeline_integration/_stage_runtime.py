@@ -18,7 +18,11 @@ from typing import TYPE_CHECKING, Any, get_args
 
 from pydantic import BaseModel, ValidationError
 
-from ._composition_config import CompositionSettings, resolve_composition_settings
+from ._composition_config import (
+    DEFAULT_COMPOSITION_CONFIG,
+    CompositionSettings,
+    resolve_composition_settings,
+)
 from ._contracts import (
     MobilityRequirementsSpecification,
     RunRequest,
@@ -945,18 +949,22 @@ def service_repository_source(root: Path) -> StageInputSource:
 
 @dataclass(frozen=True)
 class SuppliedInputs:
-    """The operator-supplied inputs a run names; only granted Stages read them."""
+    """The operator-supplied inputs a run names; only granted Stages read them.
 
-    service_repository: Path
-    composition_config: str
-    generator: str | None
+    An omitted composition config selects the committed default.
+    """
+
+    service_repository: Path | None = None
+    composition_config: str | None = None
+    generator: str | None = None
 
 
 def _composition_config(
     repository: GitRepository, supplied: SuppliedInputs
 ) -> CommittedBlob:
-    validate_repository_path(supplied.composition_config)
-    return repository.read_regular_file(supplied.composition_config)
+    path = supplied.composition_config or DEFAULT_COMPOSITION_CONFIG
+    validate_repository_path(path)
+    return repository.read_regular_file(path)
 
 
 def composition_key_names(
@@ -970,9 +978,12 @@ def composition_key_names(
 
 
 def _resolve_supplied_slot(
-    repository: GitRepository, supplied: SuppliedInputs, name: str
+    repository: GitRepository, supplied: SuppliedInputs, name: str, stage: StageName
 ) -> StageInputSource:
     if name == "service_repository":
+        if supplied.service_repository is None:
+            msg = f"the {stage} Stage requires a supplied service repository"
+            raise InputError(msg)
         return service_repository_source(supplied.service_repository)
     if name == "composition_settings":
         blob = _composition_config(repository, supplied)
@@ -1002,8 +1013,34 @@ def stage_inputs(
         if origin == "committed":
             sources[name] = committed[name]
         elif origin == "supplied":
-            sources[name] = _resolve_supplied_slot(repository, supplied, name)
+            sources[name] = _resolve_supplied_slot(repository, supplied, name, stage)
     return sources
+
+
+def reject_ungranted_supplied_inputs(
+    supplied: SuppliedInputs, *, stage: StageName
+) -> None:
+    """Reject a supplied input that one Stage's command names but is not granted.
+
+    Local dispatch supplies one run's inputs to every Stage, so only commands
+    that execute a single Stage call this.
+    """
+    granted = EXPECTED_STAGE_INPUT_SLOTS[stage]
+    named = {
+        "service repository": (
+            "service_repository",
+            supplied.service_repository is not None,
+        ),
+        "composition config": (
+            "composition_settings",
+            supplied.composition_config is not None,
+        ),
+        "generator": ("composition_settings", supplied.generator is not None),
+    }
+    for label, (slot, given) in named.items():
+        if given and slot not in granted:
+            msg = f"the {stage} Stage is not granted a supplied {label}"
+            raise InputError(msg)
 
 
 def composition_settings_source(
@@ -1380,6 +1417,7 @@ def execute_stage(  # noqa: PLR0913
     repository = GitRepository(repository_path, resolved_commit)
     repository.require_ref_commit(requested_ref)
     descriptor, _profile = load_stage_adapter(repository, descriptor_path)
+    reject_ungranted_supplied_inputs(supplied, stage=descriptor.stage)
     execution = execute_identified_stage(
         repository=repository,
         identified=identified,

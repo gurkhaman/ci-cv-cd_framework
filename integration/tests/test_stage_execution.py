@@ -30,6 +30,8 @@ COMMITTED_FILES = (
     "requirements/s-04/deliver-book-to-joe.md",
     "profiles/s-04/waffle-jetson-arm64.yaml",
     "integration/stage-profiles/composition-v1.yaml",
+    "integration/stage-profiles/image-build-v1.yaml",
+    "deployment/jenkins/adapters/image-build-fixture-v1.yaml",
     FIXTURE_COMPOSITION_CONFIG,
 )
 
@@ -95,20 +97,19 @@ def test_each_stage_receives_only_its_granted_run_inputs(
         resolved_commit=commit_sha,
         run_request_path=COMMITTED_FILES[0],
     )
-    service_repository = (
-        FIXTURE_SERVICE_REPOSITORY
+    supplied = (
+        SuppliedInputs(
+            service_repository=FIXTURE_SERVICE_REPOSITORY,
+            composition_config=FIXTURE_COMPOSITION_CONFIG,
+        )
         if stage == "composition"
-        else tmp_path / "absent-service-repository"
+        else SuppliedInputs()
     )
 
     inputs = stage_inputs(
         GitRepository(repository_path, commit_sha),
         identified,
-        SuppliedInputs(
-            service_repository=service_repository,
-            composition_config=FIXTURE_COMPOSITION_CONFIG,
-            generator=None,
-        ),
+        supplied,
         stage=stage,
     )
 
@@ -119,6 +120,8 @@ def _execute(
     repository: Path,
     commit_sha: str,
     attempt_root: Path,
+    supplied: tuple[str, ...] = SUPPLIED_INPUT_ARGUMENTS,
+    descriptor: str = "deployment/jenkins/adapters/composition-v1.yaml",
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -133,10 +136,10 @@ def _execute(
             "--run-request-path",
             "runs/s-04/s-04-tc-03-c-05-fixture.yaml",
             "--descriptor-path",
-            "deployment/jenkins/adapters/composition-v1.yaml",
+            descriptor,
             "--attempt-root",
             str(attempt_root),
-            *SUPPLIED_INPUT_ARGUMENTS,
+            *supplied,
         ],
         check=False,
         capture_output=True,
@@ -183,6 +186,45 @@ def test_executes_the_committed_composition_fixture_deterministically(
     assert json.loads((first_root / "accepted-attempt.json").read_text()) == (
         first_envelope
     )
+
+
+def test_composition_requires_a_supplied_service_repository(tmp_path: Path) -> None:
+    repository, commit_sha = _commit_fixture_repository(tmp_path)
+    attempt_root = tmp_path / "accepted"
+
+    completed = _execute(
+        repository,
+        commit_sha,
+        attempt_root,
+        ("--composition-config", FIXTURE_COMPOSITION_CONFIG),
+    )
+
+    assert completed.returncode == 2
+    assert "composition Stage requires a supplied service repository" in (
+        completed.stderr
+    )
+    assert not attempt_root.exists()
+
+
+def test_a_stage_not_granted_the_service_repository_rejects_it(
+    tmp_path: Path,
+) -> None:
+    repository, commit_sha = _commit_fixture_repository(tmp_path)
+    attempt_root = tmp_path / "accepted"
+
+    completed = _execute(
+        repository,
+        commit_sha,
+        attempt_root,
+        ("--service-repository", str(FIXTURE_SERVICE_REPOSITORY)),
+        descriptor="deployment/jenkins/adapters/image-build-fixture-v1.yaml",
+    )
+
+    assert completed.returncode == 2
+    assert "the image_build Stage is not granted a supplied service repository" in (
+        completed.stderr
+    )
+    assert not attempt_root.exists()
 
 
 def test_records_an_undeclared_candidate_without_salvaging_files(

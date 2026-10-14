@@ -14,6 +14,7 @@ import pytest
 from tests._fixture_inputs import (
     FIXTURE_COMPOSITION_CONFIG,
     FIXTURE_SERVICE_REPOSITORY,
+    SUPPLIED_INPUT_ARGUMENTS,
     write_fixture_composition_descriptor,
     write_scripted_adapter,
 )
@@ -86,12 +87,7 @@ def _repository(tmp_path: Path) -> tuple[Path, str]:
     return repository, _git(repository, "rev-parse", "HEAD")
 
 
-def _common(
-    repository: Path,
-    commit_sha: str,
-    request_path: str,
-    service_repository: Path = FIXTURE_SERVICE_REPOSITORY,
-) -> list[str]:
+def _common(repository: Path, commit_sha: str, request_path: str) -> list[str]:
     return [
         "--repository",
         str(repository),
@@ -103,11 +99,12 @@ def _common(
         request_path,
         "--execution-id",
         EXECUTION_ID,
-        "--service-repository",
-        str(service_repository),
-        "--composition-config",
-        FIXTURE_COMPOSITION_CONFIG,
     ]
+
+
+def _supplied(stage: str) -> tuple[str, ...]:
+    """Give the run-supplied inputs to composition, the only Stage granted them."""
+    return SUPPLIED_INPUT_ARGUMENTS if stage == "composition" else ()
 
 
 def _preflight(
@@ -115,13 +112,14 @@ def _preflight(
     commit_sha: str,
     request_path: str,
     started_millis: str,
-    service_repository: Path = FIXTURE_SERVICE_REPOSITORY,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             "sdi-integration",
             "preflight-jenkins-run",
-            *_common(repository, commit_sha, request_path, service_repository),
+            *_common(repository, commit_sha, request_path),
+            "--composition-config",
+            FIXTURE_COMPOSITION_CONFIG,
             "--handoff-contract-version",
             "sdi.github-jenkins-handoff/v1",
             "--github-run-id",
@@ -155,16 +153,9 @@ def _execute_chain(  # noqa: PLR0913, PLR0917
     started_millis: str,
     run_deadline_millis: int | None = None,
     work_limits: dict[str, str] | None = None,
-    ungranted_service_repository: Path = FIXTURE_SERVICE_REPOSITORY,
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
-    """Run every Stage; only composition is given the real service repository."""
-    preflight = _preflight(
-        repository,
-        commit_sha,
-        request_path,
-        started_millis,
-        ungranted_service_repository,
-    )
+    """Run every Stage; only composition is given the supplied inputs."""
+    preflight = _preflight(repository, commit_sha, request_path, started_millis)
     assert preflight.returncode == 0, preflight.stderr
     assert json.loads(preflight.stdout)["execution_id"] == EXECUTION_ID
 
@@ -173,15 +164,11 @@ def _execute_chain(  # noqa: PLR0913, PLR0917
     configured_work_limits = WORK_LIMITS | (work_limits or {})
     for stage, descriptor in DESCRIPTORS:
         attempt_root = root / "transfers" / stage
-        service_repository = (
-            FIXTURE_SERVICE_REPOSITORY
-            if stage == "composition"
-            else ungranted_service_repository
-        )
         command = [
             "sdi-integration",
             "execute-jenkins-stage",
-            *_common(repository, commit_sha, request_path, service_repository),
+            *_common(repository, commit_sha, request_path),
+            *_supplied(stage),
             "--descriptor-path",
             descriptor,
             "--attempt-root",
@@ -224,7 +211,7 @@ def _execute_chain(  # noqa: PLR0913, PLR0917
     command = [
         "sdi-integration",
         "finalize-jenkins-run",
-        *_common(repository, commit_sha, request_path, ungranted_service_repository),
+        *_common(repository, commit_sha, request_path),
         "--build-started-at-millis",
         started_millis,
         "--bundle-root",
@@ -281,24 +268,82 @@ def test_distributed_fixture_chain_preserves_identity_and_exact_archive(
     )
 
 
-def test_stages_not_granted_the_service_repository_never_read_it(
+def _execute_stage(
+    repository: Path,
+    commit_sha: str,
+    descriptor: str,
+    attempt_root: Path,
+    supplied: tuple[str, ...],
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            "sdi-integration",
+            "execute-jenkins-stage",
+            *_common(repository, commit_sha, SUCCESS_REQUEST),
+            *supplied,
+            "--descriptor-path",
+            descriptor,
+            "--attempt-root",
+            str(attempt_root),
+            "--work-limit-seconds",
+            "600",
+            "--run-deadline-epoch-millis",
+            str(int(time.time() * 1000) + 60_000),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_composition_without_a_service_repository_claims_no_attempt(
     tmp_path: Path,
 ) -> None:
     repository, commit_sha = _repository(tmp_path)
+    attempt = tmp_path / "attempt"
 
-    conclusion, result = _execute_chain(
+    executed = _execute_stage(
         repository,
         commit_sha,
-        SUCCESS_REQUEST,
-        tmp_path / "run",
-        str(int((time.time() - 1) * 1000)),
-        ungranted_service_repository=tmp_path / "absent-service-repository",
+        DESCRIPTORS[0][1],
+        attempt,
+        ("--composition-config", FIXTURE_COMPOSITION_CONFIG),
     )
 
-    assert conclusion.returncode == 0, conclusion.stderr
-    assert all(
-        attempt["execution_conclusion"] == "succeeded" for attempt in result["attempts"]
+    assert executed.returncode == 2
+    assert "composition Stage requires a supplied service repository" in (
+        executed.stderr
     )
+    assert not attempt.exists()
+
+
+@pytest.mark.parametrize(
+    ("supplied", "label"),
+    [
+        (
+            ("--service-repository", str(FIXTURE_SERVICE_REPOSITORY)),
+            "service repository",
+        ),
+        (("--composition-config", FIXTURE_COMPOSITION_CONFIG), "composition config"),
+        (("--generator", "fixture"), "generator"),
+    ],
+)
+@pytest.mark.parametrize(("stage", "descriptor"), DESCRIPTORS[1:])
+def test_stages_not_granted_supplied_inputs_reject_them(
+    tmp_path: Path,
+    stage: str,
+    descriptor: str,
+    supplied: tuple[str, ...],
+    label: str,
+) -> None:
+    repository, commit_sha = _repository(tmp_path)
+    attempt = tmp_path / "attempt"
+
+    executed = _execute_stage(repository, commit_sha, descriptor, attempt, supplied)
+
+    assert executed.returncode == 2
+    assert f"the {stage} Stage is not granted a supplied {label}" in executed.stderr
+    assert not attempt.exists()
 
 
 def test_distributed_implemented_composition_skips_fixture_stages(
@@ -492,6 +537,7 @@ def test_expired_run_deadline_does_not_launch_stage(tmp_path: Path) -> None:
             "sdi-integration",
             "execute-jenkins-stage",
             *_common(repository, commit_sha, SUCCESS_REQUEST),
+            *SUPPLIED_INPUT_ARGUMENTS,
             "--descriptor-path",
             DESCRIPTORS[0][1],
             "--attempt-root",
@@ -567,6 +613,7 @@ def test_tampered_attempt_transfer_is_rejected(tmp_path: Path) -> None:
             "sdi-integration",
             "execute-jenkins-stage",
             *_common(repository, commit_sha, SUCCESS_REQUEST),
+            *SUPPLIED_INPUT_ARGUMENTS,
             "--descriptor-path",
             DESCRIPTORS[0][1],
             "--attempt-root",
@@ -636,6 +683,7 @@ def test_external_cancellation_publishes_no_attempt(tmp_path: Path) -> None:
             "sdi-integration",
             "execute-jenkins-stage",
             *_common(repository, commit_sha, SUCCESS_REQUEST),
+            *SUPPLIED_INPUT_ARGUMENTS,
             "--descriptor-path",
             DESCRIPTORS[0][1],
             "--attempt-root",
