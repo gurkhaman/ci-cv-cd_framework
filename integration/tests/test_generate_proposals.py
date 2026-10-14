@@ -1,13 +1,14 @@
 """Public-boundary checks for model-generated composition proposals.
 
-These call a real model: the self-hosted Qwen endpoint while it answers, else
-OpenAI's luna. They assert the command's contract, never what the model chose
-or how it worded it.
+The live checks call a real model: the self-hosted qwen generator while its
+endpoint serves it, else luna. They assert the command's contract, never what
+the model chose or how it worded it.
 """
 
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import shutil
@@ -16,14 +17,20 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from tests._live_model import CONFIGS, REPOSITORY_ROOT, live_config, openai_key
+from tests._live_model import (
+    COMPOSITION_CONFIG,
+    REPOSITORY_ROOT,
+    lexical_only_config,
+    live_generator,
+    live_keys,
+)
 from tests._proposals import COMPLETE
 from tests._stub_provider import (
     BODIES,
     STUB_KEY,
+    UNAVAILABLE_EMBEDDINGS,
     proposals_body,
     stub_config,
-    stub_embeddings,
     stub_provider,
 )
 
@@ -68,6 +75,7 @@ def _generate(
     config: Path,
     env: dict[str, str],
     service_repository: Path = SERVICE_REPOSITORY,
+    generator: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -76,8 +84,9 @@ def _generate(
             "--service-repository",
             str(service_repository),
             *INPUTS,
-            "--generation-config",
+            "--composition-config",
             str(config),
+            *([] if generator is None else ["--generator", generator]),
             "--output",
             str(tmp_path / "proposals.json"),
             "--evidence",
@@ -91,12 +100,12 @@ def _generate(
 
 
 def test_generates_proposals_the_assessment_accepts(tmp_path: Path) -> None:
-    config, key_name = live_config()
-    api_key = os.environ.get(key_name) or openai_key()
-    if api_key is None:
-        pytest.skip("neither the Qwen endpoint nor an OpenAI key is available")
+    generator = live_generator()
+    keys = live_keys(generator)
+    if keys is None:
+        pytest.skip(f"the {generator} or embeddings key is unavailable")
 
-    completed = _generate(tmp_path, config, {key_name: api_key})
+    completed = _generate(tmp_path, COMPOSITION_CONFIG, keys, generator=generator)
 
     assert completed.returncode == 0, completed.stderr
     proposals = json.loads((tmp_path / "proposals.json").read_text())
@@ -119,16 +128,22 @@ def test_generates_proposals_the_assessment_accepts(tmp_path: Path) -> None:
     evidence_text = (tmp_path / "evidence.json").read_text()
     evidence = json.loads(evidence_text)
     assert evidence["outcome"] == "generated"
+    assert evidence["settings"]["generator"] == generator
     assert evidence["request"]["model"] == evidence["settings"]["model"]
     assert evidence["request"]["text"]["format"]["strict"] is True
     assert evidence["response"]["status"] == "completed"
-    assert api_key not in evidence_text + completed.stdout + completed.stderr
+    assert evidence["discovery"]["dense"]["status"] == "used"
+    for api_key in keys.values():
+        assert api_key not in evidence_text + completed.stdout + completed.stderr
 
 
 def test_provider_error_writes_no_proposals(tmp_path: Path) -> None:
-    config, key_name = live_config()
+    generator = live_generator()
+    config = tmp_path / "config.yaml"
+    config.write_text(lexical_only_config())
+    key_name = "VLLM_KEY" if generator == "qwen" else "OPENAI_API_KEY"
     api_key = "sk-test-only-invalid"
-    completed = _generate(tmp_path, config, {key_name: api_key})
+    completed = _generate(tmp_path, config, {key_name: api_key}, generator=generator)
 
     assert completed.returncode == 1, completed.stderr
     assert "provider_error" in completed.stderr
@@ -167,31 +182,58 @@ def test_reports_why_the_provider_returned_no_proposals(
     assert STUB_KEY not in evidence_text + completed.stdout + completed.stderr
 
 
-def test_rejects_an_unknown_generation_setting(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        (("  luna:\n", "  luna:\n    temperature: 0\n"), "temperature"),
+        (
+            ("default_generator: luna", "default_generator: absent"),
+            "default_generator must name a defined generator",
+        ),
+        (("  embeddings:\n", "  embeddings:\n    on_unavailable: skip\n"), "skip"),
+    ],
+)
+def test_rejects_an_invalid_composition_config(
+    tmp_path: Path, change: tuple[str, str], message: str
+) -> None:
     config = tmp_path / "config.yaml"
-    config.write_text(f"{(CONFIGS / 'luna.yaml').read_text()}temperature: 0\n")
+    config.write_text(COMPOSITION_CONFIG.read_text().replace(*change, 1))
 
     completed = _generate(tmp_path, config, {})
 
     assert completed.returncode == 2
-    assert "temperature" in completed.stderr
+    assert message in completed.stderr
     assert not (tmp_path / "evidence.json").exists()
 
 
-def _stub_generate(
+def test_rejects_a_generator_the_config_does_not_name(tmp_path: Path) -> None:
+    completed = _generate(tmp_path, COMPOSITION_CONFIG, {}, generator="absent")
+
+    assert completed.returncode == 2
+    assert "unknown generator 'absent'; the config defines luna, qwen" in (
+        completed.stderr
+    )
+    assert not (tmp_path / "evidence.json").exists()
+
+
+def _stub_generate(  # noqa: PLR0913
     tmp_path: Path,
     body: dict[str, object],
-    extra: str = "",
+    *,
     service_repository: Path = SERVICE_REPOSITORY,
+    keys: dict[str, str] | None = None,
+    generator: str | None = None,
+    received: list[tuple[str, str]] | None = None,
+    **config: Any,  # noqa: ANN401
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
-    config = tmp_path / "stub.yaml"
-    with stub_provider(body) as base_url:
-        config.write_text(stub_config(base_url, extra.format(base_url=base_url)))
-        completed = _generate(
-            tmp_path, config, {"VLLM_KEY": STUB_KEY}, service_repository
-        )
+    path = tmp_path / "stub.yaml"
+    keys = {"VLLM_KEY": STUB_KEY} if keys is None else keys
+    with stub_provider(body, received) as base_url:
+        path.write_text(stub_config(base_url, **config))
+        completed = _generate(tmp_path, path, keys, service_repository, generator)
     evidence_text = (tmp_path / "evidence.json").read_text()
-    assert STUB_KEY not in evidence_text + completed.stdout + completed.stderr
+    for api_key in keys.values():
+        assert api_key not in evidence_text + completed.stdout + completed.stderr
     return completed, json.loads(evidence_text)
 
 
@@ -234,7 +276,7 @@ def test_the_context_budget_bounds_discovery_and_says_what_it_left_out(
     tmp_path: Path,
 ) -> None:
     completed, evidence = _stub_generate(
-        tmp_path, BODIES["off-schema"], "max_context_bytes: 4000\n"
+        tmp_path, BODIES["off-schema"], max_context_bytes=4000
     )
 
     assert completed.returncode == 1
@@ -260,9 +302,7 @@ def test_the_context_budget_bounds_discovery_and_says_what_it_left_out(
 def test_dense_ranking_joins_lexical_ranking_when_embeddings_are_configured(
     tmp_path: Path,
 ) -> None:
-    completed, evidence = _stub_generate(
-        tmp_path, BODIES["off-schema"], stub_embeddings("{base_url}")
-    )
+    completed, evidence = _stub_generate(tmp_path, BODIES["off-schema"], embeddings={})
 
     assert completed.returncode == 1
     discovery = evidence["discovery"]
@@ -270,3 +310,104 @@ def test_dense_ranking_joins_lexical_ranking_when_embeddings_are_configured(
     assert discovery["dense"]["model"] == "stub/embeddings"
     for query in discovery["queries"]:
         assert all(isinstance(item["dense"], int) for item in query["ranked"])
+
+
+@pytest.mark.parametrize(
+    ("embeddings", "status"),
+    [
+        ({"api_key_env": "SDI_TEST_UNSET_KEY"}, "key-unset"),
+        ({"model": UNAVAILABLE_EMBEDDINGS}, "failed"),
+    ],
+)
+def test_declared_embeddings_that_are_unavailable_fail_before_generation(
+    tmp_path: Path, embeddings: dict[str, str], status: str
+) -> None:
+    received: list[tuple[str, str]] = []
+    completed, evidence = _stub_generate(
+        tmp_path, BODIES["off-schema"], embeddings=embeddings, received=received
+    )
+
+    assert completed.returncode == 1
+    assert f"dense-discovery-unavailable: embeddings {status}" in completed.stderr
+    assert evidence["outcome"] == "dense-discovery-unavailable"
+    assert evidence["discovery"]["dense"]["status"] == status
+    assert "request" not in evidence
+    assert not any(path.endswith("/responses") for path, _ in received)
+
+
+def test_embeddings_may_allow_lexical_only_discovery_and_say_so(
+    tmp_path: Path,
+) -> None:
+    completed, evidence = _stub_generate(
+        tmp_path,
+        BODIES["off-schema"],
+        embeddings={"api_key_env": "SDI_TEST_UNSET_KEY", "on_unavailable": "lexical"},
+    )
+
+    assert completed.returncode == 1
+    assert "embeddings key-unset; discovery is lexical only" in completed.stderr
+    assert evidence["outcome"] == "invalid"
+    assert evidence["discovery"]["dense"]["status"] == "key-unset"
+
+
+def test_a_named_generator_replaces_the_default(tmp_path: Path) -> None:
+    received: list[tuple[str, str]] = []
+    # The default generator is unreachable; naming another must not touch it.
+    other = (
+        "  other:\n"
+        "    model: other/model\n"
+        "    reasoning_effort: high\n"
+        "    max_output_tokens: 2000\n"
+        "    timeout_seconds: 60\n"
+        "    max_context_bytes: 50000\n"
+        "    base_url: {base_url}\n"
+        "    api_key_env: SDI_TEST_OTHER_KEY\n"
+    )
+    path = tmp_path / "stub.yaml"
+    with stub_provider(BODIES["off-schema"], received) as base_url:
+        path.write_text(
+            stub_config("http://127.0.0.1:9/v1", generators=other).replace(
+                "{base_url}", base_url
+            )
+        )
+        completed = _generate(
+            tmp_path,
+            path,
+            {"SDI_TEST_OTHER_KEY": "sk-test-only-other"},
+            generator="other",
+        )
+
+    assert completed.returncode == 1, completed.stderr
+    evidence = json.loads((tmp_path / "evidence.json").read_text())
+    assert evidence["outcome"] == "invalid"
+    assert evidence["settings"]["generator"] == "other"
+    assert evidence["settings"]["max_context_bytes"] == 50000
+    assert evidence["settings"]["composition_config_sha256"] == (
+        hashlib.sha256(path.read_bytes()).hexdigest()
+    )
+    assert "api_key_env" not in evidence["settings"]
+    assert evidence["request"]["model"] == "other/model"
+    assert received == [("/v1/responses", "Bearer sk-test-only-other")]
+
+
+def test_each_endpoint_receives_only_its_own_key(tmp_path: Path) -> None:
+    received: list[tuple[str, str]] = []
+    keys = {
+        "VLLM_KEY": "sk-test-only-generator",
+        "OPENAI_API_KEY": "sk-test-only-dense",
+    }
+
+    completed, evidence = _stub_generate(
+        tmp_path,
+        BODIES["off-schema"],
+        keys=keys,
+        embeddings={"api_key_env": "OPENAI_API_KEY"},
+        received=received,
+    )
+
+    assert completed.returncode == 1
+    assert evidence["discovery"]["dense"]["status"] == "used"
+    assert sorted(received) == [
+        ("/v1/embeddings", "Bearer sk-test-only-dense"),
+        ("/v1/responses", "Bearer sk-test-only-generator"),
+    ]

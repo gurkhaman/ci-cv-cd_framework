@@ -14,7 +14,7 @@ from typing import cast
 import pytest
 
 from tests._fixture_inputs import (
-    FIXTURE_GENERATION_CONFIG,
+    FIXTURE_COMPOSITION_CONFIG,
     SUPPLIED_INPUT_ARGUMENTS,
     write_fixture_composition_descriptor,
     write_scripted_adapter,
@@ -62,7 +62,7 @@ COMMITTED_FILES = (
     "runs/conformance/composition-oversize-output.yaml",
     "runs/conformance/composition-response-mismatch.yaml",
     "runs/conformance/composition-schema-mismatch.yaml",
-    FIXTURE_GENERATION_CONFIG,
+    FIXTURE_COMPOSITION_CONFIG,
 )
 VOLATILE_RESULT_FIELDS = {"execution_id", "started_at", "finished_at", "duration_ms"}
 
@@ -231,7 +231,7 @@ def test_dispatches_a_contract_valid_deterministic_four_stage_fixture(
             "requirements_specification",
             "target_profile",
             "service_repository",
-            "generation_config",
+            "composition_settings",
         ],
         ["target_profile", "composition_blueprint", "deployment_schema"],
         [

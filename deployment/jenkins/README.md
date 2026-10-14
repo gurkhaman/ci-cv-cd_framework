@@ -168,16 +168,18 @@ descriptors declare no Domain secret binding, and no agent container sees a
 controller password.
 
 The composition descriptor binds `OPENAI_API_KEY` and `VLLM_KEY`. The root
-pipeline composes with `integration/generation-configs/luna.yaml`, because the
-agents cannot reach the self-hosted Qwen endpoint, and binds the Jenkins secret
+pipeline reads `integration/composition-config.yaml` and passes no generator, so
+it composes with the default luna generator; the agents cannot reach the
+self-hosted qwen endpoint. It binds the Jenkins secret
 text credential `sdi-openai-api-key` as `OPENAI_API_KEY` around the composition
 Stage only. JCasC creates that credential from the file named by
 `JENKINS_OPENAI_API_KEY_FILE`, which holds only the key. JCasC reads that file
 only at controller startup and overwrites UI edits to the credential, so rotate
 the key while no build runs: rewrite the file, keep it mode `0600`, then run
 `bin/stack stop` and `bin/stack start`. Allow the `ci` agent
-HTTPS egress to `api.openai.com`. Without a valid key or that egress,
-composition fails with `sdi.composition.provider-error` and the build is red.
+HTTPS egress to `api.openai.com`, which serves both luna and the embeddings.
+Without a valid key or that egress, composition fails with
+`sdi.composition.dense-discovery-unavailable` and the build is red.
 The pipeline passes the checked-out `service-repository/` to every Stage
 command.
 

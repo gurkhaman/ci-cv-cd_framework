@@ -19,10 +19,10 @@ inputs:
     path: service-repository.json
     media_type: application/json
     schema_version: sdi.service-repository-manifest/v1
-  - slot: generation_config
-    path: generation-config.yaml
-    media_type: application/yaml
-    schema_version: sdi.generation-config/v1
+  - slot: composition_settings
+    path: composition-settings.json
+    media_type: application/json
+    schema_version: sdi.composition-settings/v1
 outputs:
   - slot: composition_blueprint
     path: outputs/composition-blueprint.json

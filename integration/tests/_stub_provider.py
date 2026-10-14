@@ -3,10 +3,11 @@
 Live tests cover generated, exhausted and rejected-key outcomes against the real
 provider. A refusal, a content-filter stop, output outside the proposal schema,
 a failed response and a chosen set of proposals cannot be requested from it, so
-these tests point a generation config's base_url at this stub, which answers
+these tests point a composition config's base_url at this stub, which answers
 every Responses request with one recorded body. Embeddings requests get a small
 deterministic vector per input text, so discovery's dense ranking runs without
-a provider. The real SDK still parses every answer.
+a provider, or a server error for one named model. The real SDK still parses
+every answer.
 """
 
 from __future__ import annotations
@@ -21,6 +22,8 @@ if TYPE_CHECKING:
     from collections.abc import Generator
 
 STUB_KEY = "stub-only-key"
+# The embeddings model the stub answers with a server error.
+UNAVAILABLE_EMBEDDINGS = "stub/unavailable"
 
 
 def _response(
@@ -107,15 +110,19 @@ def _embeddings(request: dict[str, Any]) -> bytes:
 
 class _Handler(BaseHTTPRequestHandler):
     body: ClassVar[bytes] = b""
+    received: ClassVar[list[tuple[str, str]]] = []
 
     def do_POST(self) -> None:
         request = self.rfile.read(int(self.headers.get("Content-Length", "0")))
-        body = (
-            _embeddings(json.loads(request))
-            if self.path.endswith("/embeddings")
-            else self.body
-        )
-        self.send_response(200)
+        self.received.append((self.path, self.headers.get("Authorization", "")))
+        status, body = 200, self.body
+        if self.path.endswith("/embeddings"):
+            embedding = json.loads(request)
+            if embedding["model"] == UNAVAILABLE_EMBEDDINGS:
+                status, body = 503, b'{"error": {"message": "unavailable"}}'
+            else:
+                body = _embeddings(embedding)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -126,9 +133,21 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def stub_provider(body: dict[str, object]) -> Generator[str]:
-    """Serve one recorded body to every request; yield the base_url."""
-    handler = type("Handler", (_Handler,), {"body": json.dumps(body).encode()})
+def stub_provider(
+    body: dict[str, object], received: list[tuple[str, str]] | None = None
+) -> Generator[str]:
+    """Serve one recorded body to every request; yield the base_url.
+
+    Each request's path and Authorization header are appended to received.
+    """
+    handler = type(
+        "Handler",
+        (_Handler,),
+        {
+            "body": json.dumps(body).encode(),
+            "received": [] if received is None else received,
+        },
+    )
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -139,25 +158,39 @@ def stub_provider(body: dict[str, object]) -> Generator[str]:
         server.server_close()
 
 
-def stub_config(base_url: str, extra: str = "") -> str:
-    """Return a generation config that sends requests to the stub."""
-    return (
-        "schema_version: sdi.generation-config/v1\n"
-        "model: stub/model\n"
-        "reasoning_effort: low\n"
-        "max_output_tokens: 1000\n"
-        "timeout_seconds: 30\n"
-        f"base_url: {base_url}\n"
-        "api_key_env: VLLM_KEY\n"
-        f"{extra}"
-    )
+def stub_config(
+    base_url: str,
+    *,
+    max_context_bytes: int = 98304,
+    embeddings: dict[str, str] | None = None,
+    generators: str = "",
+) -> str:
+    """Return a composition config whose default generator, stub, is the stub.
 
-
-def stub_embeddings(base_url: str) -> str:
-    """Return the config lines that send embeddings requests to the stub."""
+    Embeddings settings, when given, override the stub's embeddings endpoint;
+    generators adds further generator entries.
+    """
+    discovery = "discovery: {}\n"
+    if embeddings is not None:
+        settings = {
+            "model": "stub/embeddings",
+            "base_url": base_url,
+            "api_key_env": "VLLM_KEY",
+        } | embeddings
+        discovery = "discovery:\n  embeddings:\n" + "".join(
+            f"    {name}: {value}\n" for name, value in settings.items()
+        )
     return (
-        "embeddings:\n"
-        "  model: stub/embeddings\n"
-        f"  base_url: {base_url}\n"
-        "  api_key_env: VLLM_KEY\n"
+        "schema_version: sdi.composition-config/v1\n"
+        "default_generator: stub\n"
+        "generators:\n"
+        "  stub:\n"
+        "    model: stub/model\n"
+        "    reasoning_effort: low\n"
+        "    max_output_tokens: 1000\n"
+        "    timeout_seconds: 30\n"
+        f"    max_context_bytes: {max_context_bytes}\n"
+        f"    base_url: {base_url}\n"
+        "    api_key_env: VLLM_KEY\n"
+        f"{generators}{discovery}"
     )

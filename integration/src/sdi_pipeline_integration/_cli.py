@@ -16,8 +16,12 @@ from typing import TYPE_CHECKING, Any, cast
 from pydantic import ValidationError
 
 from ._assessment import assess_proposal_files, load_assessment_inputs
+from ._composition_config import (
+    DEFAULT_COMPOSITION_CONFIG,
+    resolve_composition_settings,
+)
 from ._discovery import discover
-from ._generation import MAX_RETRIES, GenerationConfig, generate_proposals
+from ._generation import generate_proposals
 from ._github_actions import render_github_summary
 from ._github_dispatch import GitHubDispatchError, dispatch_s04
 from ._jenkins_handoff import HandoffError, handoff_jenkins
@@ -39,7 +43,7 @@ from ._schemas import check_schemas, write_schemas
 from ._service_descriptions import read_service_repository
 from ._stage_contracts import AdapterDescriptor
 from ._stage_runtime import ExternalCancellation, execute_stage
-from ._yaml_input import InputError, parse_yaml, validate_contract
+from ._yaml_input import InputError, parse_yaml
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
@@ -115,12 +119,13 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     generate.add_argument("--target-profile", type=Path, required=True)
     generate.add_argument("--requirements-specification", type=Path, required=True)
     generate.add_argument(
-        "--generation-config",
+        "--composition-config",
         type=Path,
         required=True,
-        help="model settings: integration/generation-configs/qwen.yaml, or "
-        "luna.yaml when the self-hosted endpoint is unavailable",
+        help="file path of the composition config; the committed one is "
+        f"{DEFAULT_COMPOSITION_CONFIG}",
     )
+    _add_generator_argument(generate)
     generate.add_argument("--output", type=Path, required=True)
     generate.add_argument("--evidence", type=Path, required=True)
     adapter_image = commands.add_parser(
@@ -262,10 +267,18 @@ def _add_supplied_input_arguments(parser: argparse.ArgumentParser) -> None:
         help="directory of SDI.md service descriptions given to composition",
     )
     parser.add_argument(
-        "--generation-config",
-        required=True,
-        help="repository path of the generation config, read at the resolved "
-        "commit: integration/generation-configs/qwen.yaml or luna.yaml",
+        "--composition-config",
+        default=DEFAULT_COMPOSITION_CONFIG,
+        help="repository path of the composition config, read at the resolved "
+        f"commit (default {DEFAULT_COMPOSITION_CONFIG})",
+    )
+    _add_generator_argument(parser)
+
+
+def _add_generator_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--generator",
+        help="a generator the composition config names, instead of its default",
     )
 
 
@@ -302,35 +315,45 @@ def _write_json(path: Path, document: object) -> None:
 def _generate_proposals(arguments: argparse.Namespace) -> int:
     try:
         arguments.output.unlink(missing_ok=True)
-        config = validate_contract(
-            GenerationConfig,
-            parse_yaml(
-                arguments.generation_config.read_bytes(),
-                str(arguments.generation_config),
-            ),
-            str(arguments.generation_config),
+        composition = resolve_composition_settings(
+            arguments.composition_config.read_bytes(),
+            path=str(arguments.composition_config),
+            generator=arguments.generator,
         )
+        config = composition.generator_config
         inputs = load_assessment_inputs(
             service_repository=arguments.service_repository,
             target_profile=arguments.target_profile,
             requirements_specification=arguments.requirements_specification,
         )
+        embeddings = composition.discovery.embeddings
         discovery = discover(
             inputs,
-            embeddings=config.embeddings,
+            embeddings=embeddings,
             max_context_bytes=config.max_context_bytes,
         )
-        settings = config.model_dump(exclude_none=True) | {"max_retries": MAX_RETRIES}
-        if not discovery.selected:
+        settings = composition.evidence_settings()
+        stopped, lexical_only = discovery.stop_reason(embeddings)
+        if stopped == "dense-discovery-unavailable":
+            sys.stderr.write(
+                f"sdi-integration: {stopped}: embeddings {discovery.dense_status}\n"
+            )
+        elif stopped is not None:
+            sys.stderr.write(f"sdi-integration: {stopped}\n")
+        if lexical_only:
+            sys.stderr.write(
+                f"sdi-integration: embeddings {discovery.dense_status}; "
+                "discovery is lexical only\n"
+            )
+        if stopped is not None:
             _write_json(
                 arguments.evidence,
                 {
                     "settings": settings,
-                    "outcome": discovery.empty_outcome,
+                    "outcome": stopped,
                     "discovery": discovery.record,
                 },
             )
-            sys.stderr.write(f"sdi-integration: {discovery.empty_outcome}\n")
             return 1
         result = generate_proposals(inputs=inputs, discovery=discovery, config=config)
         evidence = {
@@ -461,7 +484,8 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
                     descriptor_path=arguments.descriptor_path,
                     attempt_root=arguments.attempt_root,
                     service_repository=arguments.service_repository,
-                    generation_config=arguments.generation_config,
+                    composition_config=arguments.composition_config,
+                    generator=arguments.generator,
                 )
         except ExternalCancellation as cancellation:
             if not attempt_existed:
@@ -497,7 +521,8 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
                     "cd": arguments.cd_node,
                 },
                 service_repository=arguments.service_repository,
-                generation_config=arguments.generation_config,
+                composition_config=arguments.composition_config,
+                generator=arguments.generator,
             )
         except (InputError, OSError, ValidationError) as error:
             sys.stderr.write(f"sdi-integration: {error}\n")
@@ -556,7 +581,8 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
                     work_limit_seconds=arguments.work_limit_seconds,
                     run_deadline_epoch_millis=arguments.run_deadline_epoch_millis,
                     service_repository=arguments.service_repository,
-                    generation_config=arguments.generation_config,
+                    composition_config=arguments.composition_config,
+                    generator=arguments.generator,
                 )
         except ExternalCancellation as cancellation:
             if not attempt_existed:
@@ -598,7 +624,8 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
                 run_deadline_expired=arguments.run_deadline_expired,
                 bundle_root=arguments.bundle_root,
                 service_repository=arguments.service_repository,
-                generation_config=arguments.generation_config,
+                composition_config=arguments.composition_config,
+                generator=arguments.generator,
             )
         except (InputError, OSError, ValidationError) as error:
             sys.stderr.write(f"sdi-integration: {error}\n")
@@ -630,7 +657,8 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
                     run_request_path=arguments.run_request_path,
                     bundle_root=arguments.bundle_root,
                     service_repository=arguments.service_repository,
-                    generation_config=arguments.generation_config,
+                    composition_config=arguments.composition_config,
+                    generator=arguments.generator,
                 )
         except ExternalCancellation as cancellation:
             if not bundle_existed:

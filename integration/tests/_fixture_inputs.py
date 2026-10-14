@@ -2,7 +2,7 @@
 
 The committed composition descriptor selects the implemented adapter. Tests of
 the runtime and the Stage chain replace it with a Fixture descriptor, and supply
-the service repository and generation config that the Fixture cases match by
+the service repository and composition config that the Fixture cases match by
 exact digest.
 """
 
@@ -14,7 +14,7 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).parents[2]
 
 COMPOSITION_DESCRIPTOR = "deployment/jenkins/adapters/composition-v1.yaml"
-FIXTURE_GENERATION_CONFIG = "integration/tests/data/fixture-generation-config.yaml"
+FIXTURE_COMPOSITION_CONFIG = "integration/tests/data/fixture-composition-config.yaml"
 FIXTURE_SERVICE_REPOSITORY = (
     REPOSITORY_ROOT / "integration/tests/data/fixture-service-repository"
 )
@@ -25,8 +25,8 @@ RUNTIME_IMAGE = (
 SUPPLIED_INPUT_ARGUMENTS = (
     "--service-repository",
     str(FIXTURE_SERVICE_REPOSITORY),
-    "--generation-config",
-    FIXTURE_GENERATION_CONFIG,
+    "--composition-config",
+    FIXTURE_COMPOSITION_CONFIG,
 )
 
 

@@ -43,17 +43,29 @@ uv run --project integration sdi-integration execute-stage \
   --run-request-path runs/s-04/s-04-tc-03-c-05-fixture.yaml \
   --descriptor-path deployment/jenkins/adapters/composition-v1.yaml \
   --service-repository service-repository \
-  --generation-config integration/generation-configs/qwen.yaml \
   --attempt-root artifacts/composition-attempt
 ```
 
-Every Stage-executing command takes the same two run-supplied composition
-inputs. `--service-repository` names a directory of `SDI.md` descriptions; the
-runtime copies every description into the composition Stage's inputs and gives
-the adapter a manifest of their paths, sizes, and digests. It refuses symbolic
+Every Stage-executing command takes the same run-supplied composition inputs.
+`--service-repository` names a directory of `SDI.md` descriptions; the runtime
+copies every description into the composition Stage's inputs and gives the
+adapter a manifest of their paths, sizes, and digests. It refuses symbolic
 links, non-regular descriptions, and more than 256 files or 1 MiB.
-`--generation-config` is a repository path read at the resolved commit, so a run
-can only pair a reviewed model endpoint with the key variable that config names.
+`--composition-config` is a repository path read at the resolved commit and
+defaults to `integration/composition-config.yaml`
+(`sdi.composition-config/v1`), so a run can only pair a reviewed model endpoint
+with the key variable that config names. The config names each generator with
+its model, limits, context budget, endpoint and key variable, the
+`default_generator`, and the `discovery` settings every generator shares. A run
+uses the default generator (luna) unless `--generator NAME` names another the
+config defines; an unknown name stops the run before launch. Nothing probes an
+endpoint or falls back to another generator. The runtime resolves the config to
+one declared, digest-checked input, `composition-settings.json`
+(`sdi.composition-settings/v1`): the config's path and SHA-256, the selected
+generator's name and settings, and the shared discovery settings. The committed
+`qwen` generator is a self-hosted endpoint that keeps live tests cheap; it is not
+a product choice. Discovery still embeds with OpenAI, so a qwen run also needs
+`OPENAI_API_KEY`.
 
 The adapter process exposes only:
 
@@ -80,19 +92,27 @@ available, so equal proposals keep the model's order. The blueprint records the
 Discovery queries the service repository once per requirement, with its ID and
 original Shall statement, and once with the profile's architectures, devices,
 baselines and orchestrator interfaces. SQLite FTS5 BM25 ranks every
-description's title, interfaces and body; when the generation config has an
-`embeddings` block, cosine similarity over that endpoint's embeddings ranks them
-too, and reciprocal rank fusion merges the two. The orchestrator's inputs, then
+description's title, interfaces and body; when the composition config's
+`discovery` has an `embeddings` block, cosine similarity over that endpoint's
+embeddings ranks them too, and reciprocal rank fusion merges the two. The
+committed config embeds with OpenAI's `text-embedding-3-small` for every
+generator, so every generator ranks descriptions the same way. The orchestrator's inputs, then
 each query's top three services in turn, are admitted along with every service
 that provides one of their inputs or that their `depends_on` names. Admission
-stops at `max_context_bytes` (96 KiB of descriptions by default) and nothing
-fills the rest, so the model sees and may choose only the selected
-descriptions. When embeddings are unconfigured, their key is unset or the call
-fails, discovery is lexical only and says why.
+stops at the selected generator's `max_context_bytes`, a model-capacity limit,
+and nothing fills the rest, so the model sees and may choose only the selected
+descriptions. Without an `embeddings` block discovery is lexical only. With one,
+an unset key or a failed embeddings call fails the run before generation, unless
+`embeddings.on_unavailable: lexical` allows lexical-only discovery; the Stage's
+reason summary and the `generate-proposals` stderr then say so, besides
+`discovery.dense.status`.
 
-The runtime forwards only the key variables named by the generation config, and
-only when the descriptor's `secret_bindings` lists them; otherwise the run stops
-before launch. `HTTPS_PROXY`, `NO_PROXY`, and `SSL_CERT_FILE` are forwarded when
+The runtime forwards only the selected generator's key variable and the
+embeddings key variable, and only when the descriptor's `secret_bindings` lists
+them; otherwise `dispatch-local` and the Jenkins preflight reject the run before
+any Stage starts. Each client reads only the key
+paired with its own endpoint, so a generator's key never reaches the embeddings
+endpoint and the embeddings key never reaches a generator. `HTTPS_PROXY`, `NO_PROXY`, and `SSL_CERT_FILE` are forwarded when
 set. A candidate holding the forwarded key's exact bytes is rejected.
 
 | Outcome code | Execution | Domain outcome | Published |
@@ -103,6 +123,7 @@ set. A candidate holding the forwarded key's exact bytes is rejected.
 | `sdi.composition.insufficient-proposals` | succeeded | failed | evidence |
 | `sdi.composition.discovery-no-result` | failed | not evaluated | diagnostic |
 | `sdi.composition.discovery-over-budget` | failed | not evaluated | diagnostic |
+| `sdi.composition.dense-discovery-unavailable` | failed | not evaluated | diagnostic |
 | `sdi.composition.invalid-service-description` | failed | not evaluated | diagnostic |
 | `sdi.composition.generation-invalid` | failed | not evaluated | diagnostic |
 | `sdi.composition.generation-refused` | failed | not evaluated | diagnostic |
@@ -115,7 +136,8 @@ budget. A bounded result means generation reached `max_output_tokens`. A scoped
 rejection means every proposal lost all of its services to placement removals.
 `composition-evidence.json` (`sdi.composition-evidence/v1`, at most 256 KiB)
 records the repository's description digests, the discovery trace, the
-generation settings, the exact model request and response summary, and the
+`composition_config_sha256`, the selected generator's name and resolved
+settings, the exact model request and response summary, and the
 complete assessment with its ranking order and, for each other eligible
 proposal, the criterion that ranked it lower. The discovery trace holds each
 query, its top ten fused, lexical and dense ranks, every selected description
@@ -130,10 +152,11 @@ that is not a full commit. It is read from the declared route only, never
 resolved against a registry, and never counts as a gap. Reading the repository
 fails rather than truncates at its limits, so the digests omit no description.
 Reason summaries and the diagnostic come from fixed templates
-and never repeat provider error text. Once the generation config is read, the
-diagnostic names its model, reasoning effort, output limit, effective timeout
-and context budget, so a failed attempt still records the settings it ran with. A failed
-attempt publishes no evidence, and its diagnostic says so.
+and never repeat provider error text. Once the composition config is read, the
+diagnostic names its digest and the selected generator, model, reasoning effort,
+output limit, effective timeout and context budget, so a failed attempt still
+records the settings it ran with. A failed attempt publishes no evidence, and
+its diagnostic says so.
 
 Fixture cases match exact input digests and cannot recognize real output, so a
 Fixture Stage whose inputs include implemented output is skipped with
@@ -155,17 +178,14 @@ uv run --project integration sdi-integration dispatch-local \
   --resolved-commit "$GITHUB_SHA" \
   --run-request-path runs/s-04/s-04-tc-03-c-05-fixture.yaml \
   --service-repository service-repository \
-  --generation-config integration/generation-configs/qwen.yaml \
   --bundle-root artifacts/s-04-tc-03-c-05
 ```
 
-Use `qwen.yaml` while the self-hosted endpoint answers and rerun with
-`luna.yaml` when it does not; export the key the chosen config names. `luna.yaml`
-also embeds with OpenAI's `text-embedding-3-small`; `qwen.yaml` names no
-embeddings endpoint, so its discovery is lexical only. The result
-is the manifest; its checksummed inventory covers every other archive file
-without a recursive self-digest. Revalidate the complete archive independently
-with:
+Export `OPENAI_API_KEY`, which luna and the embeddings use. To spend less while
+the self-hosted endpoint serves, add `--generator qwen` and also export
+`VLLM_KEY`. The result is the manifest; its checksummed inventory covers every
+other archive file without a recursive self-digest. Revalidate the complete
+archive independently with:
 
 ```sh
 uv run --project integration sdi-integration validate-bundle \

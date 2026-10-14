@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ValidationError
 
+from ._composition_config import CompositionSettings, resolve_composition_settings
 from ._contracts import (
     MobilityRequirementsSpecification,
     RunRequest,
@@ -31,7 +32,6 @@ from ._domain_contracts import (
     ImageBuildResult,
     ValidationEvidence,
 )
-from ._generation import GenerationConfig
 from ._git_input import CommittedBlob, GitRepository, validate_repository_path
 from ._jenkins_agent_boundary import enforce_domain_execution_boundary
 from ._json_input import canonical_json, parse_json
@@ -124,7 +124,7 @@ INPUT_MODELS: dict[str, type[BaseModel]] = {
     "sdi.image-build-result/v1": ImageBuildResult,
     "sdi.validation-evidence/v1": ValidationEvidence,
     "sdi.service-repository-manifest/v1": ServiceRepositoryManifest,
-    "sdi.generation-config/v1": GenerationConfig,
+    "sdi.composition-settings/v1": CompositionSettings,
 }
 OUTPUT_MODELS: dict[str, type[BaseModel]] = {
     "sdi.composition-blueprint/v1": CompositionBlueprint,
@@ -142,9 +142,9 @@ def _validate_yaml_model[ModelT: BaseModel](
     return validate_contract(model, parse_yaml(blob.content, blob.path), blob.path)
 
 
-def _validate_source_model(
-    model: type[BaseModel], source: StageInputSource
-) -> BaseModel:
+def _validate_source_model[ModelT: BaseModel](
+    model: type[ModelT], source: StageInputSource
+) -> ModelT:
     if source.media_type == "application/yaml":
         parsed = parse_yaml(source.content, source.source_path)
     elif source.media_type == "text/markdown":
@@ -937,22 +937,46 @@ def supplied_stage_sources(
     repository: GitRepository,
     *,
     service_repository: Path,
-    generation_config: str,
+    composition_config: str,
+    generator: str | None,
 ) -> dict[str, StageInputSource]:
-    """Capture the service repository and the committed generation config."""
-    validate_repository_path(generation_config)
-    blob = repository.read_regular_file(generation_config)
-    config = StageInputSource(
-        source_path=blob.path,
-        media_type="application/yaml",
-        schema_version="sdi.generation-config/v1",
-        content=blob.content,
+    """Capture the service repository and the run's composition settings.
+
+    The settings resolve the committed config to its default generator, or the
+    named one, and record the config's path and digest.
+    """
+    validate_repository_path(composition_config)
+    blob = repository.read_regular_file(composition_config)
+    settings = resolve_composition_settings(
+        blob.content, path=blob.path, generator=generator
     )
-    _validate_source_model(GenerationConfig, config)
     return {
         "service_repository": _service_repository_source(service_repository),
-        "generation_config": config,
+        "composition_settings": StageInputSource(
+            source_path="composition-settings.json",
+            media_type="application/json",
+            schema_version="sdi.composition-settings/v1",
+            content=canonical_json(settings.model_dump(mode="json", exclude_none=True)),
+        ),
     }
+
+
+def check_key_bindings(
+    descriptor: AdapterDescriptor, available_inputs: Mapping[str, StageInputSource]
+) -> tuple[str, ...]:
+    """Require the descriptor to bind every model key the run uses; name them.
+
+    Preflight calls this for every Stage, so a key the descriptor does not bind
+    rejects the run before any Stage starts.
+    """
+    source = available_inputs.get("composition_settings")
+    if source is None or not descriptor.secret_bindings:
+        return ()
+    names = _validate_source_model(CompositionSettings, source).key_names
+    if not set(names) <= set(descriptor.secret_bindings):
+        msg = "composition settings name a key the adapter descriptor does not bind"
+        raise InputError(msg)
+    return names
 
 
 def _read_accepted_envelope(
@@ -1281,7 +1305,8 @@ def execute_stage(  # noqa: PLR0913
     descriptor_path: str,
     attempt_root: Path,
     service_repository: Path,
-    generation_config: str,
+    composition_config: str,
+    generator: str | None,
 ) -> dict[str, Any]:
     """Execute and transactionally accept one descriptor-selected Stage attempt."""
     if requested_ref != PROTECTED_MAIN_REF:
@@ -1304,7 +1329,8 @@ def execute_stage(  # noqa: PLR0913
         | supplied_stage_sources(
             repository,
             service_repository=service_repository,
-            generation_config=generation_config,
+            composition_config=composition_config,
+            generator=generator,
         ),
     )
     return execution.envelope.model_dump(mode="json", exclude_none=True)
@@ -1335,22 +1361,16 @@ def load_stage_adapter(
 
 
 def _adapter_environment(
-    descriptor: AdapterDescriptor, input_models: Mapping[str, BaseModel]
+    descriptor: AdapterDescriptor, available_inputs: Mapping[str, StageInputSource]
 ) -> tuple[dict[str, str], tuple[bytes, ...]]:
     """Build the adapter's environment, forwarding only its bound model keys."""
     environment = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "LC_ALL": "C.UTF-8",
     }
-    config = input_models.get("generation_config")
-    if not isinstance(config, GenerationConfig) or not descriptor.secret_bindings:
+    key_names = check_key_bindings(descriptor, available_inputs)
+    if not key_names:
         return environment, ()
-    key_names = [config.api_key_env]
-    if config.embeddings is not None:
-        key_names.append(config.embeddings.api_key_env)
-    if not set(key_names) <= set(descriptor.secret_bindings):
-        msg = "generation config names a key the adapter descriptor does not bind"
-        raise InputError(msg)
     environment.update(
         {
             name: os.environ[name]
@@ -1359,7 +1379,7 @@ def _adapter_environment(
         }
     )
     secrets: list[bytes] = []
-    for name in dict.fromkeys(key_names):
+    for name in key_names:
         api_key = os.environ.get(name)
         if api_key:
             environment[name] = api_key
@@ -1477,7 +1497,7 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
             "request.json",
             canonical_json(request.model_dump(mode="json")),
         )
-        environment, secrets = _adapter_environment(descriptor, input_models)
+        environment, secrets = _adapter_environment(descriptor, available_inputs)
         started_at = datetime.now(UTC)
         try:
             process = subprocess.Popen(  # noqa: S603

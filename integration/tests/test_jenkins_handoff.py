@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from tests._fixture_inputs import (
-    FIXTURE_GENERATION_CONFIG,
+    FIXTURE_COMPOSITION_CONFIG,
     SUPPLIED_INPUT_ARGUMENTS,
     write_fixture_composition_descriptor,
 )
@@ -41,7 +41,7 @@ COMMITTED_FILES = (
     "deployment/jenkins/adapters/image-build-fixture-v1.yaml",
     "deployment/jenkins/adapters/cv-fixture-v1.yaml",
     "deployment/jenkins/adapters/cd-fixture-v1.yaml",
-    FIXTURE_GENERATION_CONFIG,
+    FIXTURE_COMPOSITION_CONFIG,
 )
 
 

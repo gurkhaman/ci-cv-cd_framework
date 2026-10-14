@@ -278,13 +278,16 @@ class EvidenceDescription(ContractModel):
 
 
 class GenerationRecord(ContractModel):
-    """The settings, exact request and response summary of one generation."""
+    """The selected generator's settings, exact request and response summary."""
 
-    config_sha256: Sha256
+    composition_config_sha256: Sha256
+    generator: Slug
     model: NonBlank
     reasoning_effort: NonBlank
     max_output_tokens: PositiveInt
     timeout_seconds: PositiveInt
+    max_context_bytes: PositiveInt
+    base_url: NonBlank
     max_retries: NonNegativeInt
     outcome: Literal["generated", "exhausted"]
     request: dict[str, JsonValue]

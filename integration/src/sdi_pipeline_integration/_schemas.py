@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from pydantic import BaseModel
 
 from ._assessment import CompositionProposals
+from ._composition_config import CompositionConfig, CompositionSettings
 from ._contracts import (
     MobilityRequirementsSpecification,
     RunRequest,
@@ -24,7 +25,6 @@ from ._domain_contracts import (
     ImageBuildResult,
     ValidationEvidence,
 )
-from ._generation import GenerationConfig
 from ._handoff_contracts import HandoffReceipt
 from ._recovery_contracts import RecoveryManifest
 from ._result_contracts import PipelineIntegrationResult
@@ -43,12 +43,13 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "accepted-attempt-envelope-v1.schema.json": AcceptedAttemptEnvelope,
     "adapter-descriptor-v1.schema.json": AdapterDescriptor,
     "composition-blueprint-v1.schema.json": CompositionBlueprint,
+    "composition-config-v1.schema.json": CompositionConfig,
     "composition-evidence-v1.schema.json": CompositionEvidence,
     "composition-proposals-v1.schema.json": CompositionProposals,
+    "composition-settings-v1.schema.json": CompositionSettings,
     "deployment-schema-v1.schema.json": DeploymentSchema,
     "deployment-result-v1.schema.json": DeploymentResult,
     "fixture-case-v1.schema.json": FixtureCase,
-    "generation-config-v1.schema.json": GenerationConfig,
     "handoff-receipt-v1.schema.json": HandoffReceipt,
     "image-build-result-v1.schema.json": ImageBuildResult,
     "pipeline-integration-result-v1.schema.json": PipelineIntegrationResult,
