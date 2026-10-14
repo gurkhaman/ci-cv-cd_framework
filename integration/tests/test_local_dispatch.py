@@ -13,6 +13,7 @@ from typing import cast
 
 import pytest
 
+from sdi_pipeline_integration._stage_runtime import ADAPTER_SHUTDOWN_GRACE_SECONDS
 from tests._fixture_inputs import (
     FIXTURE_COMPOSITION_CONFIG,
     SUPPLIED_INPUT_ARGUMENTS,
@@ -522,10 +523,12 @@ def test_exact_digest_fixture_cases_settle_as_complete_failed_results(
     ]
 
 
+@pytest.mark.slow
 def test_exact_digest_timeout_case_records_timeout_and_skips(tmp_path: Path) -> None:
     repository, _ = _commit_fixture_repository(tmp_path)
     commit_sha = _configure_composition(repository, work_limit_seconds=1)
 
+    started = time.monotonic()
     completed = _dispatch(
         repository,
         commit_sha,
@@ -534,6 +537,8 @@ def test_exact_digest_timeout_case_records_timeout_and_skips(tmp_path: Path) -> 
     )
 
     assert completed.returncode == 1, completed.stderr
+    # The terminated adapter is reaped, so its exit does not wait out the grace.
+    assert time.monotonic() - started < ADAPTER_SHUTDOWN_GRACE_SECONDS
     result = json.loads(completed.stdout)
     attempt = result["attempts"][0]
     assert attempt["execution_conclusion"] == "timed_out"
@@ -541,6 +546,7 @@ def test_exact_digest_timeout_case_records_timeout_and_skips(tmp_path: Path) -> 
     assert attempt["reason"]["code"] == "sdi.stage.deadline-exceeded"
 
 
+@pytest.mark.slow
 def test_stage_timeout_terminates_attached_descendants_and_cleans_work(
     tmp_path: Path,
 ) -> None:

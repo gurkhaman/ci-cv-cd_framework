@@ -8,6 +8,16 @@ supported interfaces. Internal Python modules are not compatibility contracts.
 Run all checks through `scripts/verify` rather than using an ambient Python
 environment.
 
+Tests marked `live` call a real model provider; tests marked `slow` wait out a
+real work limit or deadline. `scripts/verify` runs every test: the non-`slow`
+tests in parallel, then the `slow` tests serially, because parallel load can
+push their timing past its bounds. For a fast check while developing, run from
+this directory:
+
+```sh
+uv run pytest -m "not live and not slow" -n auto --dist worksteal
+```
+
 ## Identify A Committed Run
 
 `identify-run` reads the request and every referenced input directly from one
