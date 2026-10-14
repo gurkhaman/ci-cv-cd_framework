@@ -918,7 +918,7 @@ def committed_stage_sources(
     return sources
 
 
-def _service_repository_source(root: Path) -> StageInputSource:
+def service_repository_source(root: Path) -> StageInputSource:
     """Capture every description under a supplied directory and its manifest."""
     snapshot = capture_service_repository(root)
     return StageInputSource(
@@ -947,18 +947,25 @@ def supplied_stage_sources(
     """
     validate_repository_path(composition_config)
     blob = repository.read_regular_file(composition_config)
-    settings = resolve_composition_settings(
-        blob.content, path=blob.path, generator=generator
-    )
     return {
-        "service_repository": _service_repository_source(service_repository),
-        "composition_settings": StageInputSource(
-            source_path="composition-settings.json",
-            media_type="application/json",
-            schema_version="sdi.composition-settings/v1",
-            content=canonical_json(settings.model_dump(mode="json", exclude_none=True)),
+        "service_repository": service_repository_source(service_repository),
+        "composition_settings": composition_settings_source(
+            blob.content, path=blob.path, generator=generator
         ),
     }
+
+
+def composition_settings_source(
+    content: bytes, *, path: str, generator: str | None
+) -> StageInputSource:
+    """Capture the settings a composition config's bytes resolve to."""
+    settings = resolve_composition_settings(content, path=path, generator=generator)
+    return StageInputSource(
+        source_path="composition-settings.json",
+        media_type="application/json",
+        schema_version="sdi.composition-settings/v1",
+        content=canonical_json(settings.model_dump(mode="json", exclude_none=True)),
+    )
 
 
 def check_key_bindings(

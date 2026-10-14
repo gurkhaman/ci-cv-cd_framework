@@ -11,12 +11,15 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+from sdi_pipeline_integration import _fixture_regeneration
+
 REPOSITORY_ROOT = Path(__file__).parents[2]
 
 COMPOSITION_DESCRIPTOR = "deployment/jenkins/adapters/composition-v1.yaml"
-FIXTURE_COMPOSITION_CONFIG = "integration/tests/data/fixture-composition-config.yaml"
+# The Fixture cases are generated from these same inputs.
+FIXTURE_COMPOSITION_CONFIG = _fixture_regeneration.FIXTURE_COMPOSITION_CONFIG
 FIXTURE_SERVICE_REPOSITORY = (
-    REPOSITORY_ROOT / "integration/tests/data/fixture-service-repository"
+    REPOSITORY_ROOT / _fixture_regeneration.FIXTURE_SERVICE_REPOSITORY
 )
 RUNTIME_IMAGE = (
     "docker.io/library/python@sha256:"
