@@ -398,6 +398,7 @@ def test_distributed_failures_finalize_typed_skips_and_machinery_conclusion(
     )
 
 
+@pytest.mark.slow
 def test_distributed_timeout_records_one_attempt_and_skips(tmp_path: Path) -> None:
     repository, commit_sha = _repository(tmp_path)
 
@@ -419,6 +420,7 @@ def test_distributed_timeout_records_one_attempt_and_skips(tmp_path: Path) -> No
     )
 
 
+@pytest.mark.slow
 def test_trusted_stage_work_limit_overrides_profile_default(tmp_path: Path) -> None:
     repository, commit_sha = _repository(tmp_path)
 

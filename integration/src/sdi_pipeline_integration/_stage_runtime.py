@@ -1287,7 +1287,10 @@ def _terminate_process_group(
         return
     if not immediate:
         deadline = time.monotonic() + ADAPTER_SHUTDOWN_GRACE_SECONDS
-        while _process_group_exists(process_group) and time.monotonic() < deadline:
+        # An unreaped adapter stays a zombie member and keeps its group alive.
+        while (
+            process.poll() is None or _process_group_exists(process_group)
+        ) and time.monotonic() < deadline:
             time.sleep(0.05)
     if _process_group_exists(process_group):
         with suppress(ProcessLookupError):

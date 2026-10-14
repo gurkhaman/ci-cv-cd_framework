@@ -73,7 +73,8 @@ def test_verification_is_the_complete_fail_fast_acceptance_gate(tmp_path: Path) 
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert log.read_text(encoding="utf-8").splitlines() == [
+    passed_commands = log.read_text(encoding="utf-8").splitlines()
+    assert passed_commands == [
         "uv lock --check",
         "uv sync --frozen --all-groups",
         "uv run --frozen sdi-integration schemas --check --directory schemas",
@@ -84,7 +85,8 @@ def test_verification_is_the_complete_fail_fast_acceptance_gate(tmp_path: Path) 
         "uv run --frozen ruff format --check .",
         "uv run --frozen ruff check .",
         "uv run --frozen basedpyright",
-        "uv run --frozen pytest",
+        "uv run --frozen pytest -m not slow -n auto --dist worksteal",
+        "uv run --frozen pytest -m slow",
         "uv tree --frozen --all-groups",
         "stack smoke",
     ]
@@ -107,8 +109,8 @@ def test_verification_is_the_complete_fail_fast_acceptance_gate(tmp_path: Path) 
     )
 
     assert failed.returncode != 0
-    assert (
-        "uv run --frozen pytest"
-        not in log.read_text(encoding="utf-8").splitlines()[10:]
+    assert not any(
+        line.startswith("uv run --frozen pytest")
+        for line in log.read_text(encoding="utf-8").splitlines()[len(passed_commands) :]
     )
     assert "Repository acceptance passed." not in failed.stdout

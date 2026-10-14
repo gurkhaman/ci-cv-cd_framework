@@ -522,6 +522,7 @@ def test_handoff_fails_once_with_typed_preflight_or_submission_fact(
     assert fake.base_url not in completed.stderr
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     ("mode", "environment_overrides", "code", "phase"),
     [
