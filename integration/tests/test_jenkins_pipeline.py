@@ -13,7 +13,7 @@ import pytest
 
 from tests._fixture_inputs import (
     FIXTURE_COMPOSITION_CONFIG,
-    SUPPLIED_INPUT_ARGUMENTS,
+    FIXTURE_SERVICE_REPOSITORY,
     write_fixture_composition_descriptor,
     write_scripted_adapter,
 )
@@ -86,7 +86,12 @@ def _repository(tmp_path: Path) -> tuple[Path, str]:
     return repository, _git(repository, "rev-parse", "HEAD")
 
 
-def _common(repository: Path, commit_sha: str, request_path: str) -> list[str]:
+def _common(
+    repository: Path,
+    commit_sha: str,
+    request_path: str,
+    service_repository: Path = FIXTURE_SERVICE_REPOSITORY,
+) -> list[str]:
     return [
         "--repository",
         str(repository),
@@ -98,18 +103,25 @@ def _common(repository: Path, commit_sha: str, request_path: str) -> list[str]:
         request_path,
         "--execution-id",
         EXECUTION_ID,
-        *SUPPLIED_INPUT_ARGUMENTS,
+        "--service-repository",
+        str(service_repository),
+        "--composition-config",
+        FIXTURE_COMPOSITION_CONFIG,
     ]
 
 
 def _preflight(
-    repository: Path, commit_sha: str, request_path: str, started_millis: str
+    repository: Path,
+    commit_sha: str,
+    request_path: str,
+    started_millis: str,
+    service_repository: Path = FIXTURE_SERVICE_REPOSITORY,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             "sdi-integration",
             "preflight-jenkins-run",
-            *_common(repository, commit_sha, request_path),
+            *_common(repository, commit_sha, request_path, service_repository),
             "--handoff-contract-version",
             "sdi.github-jenkins-handoff/v1",
             "--github-run-id",
@@ -143,8 +155,16 @@ def _execute_chain(  # noqa: PLR0913, PLR0917
     started_millis: str,
     run_deadline_millis: int | None = None,
     work_limits: dict[str, str] | None = None,
+    ungranted_service_repository: Path = FIXTURE_SERVICE_REPOSITORY,
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
-    preflight = _preflight(repository, commit_sha, request_path, started_millis)
+    """Run every Stage; only composition is given the real service repository."""
+    preflight = _preflight(
+        repository,
+        commit_sha,
+        request_path,
+        started_millis,
+        ungranted_service_repository,
+    )
     assert preflight.returncode == 0, preflight.stderr
     assert json.loads(preflight.stdout)["execution_id"] == EXECUTION_ID
 
@@ -153,10 +173,15 @@ def _execute_chain(  # noqa: PLR0913, PLR0917
     configured_work_limits = WORK_LIMITS | (work_limits or {})
     for stage, descriptor in DESCRIPTORS:
         attempt_root = root / "transfers" / stage
+        service_repository = (
+            FIXTURE_SERVICE_REPOSITORY
+            if stage == "composition"
+            else ungranted_service_repository
+        )
         command = [
             "sdi-integration",
             "execute-jenkins-stage",
-            *_common(repository, commit_sha, request_path),
+            *_common(repository, commit_sha, request_path, service_repository),
             "--descriptor-path",
             descriptor,
             "--attempt-root",
@@ -199,7 +224,7 @@ def _execute_chain(  # noqa: PLR0913, PLR0917
     command = [
         "sdi-integration",
         "finalize-jenkins-run",
-        *_common(repository, commit_sha, request_path),
+        *_common(repository, commit_sha, request_path, ungranted_service_repository),
         "--build-started-at-millis",
         started_millis,
         "--bundle-root",
@@ -251,6 +276,26 @@ def test_distributed_fixture_chain_preserves_identity_and_exact_archive(
         stage for stage, _descriptor in DESCRIPTORS
     ]
     assert len(result["artifacts"]) == 9
+    assert all(
+        attempt["execution_conclusion"] == "succeeded" for attempt in result["attempts"]
+    )
+
+
+def test_stages_not_granted_the_service_repository_never_read_it(
+    tmp_path: Path,
+) -> None:
+    repository, commit_sha = _repository(tmp_path)
+
+    conclusion, result = _execute_chain(
+        repository,
+        commit_sha,
+        SUCCESS_REQUEST,
+        tmp_path / "run",
+        str(int((time.time() - 1) * 1000)),
+        ungranted_service_repository=tmp_path / "absent-service-repository",
+    )
+
+    assert conclusion.returncode == 0, conclusion.stderr
     assert all(
         attempt["execution_conclusion"] == "succeeded" for attempt in result["attempts"]
     )

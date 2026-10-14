@@ -42,7 +42,7 @@ from ._run_input import identify_committed_run
 from ._schemas import check_schemas, write_schemas
 from ._service_descriptions import read_service_repository
 from ._stage_contracts import AdapterDescriptor
-from ._stage_runtime import ExternalCancellation, execute_stage
+from ._stage_runtime import ExternalCancellation, SuppliedInputs, execute_stage
 from ._yaml_input import InputError, parse_yaml
 
 if TYPE_CHECKING:
@@ -275,6 +275,14 @@ def _add_supplied_input_arguments(parser: argparse.ArgumentParser) -> None:
     _add_generator_argument(parser)
 
 
+def _supplied_inputs(arguments: argparse.Namespace) -> SuppliedInputs:
+    return SuppliedInputs(
+        service_repository=arguments.service_repository,
+        composition_config=arguments.composition_config,
+        generator=arguments.generator,
+    )
+
+
 def _add_generator_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--generator",
@@ -483,9 +491,7 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
                     run_request_path=arguments.run_request_path,
                     descriptor_path=arguments.descriptor_path,
                     attempt_root=arguments.attempt_root,
-                    service_repository=arguments.service_repository,
-                    composition_config=arguments.composition_config,
-                    generator=arguments.generator,
+                    supplied=_supplied_inputs(arguments),
                 )
         except ExternalCancellation as cancellation:
             if not attempt_existed:
@@ -520,9 +526,7 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
                     "cv": arguments.cv_node,
                     "cd": arguments.cd_node,
                 },
-                service_repository=arguments.service_repository,
-                composition_config=arguments.composition_config,
-                generator=arguments.generator,
+                supplied=_supplied_inputs(arguments),
             )
         except (InputError, OSError, ValidationError) as error:
             sys.stderr.write(f"sdi-integration: {error}\n")
@@ -580,9 +584,7 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
                     prior_attempt_roots=arguments.prior_attempt_root,
                     work_limit_seconds=arguments.work_limit_seconds,
                     run_deadline_epoch_millis=arguments.run_deadline_epoch_millis,
-                    service_repository=arguments.service_repository,
-                    composition_config=arguments.composition_config,
-                    generator=arguments.generator,
+                    supplied=_supplied_inputs(arguments),
                 )
         except ExternalCancellation as cancellation:
             if not attempt_existed:
@@ -623,9 +625,6 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
                 attempt_roots=arguments.attempt_root,
                 run_deadline_expired=arguments.run_deadline_expired,
                 bundle_root=arguments.bundle_root,
-                service_repository=arguments.service_repository,
-                composition_config=arguments.composition_config,
-                generator=arguments.generator,
             )
         except (InputError, OSError, ValidationError) as error:
             sys.stderr.write(f"sdi-integration: {error}\n")
@@ -656,9 +655,7 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
                     resolved_commit=arguments.resolved_commit,
                     run_request_path=arguments.run_request_path,
                     bundle_root=arguments.bundle_root,
-                    service_repository=arguments.service_repository,
-                    composition_config=arguments.composition_config,
-                    generator=arguments.generator,
+                    supplied=_supplied_inputs(arguments),
                 )
         except ExternalCancellation as cancellation:
             if not bundle_existed:

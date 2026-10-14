@@ -943,26 +943,67 @@ def service_repository_source(root: Path) -> StageInputSource:
     )
 
 
-def supplied_stage_sources(
-    repository: GitRepository,
-    *,
-    service_repository: Path,
-    composition_config: str,
-    generator: str | None,
-) -> dict[str, StageInputSource]:
-    """Capture the service repository and the run's composition settings.
+@dataclass(frozen=True)
+class SuppliedInputs:
+    """The operator-supplied inputs a run names; only granted Stages read them."""
 
-    The settings resolve the committed config to its default generator, or the
-    named one, and record the config's path and digest.
+    service_repository: Path
+    composition_config: str
+    generator: str | None
+
+
+def _composition_config(
+    repository: GitRepository, supplied: SuppliedInputs
+) -> CommittedBlob:
+    validate_repository_path(supplied.composition_config)
+    return repository.read_regular_file(supplied.composition_config)
+
+
+def composition_key_names(
+    repository: GitRepository, supplied: SuppliedInputs
+) -> tuple[str, ...]:
+    """Name the model keys the run's composition settings use."""
+    blob = _composition_config(repository, supplied)
+    return resolve_composition_settings(
+        blob.content, path=blob.path, generator=supplied.generator
+    ).key_names
+
+
+def _resolve_supplied_slot(
+    repository: GitRepository, supplied: SuppliedInputs, name: str
+) -> StageInputSource:
+    if name == "service_repository":
+        return service_repository_source(supplied.service_repository)
+    if name == "composition_settings":
+        blob = _composition_config(repository, supplied)
+        return composition_settings_source(
+            blob.content, path=blob.path, generator=supplied.generator
+        )
+    msg = f"no resolver for the supplied input slot {name}"
+    raise InputError(msg)
+
+
+def stage_inputs(
+    repository: GitRepository,
+    identified: Mapping[str, Any],
+    supplied: SuppliedInputs,
+    *,
+    stage: StageName,
+) -> dict[str, StageInputSource]:
+    """Capture only the committed and supplied inputs granted to one Stage.
+
+    Supplied inputs are resolved here and nowhere else, so a Stage that is not
+    granted the service repository never reads it.
     """
-    validate_repository_path(composition_config)
-    blob = repository.read_regular_file(composition_config)
-    return {
-        "service_repository": service_repository_source(service_repository),
-        "composition_settings": composition_settings_source(
-            blob.content, path=blob.path, generator=generator
-        ),
-    }
+    committed = committed_stage_sources(repository, identified)
+    sources: dict[str, StageInputSource] = {}
+    for name in EXPECTED_STAGE_INPUT_SLOTS[stage]:
+        origin = SLOT_BY_NAME[name].origin
+        if origin == "committed":
+            sources[name] = committed[name]
+        elif origin == "supplied":
+            sources[name] = _resolve_supplied_slot(repository, supplied, name)
+    return sources
 
 
 def composition_settings_source(
@@ -977,21 +1018,23 @@ def composition_settings_source(
 
 
 def check_key_bindings(
-    descriptor: AdapterDescriptor, available_inputs: Mapping[str, StageInputSource]
+    descriptor: AdapterDescriptor, key_names: Sequence[str]
 ) -> tuple[str, ...]:
     """Require the descriptor to bind every model key the run uses; name them.
 
-    Preflight calls this for every Stage, so a key the descriptor does not bind
-    rejects the run before any Stage starts.
+    Only a Stage granted the composition settings receives their keys. Preflight
+    calls this for every Stage, so a key the descriptor does not bind rejects
+    the run before any Stage starts.
     """
-    source = available_inputs.get("composition_settings")
-    if source is None or not descriptor.secret_bindings:
+    if (
+        "composition_settings" not in EXPECTED_STAGE_INPUT_SLOTS[descriptor.stage]
+        or not descriptor.secret_bindings
+    ):
         return ()
-    names = _validate_source_model(CompositionSettings, source).key_names
-    if not set(names) <= set(descriptor.secret_bindings):
+    if not set(key_names) <= set(descriptor.secret_bindings):
         msg = "composition settings name a key the adapter descriptor does not bind"
         raise InputError(msg)
-    return names
+    return tuple(key_names)
 
 
 def _read_accepted_envelope(
@@ -1322,9 +1365,7 @@ def execute_stage(  # noqa: PLR0913
     run_request_path: str,
     descriptor_path: str,
     attempt_root: Path,
-    service_repository: Path,
-    composition_config: str,
-    generator: str | None,
+    supplied: SuppliedInputs,
 ) -> dict[str, Any]:
     """Execute and transactionally accept one descriptor-selected Stage attempt."""
     if requested_ref != PROTECTED_MAIN_REF:
@@ -1338,17 +1379,14 @@ def execute_stage(  # noqa: PLR0913
     )
     repository = GitRepository(repository_path, resolved_commit)
     repository.require_ref_commit(requested_ref)
+    descriptor, _profile = load_stage_adapter(repository, descriptor_path)
     execution = execute_identified_stage(
         repository=repository,
         identified=identified,
         descriptor_path=descriptor_path,
         attempt_root=attempt_root,
-        available_inputs=committed_stage_sources(repository, identified)
-        | supplied_stage_sources(
-            repository,
-            service_repository=service_repository,
-            composition_config=composition_config,
-            generator=generator,
+        available_inputs=stage_inputs(
+            repository, identified, supplied, stage=descriptor.stage
         ),
     )
     return execution.envelope.model_dump(mode="json", exclude_none=True)
@@ -1386,7 +1424,13 @@ def _adapter_environment(
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "LC_ALL": "C.UTF-8",
     }
-    key_names = check_key_bindings(descriptor, available_inputs)
+    settings = available_inputs.get("composition_settings")
+    key_names = check_key_bindings(
+        descriptor,
+        ()
+        if settings is None
+        else _validate_source_model(CompositionSettings, settings).key_names,
+    )
     if not key_names:
         return environment, ()
     environment.update(

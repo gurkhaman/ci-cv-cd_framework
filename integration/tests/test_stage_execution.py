@@ -6,15 +6,23 @@ import hashlib
 import json
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
+from sdi_pipeline_integration._git_input import GitRepository
+from sdi_pipeline_integration._run_input import identify_committed_run
+from sdi_pipeline_integration._stage_runtime import SuppliedInputs, stage_inputs
 from tests._fixture_inputs import (
     FIXTURE_COMPOSITION_CONFIG,
+    FIXTURE_SERVICE_REPOSITORY,
     SUPPLIED_INPUT_ARGUMENTS,
     write_fixture_composition_descriptor,
     write_scripted_adapter,
 )
+
+if TYPE_CHECKING:
+    from sdi_pipeline_integration._stage_contracts import StageName
 
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
 COMMITTED_FILES = (
@@ -57,6 +65,54 @@ def _commit_fixture_repository(tmp_path: Path) -> tuple[Path, str]:
     _git(repository, "add", ".")
     _git(repository, "commit", "-m", "Add composition Fixture")
     return repository, _git(repository, "rev-parse", "HEAD")
+
+
+@pytest.mark.parametrize(
+    ("stage", "expected"),
+    [
+        (
+            "composition",
+            [
+                "run_request",
+                "requirements_specification",
+                "target_profile",
+                "service_repository",
+                "composition_settings",
+            ],
+        ),
+        ("image_build", ["target_profile"]),
+        ("cv", ["requirements_specification", "target_profile"]),
+        ("cd", ["target_profile"]),
+    ],
+)
+def test_each_stage_receives_only_its_granted_run_inputs(
+    tmp_path: Path, stage: StageName, expected: list[str]
+) -> None:
+    repository_path, commit_sha = _commit_fixture_repository(tmp_path)
+    identified = identify_committed_run(
+        repository_path=repository_path,
+        requested_ref="refs/heads/main",
+        resolved_commit=commit_sha,
+        run_request_path=COMMITTED_FILES[0],
+    )
+    service_repository = (
+        FIXTURE_SERVICE_REPOSITORY
+        if stage == "composition"
+        else tmp_path / "absent-service-repository"
+    )
+
+    inputs = stage_inputs(
+        GitRepository(repository_path, commit_sha),
+        identified,
+        SuppliedInputs(
+            service_repository=service_repository,
+            composition_config=FIXTURE_COMPOSITION_CONFIG,
+            generator=None,
+        ),
+        stage=stage,
+    )
+
+    assert list(inputs) == expected
 
 
 def _execute(

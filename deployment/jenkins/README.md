@@ -181,7 +181,8 @@ HTTPS egress to `api.openai.com`, which serves both luna and the embeddings.
 Without a valid key or that egress, composition fails with
 `sdi.composition.dense-discovery-unavailable` and the build is red.
 The pipeline passes the checked-out `service-repository/` to every Stage
-command.
+command, but only composition reads it; the other agents and finalization never
+open it.
 
 Each image contains an immutable role and label identity under `/etc/sdi` on its
 read-only root filesystem. The supported Stage execution commands refuse every
