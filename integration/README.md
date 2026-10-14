@@ -56,7 +56,9 @@ uv run --project integration sdi-integration execute-stage \
   --attempt-root artifacts/composition-attempt
 ```
 
-Every Stage-executing command takes the same run-supplied composition inputs.
+Every Stage-executing command takes the same run-supplied composition inputs,
+but only the composition Stage reads them; the Jenkins preflight reads just the
+config's key names.
 `--service-repository` names a directory of `SDI.md` descriptions; the runtime
 copies every description into the composition Stage's inputs and gives the
 adapter a manifest of their paths, sizes, and digests. It refuses symbolic

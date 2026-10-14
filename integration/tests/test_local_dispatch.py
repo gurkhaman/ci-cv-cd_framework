@@ -667,6 +667,29 @@ def test_not_implemented_stage_and_dependents_are_explicitly_skipped(
     )
 
 
+def test_rejects_a_key_the_composition_descriptor_does_not_bind(
+    tmp_path: Path,
+) -> None:
+    repository, _ = _commit_fixture_repository(tmp_path)
+    write_fixture_composition_descriptor(repository, mode="implemented")
+    descriptor = repository / "deployment/jenkins/adapters/composition-v1.yaml"
+    descriptor.write_text(
+        descriptor.read_text().replace(
+            "secret_bindings: []", "secret_bindings: [OTHER_KEY]"
+        )
+    )
+    _git(repository, "add", ".")
+    _git(repository, "commit", "-m", "Bind a key the config does not name")
+
+    completed = _dispatch(
+        repository, _git(repository, "rev-parse", "HEAD"), tmp_path / "bundle"
+    )
+
+    assert completed.returncode == 2
+    assert "does not bind" in completed.stderr
+    assert not (tmp_path / "bundle").exists()
+
+
 def test_implemented_adapter_cannot_consume_unevaluated_fixture_output(
     tmp_path: Path,
 ) -> None:
