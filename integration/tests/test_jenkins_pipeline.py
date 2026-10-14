@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from tests._fixture_inputs import (
-    FIXTURE_GENERATION_CONFIG,
+    FIXTURE_COMPOSITION_CONFIG,
     SUPPLIED_INPUT_ARGUMENTS,
     write_fixture_composition_descriptor,
     write_scripted_adapter,
@@ -49,7 +49,7 @@ COMMITTED_FILES = (
     "runs/conformance/composition-handled-failure.yaml",
     "runs/conformance/composition-malformed-response.yaml",
     "runs/conformance/composition-timeout.yaml",
-    FIXTURE_GENERATION_CONFIG,
+    FIXTURE_COMPOSITION_CONFIG,
 )
 
 
@@ -307,6 +307,31 @@ response = {{
         "sdi.dependency.prerequisite-blocked",
         "sdi.dependency.prerequisite-blocked",
     ]
+
+
+def test_preflight_rejects_a_key_the_composition_descriptor_does_not_bind(
+    tmp_path: Path,
+) -> None:
+    repository, _commit_sha = _repository(tmp_path)
+    write_fixture_composition_descriptor(repository, mode="implemented")
+    descriptor = repository / DESCRIPTORS[0][1]
+    descriptor.write_text(
+        descriptor.read_text().replace(
+            "secret_bindings: []", "secret_bindings: [OTHER_KEY]"
+        )
+    )
+    _git(repository, "add", ".")
+    _git(repository, "commit", "-m", "Bind a key the config does not name")
+
+    preflight = _preflight(
+        repository,
+        _git(repository, "rev-parse", "HEAD"),
+        SUCCESS_REQUEST,
+        str(int((time.time() - 1) * 1000)),
+    )
+
+    assert preflight.returncode == 2
+    assert "does not bind" in preflight.stderr
 
 
 def test_malformed_final_bundle_is_rejected_by_public_cli(tmp_path: Path) -> None:

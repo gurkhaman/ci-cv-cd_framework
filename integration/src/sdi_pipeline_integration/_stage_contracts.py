@@ -136,22 +136,22 @@ BASE_INPUT_GRANTS = {
         "application/json",
         "sdi.service-repository-manifest/v1",
     ),
-    "generation_config": (
-        "generation-config.yaml",
-        "application/yaml",
-        "sdi.generation-config/v1",
+    "composition_settings": (
+        "composition-settings.json",
+        "application/json",
+        "sdi.composition-settings/v1",
     ),
 }
 # Run-supplied inputs come from the operator's flags, not from committed run
 # inputs or an earlier Stage, so no result provenance names their source.
-SUPPLIED_INPUT_SLOTS = frozenset({"service_repository", "generation_config"})
+SUPPLIED_INPUT_SLOTS = frozenset({"service_repository", "composition_settings"})
 EXPECTED_STAGE_INPUT_SLOTS: dict[StageName, tuple[str, ...]] = {
     "composition": (
         "run_request",
         "requirements_specification",
         "target_profile",
         "service_repository",
-        "generation_config",
+        "composition_settings",
     ),
     "image_build": (
         "target_profile",

@@ -10,7 +10,7 @@ import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from pydantic import BaseModel, ValidationError
 
@@ -34,7 +34,9 @@ from ._stage_contracts import (
 from ._stage_runtime import (
     OUTPUT_MODELS,
     StageExecution,
+    StageInputSource,
     capture_tree,
+    check_key_bindings,
     committed_stage_sources,
     execute_identified_stage,
     expected_directories,
@@ -44,6 +46,9 @@ from ._stage_runtime import (
     validate_stage_documents,
 )
 from ._yaml_input import InputError
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 MAX_RESULT_BYTES = 1024 * 1024
 RUN_DEADLINE_SECONDS = 90 * 60
@@ -57,7 +62,7 @@ DESCRIPTORS: tuple[tuple[StageName, str], ...] = (
 
 
 def _descriptor_modes(
-    repository: GitRepository,
+    repository: GitRepository, available_inputs: Mapping[str, StageInputSource]
 ) -> dict[StageName, ImplementationMode]:
     modes: dict[StageName, ImplementationMode] = {}
     for expected_stage, descriptor_path in DESCRIPTORS:
@@ -65,6 +70,7 @@ def _descriptor_modes(
         if descriptor.stage != expected_stage:
             msg = "reviewed descriptor order does not match its Stage"
             raise InputError(msg)
+        check_key_bindings(descriptor, available_inputs)
         modes[expected_stage] = descriptor.implementation_mode
     return modes
 
@@ -377,7 +383,8 @@ def dispatch_local(  # noqa: PLR0913, PLR0915
     run_request_path: str,
     bundle_root: Path,
     service_repository: Path,
-    generation_config: str,
+    composition_config: str,
+    generator: str | None,
 ) -> dict[str, Any]:
     """Execute and atomically publish one complete local four-Stage run."""
     run_started_at = datetime.now(UTC)
@@ -398,9 +405,10 @@ def dispatch_local(  # noqa: PLR0913, PLR0915
     ) | supplied_stage_sources(
         repository,
         service_repository=service_repository,
-        generation_config=generation_config,
+        composition_config=composition_config,
+        generator=generator,
     )
-    descriptor_modes = _descriptor_modes(repository)
+    descriptor_modes = _descriptor_modes(repository, available_inputs)
     run_deadline = (
         run_started_monotonic + RUN_DEADLINE_SECONDS - FINALIZATION_RESERVE_SECONDS
     )

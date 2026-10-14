@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from tests._fixture_inputs import (
-    FIXTURE_GENERATION_CONFIG,
+    FIXTURE_COMPOSITION_CONFIG,
     SUPPLIED_INPUT_ARGUMENTS,
     write_fixture_composition_descriptor,
     write_scripted_adapter,
@@ -22,7 +22,7 @@ COMMITTED_FILES = (
     "requirements/s-04/deliver-book-to-joe.md",
     "profiles/s-04/waffle-jetson-arm64.yaml",
     "integration/stage-profiles/composition-v1.yaml",
-    FIXTURE_GENERATION_CONFIG,
+    FIXTURE_COMPOSITION_CONFIG,
 )
 
 

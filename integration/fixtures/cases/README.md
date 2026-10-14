@@ -11,7 +11,8 @@ and CD contract data with Domain outcome `not_evaluated`. Their exact bytes prov
 only the four-Stage pipeline interface and handoff graph. The committed
 composition descriptor is implemented, so tests reach these cases by selecting a
 Fixture composition descriptor. Composition cases match the service-repository
-manifest and generation config under `integration/tests/data/`.
+manifest and the composition settings resolved from the composition config
+under `integration/tests/data/` with its default generator.
 
 The dedicated requests under `runs/conformance/` select immutable cases for a
 negative Domain outcome, handled execution failure, process crash, timeout,

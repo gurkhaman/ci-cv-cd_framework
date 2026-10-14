@@ -76,9 +76,10 @@ git update-ref refs/heads/main "$RESOLVED_COMMIT_SHA"
 }
 
 // The Domain agents reach only the OpenAI endpoint, so Jenkins composes with
-// luna. The config is read from the submitted commit, and its key comes from
-// the sdi-openai-api-key credential bound around the composition Stage only.
-def generationConfigPath = 'integration/generation-configs/luna.yaml'
+// the config's default luna generator and passes no generator. The config is
+// read from the submitted commit, and its key comes from the sdi-openai-api-key
+// credential bound around the composition Stage only.
+def compositionConfigPath = 'integration/composition-config.yaml'
 
 def commonArguments = '''\
   --repository . \
@@ -87,7 +88,7 @@ def commonArguments = '''\
   --run-request-path "$RUN_REQUEST_PATH" \
   --execution-id "$EXECUTION_ID" \
   --service-repository service-repository \
-  --generation-config ''' + "'${generationConfigPath}'"
+  --composition-config ''' + "'${compositionConfigPath}'"
 
 def resourceNodes = [:]
 def acceptedStages = []

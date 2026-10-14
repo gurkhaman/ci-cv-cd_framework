@@ -14,9 +14,9 @@ match_inputs:
   - slot: service_repository
     byte_size: 192
     sha256: b19d11139b8172261548482e72aeec31d82fdbfd43500f80ef2ad20996533cb5
-  - slot: generation_config
-    byte_size: 192
-    sha256: 337d36b1cff3cd3e26362e18353349462cb4b59fd81e92ca50d0d5c92850ac44
+  - slot: composition_settings
+    byte_size: 449
+    sha256: 352b1a9e903dcf32a95afcbe4a2edfeb93f6278fbf76f05137f9c1ffcd36fea5
 behavior: response
 execution_conclusion: succeeded
 domain_outcome: failed

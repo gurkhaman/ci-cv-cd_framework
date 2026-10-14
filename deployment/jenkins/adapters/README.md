@@ -6,8 +6,9 @@ logical secret bindings. Secret values and Jenkins credential identifiers are
 governed separately and never enter these contracts.
 
 `composition-v1.yaml` selects the implemented `sdi-composition-adapter`. Its
-`secret_bindings` name the environment variables a generation config may use for
-its key; the runtime forwards only the one the config names. The image-build,
+`secret_bindings` name the environment variables a composition config may use
+for its keys; the runtime forwards only the selected generator's key and the
+embeddings key. The image-build,
 CV, and CD Fixture descriptors receive no secrets and select one shared
 digest-pinned Fixture implementation through separate reviewed Stage profiles.
 Each Domain-agent build consumes its own descriptor-selected runtime image, so a

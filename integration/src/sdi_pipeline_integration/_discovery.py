@@ -2,7 +2,8 @@
 
 Each requirement's original section and the profile's terms query the service
 repository twice: SQLite FTS5 BM25 over every description's text, and cosine
-similarity over embeddings from the configured endpoint when one is set.
+similarity over embeddings from the configured endpoint when one is set. A
+declared endpoint must answer unless the config allows lexical-only degradation.
 Reciprocal rank fusion merges the two rankings. Each query admits its top
 services in turn, and each admitted service pulls in the services its
 depends_on names and every service that provides one of its inputs, because
@@ -27,7 +28,7 @@ import re
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import openai
 from pydantic import Field
@@ -39,7 +40,6 @@ if TYPE_CHECKING:
     from ._assessment import AssessmentInputs
     from ._service_descriptions import DescriptionFile
 
-DEFAULT_MAX_CONTEXT_BYTES = 96 * 1024
 TOP_K = 3
 TRACE_LENGTH = 10
 RRF_K = 60
@@ -57,6 +57,8 @@ class EmbeddingsConfig(ContractModel):
     model: str = Field(min_length=1)
     base_url: str = Field(min_length=1)
     api_key_env: str = Field(min_length=1)
+    # An unset key or a failed call fails the run unless this allows lexical only.
+    on_unavailable: Literal["fail", "lexical"] = "fail"
 
 
 def service_block(file: DescriptionFile) -> str:
@@ -209,9 +211,28 @@ class Discovery:
         return sum(1 for item in omitted if item["reason"] == "budget")
 
     @property
-    def empty_outcome(self) -> str:
-        """Say why nothing was selected: no match, or no room in the budget."""
-        return "discovery-over-budget" if self.over_budget else "discovery-no-result"
+    def dense_status(self) -> str:
+        """Say whether dense search was used, and why not when it was not."""
+        return str(cast("dict[str, object]", self.record["dense"])["status"])
+
+    def stop_reason(
+        self, embeddings: EmbeddingsConfig | None
+    ) -> tuple[str | None, bool]:
+        """Return why the run stops before generation, and if it is lexical only.
+
+        Declared embeddings that were unusable stop the run unless the config
+        allows lexical only; an empty selection always stops it.
+        """
+        lexical_only = False
+        if embeddings is not None and self.dense_status in {"key-unset", "failed"}:
+            if embeddings.on_unavailable == "fail":
+                return "dense-discovery-unavailable", False
+            lexical_only = True
+        if self.selected:
+            return None, lexical_only
+        if self.over_budget:
+            return "discovery-over-budget", lexical_only
+        return "discovery-no-result", lexical_only
 
 
 class _Selection:

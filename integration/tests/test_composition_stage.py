@@ -7,6 +7,7 @@ contract, never which services the model chose or how it worded them.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import shutil
@@ -15,11 +16,19 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
-from tests._live_model import REPOSITORY_ROOT, live_config, openai_key
+from tests._live_model import (
+    COMPOSITION_CONFIG,
+    REPOSITORY_ROOT,
+    lexical_only_config,
+    live_generator,
+    live_keys,
+    openai_key,
+)
 from tests._proposals import COMPLETE
 from tests._stub_provider import (
     BODIES,
     STUB_KEY,
+    UNAVAILABLE_EMBEDDINGS,
     proposals_body,
     stub_config,
     stub_provider,
@@ -41,10 +50,9 @@ COMMITTED_FILES = (
     "deployment/jenkins/adapters/image-build-fixture-v1.yaml",
     "deployment/jenkins/adapters/cv-fixture-v1.yaml",
     "deployment/jenkins/adapters/cd-fixture-v1.yaml",
-    "integration/generation-configs/luna.yaml",
-    "integration/generation-configs/qwen.yaml",
+    "integration/composition-config.yaml",
 )
-LUNA = "integration/generation-configs/luna.yaml"
+CONFIG_PATH = "integration/composition-config.yaml"
 SERVICE_REPOSITORY = REPOSITORY_ROOT / "service-repository"
 KEY_NAMES = ("OPENAI_API_KEY", "VLLM_KEY")
 NO_RESULT_CODES = {
@@ -92,10 +100,11 @@ def _dispatch(
     tmp_path: Path,
     commit_sha: str,
     *,
-    generation_config: str = LUNA,
+    generator: str | None = None,
     service_repository: Path = SERVICE_REPOSITORY,
     keys: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    """Dispatch a local run with the committed default composition config."""
     environment = {
         name: value for name, value in os.environ.items() if name not in KEY_NAMES
     }
@@ -113,8 +122,7 @@ def _dispatch(
             RUN_REQUEST_PATH,
             "--service-repository",
             str(service_repository),
-            "--generation-config",
-            generation_config,
+            *([] if generator is None else ["--generator", generator]),
             "--bundle-root",
             str(tmp_path / "bundle"),
         ],
@@ -126,19 +134,16 @@ def _dispatch(
 
 
 def _dispatch_stub(
-    tmp_path: Path, body: dict[str, object], extra: str = ""
+    tmp_path: Path,
+    body: dict[str, object],
+    **config: Any,  # noqa: ANN401
 ) -> subprocess.CompletedProcess[str]:
+    """Dispatch with the stub committed as the default composition config."""
     with stub_provider(body) as base_url:
         commit_sha = _repository(
-            tmp_path,
-            {"integration/generation-configs/stub.yaml": stub_config(base_url, extra)},
+            tmp_path, {CONFIG_PATH: stub_config(base_url, **config)}
         )
-        return _dispatch(
-            tmp_path,
-            commit_sha,
-            generation_config="integration/generation-configs/stub.yaml",
-            keys={"VLLM_KEY": STUB_KEY},
-        )
+        return _dispatch(tmp_path, commit_sha, keys={"VLLM_KEY": STUB_KEY})
 
 
 def _composition_files(result: dict[str, object]) -> set[str]:
@@ -176,18 +181,13 @@ def _validate_bundle(tmp_path: Path) -> None:
 
 
 def test_composes_the_waffle_orin_run_with_a_real_model(tmp_path: Path) -> None:
-    config, key_name = live_config()
-    api_key = os.environ.get(key_name) or openai_key()
-    if api_key is None:
-        pytest.skip("neither the Qwen endpoint nor an OpenAI key is available")
+    generator = live_generator()
+    keys = live_keys(generator)
+    if keys is None:
+        pytest.skip(f"the {generator} or embeddings key is unavailable")
     commit_sha = _repository(tmp_path)
 
-    completed = _dispatch(
-        tmp_path,
-        commit_sha,
-        generation_config=f"integration/generation-configs/{config.name}",
-        keys={key_name: api_key},
-    )
+    completed = _dispatch(tmp_path, commit_sha, generator=generator, keys=keys)
 
     assert completed.returncode == 0, completed.stderr
     result = json.loads(completed.stdout)
@@ -211,8 +211,13 @@ def test_composes_the_waffle_orin_run_with_a_real_model(tmp_path: Path) -> None:
     assert image_build["lifecycle_state"] == "skipped"
     assert [cv["lifecycle_state"], cd["lifecycle_state"]] == ["skipped", "skipped"]
     _validate_bundle(tmp_path)
-    assert api_key not in _bundle_text(tmp_path) + completed.stdout + completed.stderr
+    for api_key in keys.values():
+        assert api_key not in (
+            _bundle_text(tmp_path) + completed.stdout + completed.stderr
+        )
     evidence = _evidence(tmp_path)
+    assert evidence["generation"]["generator"] == generator
+    assert evidence["discovery"]["dense"]["status"] == "used"
     if composition["reason"]["code"] == "sdi.composition.bounded-no-result":
         return
     proposals = cast(
@@ -228,21 +233,13 @@ def test_exhausted_output_is_a_bounded_domain_failure(tmp_path: Path) -> None:
     api_key = openai_key()
     if api_key is None:
         pytest.skip("no OpenAI key is available")
-    bounded = (
-        (REPOSITORY_ROOT / LUNA)
-        .read_text()
-        .replace("max_output_tokens: 32000", "max_output_tokens: 16")
+    # luna, the default and first generator, gets the bounded output.
+    bounded = COMPOSITION_CONFIG.read_text().replace(
+        "max_output_tokens: 32000", "max_output_tokens: 16", 1
     )
-    commit_sha = _repository(
-        tmp_path, {"integration/generation-configs/bounded.yaml": bounded}
-    )
+    commit_sha = _repository(tmp_path, {CONFIG_PATH: bounded})
 
-    completed = _dispatch(
-        tmp_path,
-        commit_sha,
-        generation_config="integration/generation-configs/bounded.yaml",
-        keys={"OPENAI_API_KEY": api_key},
-    )
+    completed = _dispatch(tmp_path, commit_sha, keys={"OPENAI_API_KEY": api_key})
 
     assert completed.returncode == 0, completed.stderr
     result = json.loads(completed.stdout)
@@ -253,14 +250,27 @@ def test_exhausted_output_is_a_bounded_domain_failure(tmp_path: Path) -> None:
     assert _composition_files(result) == {"composition_evidence", "diagnostic"}
     evidence = _evidence(tmp_path)
     assert evidence["generation"]["outcome"] == "exhausted"
+    assert evidence["generation"]["generator"] == "luna"
     assert evidence["generation"]["max_output_tokens"] == 16
     _validate_bundle(tmp_path)
     assert api_key not in _bundle_text(tmp_path)
 
 
-def test_a_rejected_key_fails_execution_without_outputs(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("lexical_only", "code"),
+    [
+        (True, "sdi.composition.provider-error"),
+        # Declared embeddings reject the shared key before generation runs.
+        (False, "sdi.composition.dense-discovery-unavailable"),
+    ],
+)
+def test_a_rejected_key_fails_execution_without_outputs(
+    tmp_path: Path, *, lexical_only: bool, code: str
+) -> None:
     api_key = "sk-test-only-invalid"
-    commit_sha = _repository(tmp_path)
+    commit_sha = _repository(
+        tmp_path, {CONFIG_PATH: lexical_only_config()} if lexical_only else {}
+    )
 
     completed = _dispatch(tmp_path, commit_sha, keys={"OPENAI_API_KEY": api_key})
 
@@ -269,7 +279,7 @@ def test_a_rejected_key_fails_execution_without_outputs(tmp_path: Path) -> None:
     composition, image_build, *_ = result["attempts"]
     assert composition["execution_conclusion"] == "failed"
     assert composition["domain_outcome"] == "not_evaluated"
-    assert composition["reason"]["code"] == "sdi.composition.provider-error"
+    assert composition["reason"]["code"] == code
     assert _composition_files(result) == {"diagnostic"}
     assert image_build["reason"]["code"] == "sdi.dependency.prerequisite-blocked"
     _validate_bundle(tmp_path)
@@ -296,7 +306,12 @@ def test_an_answer_without_proposals_fails_execution(
     assert composition["reason"]["code"] == code
     assert _composition_files(result) == {"diagnostic"}
     diagnostic = (tmp_path / "bundle/stages/composition/diagnostic.txt").read_text()
+    config_sha256 = hashlib.sha256(
+        (tmp_path / "repository" / CONFIG_PATH).read_bytes()
+    ).hexdigest()
     for fact in (
+        f"composition_config_sha256: {config_sha256}",
+        "generator: stub",
         "model: stub/model",
         "reasoning_effort: low",
         "max_output_tokens: 1000",
@@ -317,7 +332,14 @@ def test_publishes_the_preferred_stubbed_proposal(tmp_path: Path) -> None:
     assert composition["execution_conclusion"] == "succeeded"
     assert composition["domain_outcome"] == "succeeded"
     assert composition["reason"]["code"] == "sdi.composition.preferred-proposal"
-    discovery = _evidence(tmp_path)["discovery"]
+    evidence = _evidence(tmp_path)
+    assert evidence["generation"]["generator"] == "stub"
+    assert evidence["generation"]["composition_config_sha256"] == (
+        hashlib.sha256((tmp_path / "repository" / CONFIG_PATH).read_bytes()).hexdigest()
+    )
+    assert evidence["generation"]["base_url"].startswith("http://127.0.0.1:")
+    assert "api_key_env" not in evidence["generation"]
+    discovery = evidence["discovery"]
     assert discovery["dense"] == {"status": "not-configured"}
     assert {item["service_id"] for item in COMPLETE["services"]} <= {
         item["service_id"] for item in discovery["selected"]
@@ -390,7 +412,7 @@ def test_a_result_within_a_bounded_context_says_so(tmp_path: Path) -> None:
     }
 
     completed = _dispatch_stub(
-        tmp_path, proposals_body([navigation_only]), "max_context_bytes: 4000\n"
+        tmp_path, proposals_body([navigation_only]), max_context_bytes=4000
     )
 
     assert completed.returncode == 0, completed.stderr
@@ -411,7 +433,7 @@ def test_a_budget_no_description_fits_fails_before_generation(
     tmp_path: Path,
 ) -> None:
     completed = _dispatch_stub(
-        tmp_path, proposals_body([COMPLETE]), "max_context_bytes: 100\n"
+        tmp_path, proposals_body([COMPLETE]), max_context_bytes=100
     )
 
     assert completed.returncode == 1, completed.stderr
@@ -446,32 +468,73 @@ def test_an_invalid_description_fails_before_generation(tmp_path: Path) -> None:
     assert "invalid_description: broken/SDI.md" in diagnostic
 
 
-@pytest.mark.parametrize("defect", ["symlinked-description", "unbound-key"])
+def test_declared_embeddings_that_fail_end_the_stage_before_generation(
+    tmp_path: Path,
+) -> None:
+    completed = _dispatch_stub(
+        tmp_path,
+        proposals_body([COMPLETE]),
+        embeddings={"model": UNAVAILABLE_EMBEDDINGS},
+    )
+
+    assert completed.returncode == 1, completed.stderr
+    composition = json.loads(completed.stdout)["attempts"][0]
+    assert composition["execution_conclusion"] == "failed"
+    assert composition["reason"]["code"] == (
+        "sdi.composition.dense-discovery-unavailable"
+    )
+    diagnostic = (tmp_path / "bundle/stages/composition/diagnostic.txt").read_text()
+    assert "\ndense_status: failed\n" in diagnostic
+    assert "generation_outcome" not in diagnostic
+    _validate_bundle(tmp_path)
+
+
+def test_allowed_lexical_only_discovery_is_in_the_stage_summary(
+    tmp_path: Path,
+) -> None:
+    completed = _dispatch_stub(
+        tmp_path,
+        proposals_body([COMPLETE]),
+        embeddings={"model": UNAVAILABLE_EMBEDDINGS, "on_unavailable": "lexical"},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    composition = json.loads(completed.stdout)["attempts"][0]
+    assert composition["reason"]["code"] == "sdi.composition.preferred-proposal"
+    assert composition["reason"]["summary"].endswith(
+        "Embeddings were unavailable, so discovery was lexical only."
+    )
+    assert _evidence(tmp_path)["discovery"]["dense"]["status"] == "failed"
+    _validate_bundle(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "defect", ["symlinked-description", "unbound-key", "unknown-generator"]
+)
 def test_rejects_unsafe_composition_inputs_before_launch(
     tmp_path: Path, defect: str
 ) -> None:
     service_repository = tmp_path / "service-repository"
     shutil.copytree(SERVICE_REPOSITORY, service_repository)
     extra: dict[str, str] = {}
-    generation_config = LUNA
+    generator = None
     if defect == "symlinked-description":
         (service_repository / "linked").mkdir()
         (service_repository / "linked/SDI.md").symlink_to(
             service_repository / "nav2-navigation/SDI.md"
         )
-    else:
-        extra["integration/generation-configs/other.yaml"] = (
-            (REPOSITORY_ROOT / LUNA)
-            .read_text()
-            .replace("api_key_env: OPENAI_API_KEY", "api_key_env: OTHER_KEY")
+    elif defect == "unbound-key":
+        extra[CONFIG_PATH] = COMPOSITION_CONFIG.read_text().replace(
+            "api_key_env: OPENAI_API_KEY", "api_key_env: OTHER_KEY", 1
         )
-        generation_config = "integration/generation-configs/other.yaml"
+    else:
+        generator = "absent"
     commit_sha = _repository(tmp_path, extra)
 
     completed = _dispatch(
         tmp_path,
         commit_sha,
-        generation_config=generation_config,
+        generator=generator,
         service_repository=service_repository,
         keys={"OTHER_KEY": "sk-test-only-other"},
     )

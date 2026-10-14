@@ -1,7 +1,7 @@
 """Implemented composition Stage adapter: generate, assess and publish.
 
 The adapter discovers the service descriptions relevant to the requirements and
-profile, asks the configured model for proposals over those, assesses them
+profile, asks the selected generator for proposals over those, assesses them
 against the whole repository, and publishes the preferred proposal as the
 composition blueprint and deployment schema. Every successful execution also
 publishes evidence of the discovery trace and the exact request, response and
@@ -17,12 +17,13 @@ import hashlib
 import re
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ValidationError
 
 from ._adapter_output import atomic_write
 from ._assessment import AssessmentInputs, assess_proposals
+from ._composition_config import CompositionSettings
 from ._contracts import (
     MobilityRequirementsSpecification,
     RunRequest,
@@ -34,11 +35,7 @@ from ._domain_contracts import (
     CompositionEvidence,
     DeploymentSchema,
 )
-from ._generation import (
-    MAX_RETRIES,
-    GenerationConfig,
-    generate_proposals,
-)
+from ._generation import generate_proposals
 from ._jenkins_agent_boundary import enforce_domain_execution_boundary
 from ._json_input import canonical_json, parse_json
 from ._service_descriptions import (
@@ -108,6 +105,12 @@ OUTCOMES: dict[str, tuple[str, str, str, str]] = {
         "input",
         "No retrieved service description fits the context budget.",
     ),
+    "dense-discovery-unavailable": (
+        "failed",
+        "not_evaluated",
+        "tool",
+        "The declared embeddings endpoint was unavailable to discovery.",
+    ),
     "invalid-service-description": (
         "failed",
         "not_evaluated",
@@ -164,6 +167,8 @@ class _Run:
         self.output_root = output_root
         self.outputs = {item.slot: item.path for item in request.outputs}
         self.facts: dict[str, object] = {}
+        # Discovery fell back to lexical only, as the config allows.
+        self.lexical_only = False
         # A manifest path, already checked against the manifest's path pattern.
         self.invalid_description: str | None = None
 
@@ -188,7 +193,10 @@ class _Run:
                 "reason": {
                     "category": category,
                     "code": f"sdi.composition.{code}",
-                    "summary": summary,
+                    "summary": f"{summary} Embeddings were unavailable, so "
+                    "discovery was lexical only."
+                    if self.lexical_only
+                    else summary,
                 },
                 "consumed_inputs": [item.slot for item in self.request.inputs],
                 "produced_outputs": list(documents),
@@ -299,6 +307,27 @@ def _blueprint_documents(
 type Outcome = tuple[str, dict[str, BaseModel]]
 
 
+def _composition_settings(
+    content: bytes, work_limit_seconds: int
+) -> CompositionSettings:
+    """Return the run's settings, with a generation timeout that fits the limit."""
+    settings = validate_contract(
+        CompositionSettings,
+        parse_json(content, "composition-settings.json", max_bytes=len(content)),
+        "composition-settings.json",
+    )
+    reserve = TIMEOUT_RESERVE_SECONDS + (
+        0 if settings.discovery.embeddings is None else EMBEDDINGS_TIMEOUT_SECONDS
+    )
+    config = settings.generator_config
+    timeout = max(1, min(config.timeout_seconds, work_limit_seconds - reserve))
+    return settings.model_copy(
+        update={
+            "generator_config": config.model_copy(update={"timeout_seconds": timeout})
+        }
+    )
+
+
 def _compose(run: _Run, input_root: Path) -> Outcome:
     """Return the outcome code and the documents the run publishes."""
     request = run.request
@@ -336,30 +365,14 @@ def _compose(run: _Run, input_root: Path) -> Outcome:
     requirements = validate_contract(
         MobilityRequirementsSpecification, front_matter, "requirements-specification.md"
     )
-    config = validate_contract(
-        GenerationConfig,
-        parse_yaml(contents["generation_config"], "generation-config.yaml"),
-        "generation-config.yaml",
+    composition = _composition_settings(
+        contents["composition_settings"], request.work_limit_seconds
     )
-    reserve = TIMEOUT_RESERVE_SECONDS + (
-        0 if config.embeddings is None else EMBEDDINGS_TIMEOUT_SECONDS
-    )
-    config = config.model_copy(
-        update={
-            "timeout_seconds": max(
-                1, min(config.timeout_seconds, request.work_limit_seconds - reserve)
-            )
-        }
-    )
-    config_sha256 = declared["generation_config"].sha256
-    run.facts |= {
-        "config_sha256": config_sha256,
-        "model": config.model,
-        "reasoning_effort": config.reasoning_effort,
-        "max_output_tokens": config.max_output_tokens,
-        "timeout_seconds": config.timeout_seconds,
-        "max_context_bytes": config.max_context_bytes,
-    }
+    config = composition.generator_config
+    embeddings = composition.discovery.embeddings
+    settings = composition.evidence_settings()
+    # A URL never matches the diagnostic fact pattern; the evidence records it.
+    run.facts |= {name: value for name, value in settings.items() if name != "base_url"}
     identity: dict[str, object] = {
         "evidence_basis": "implemented",
         "scenario_id": run_request.scenario_id,
@@ -383,18 +396,19 @@ def _compose(run: _Run, input_root: Path) -> Outcome:
 
     discovery = discover(
         inputs,
-        embeddings=config.embeddings,
+        embeddings=embeddings,
         max_context_bytes=config.max_context_bytes,
     )
     record = discovery.record
     run.facts |= {
         "discovery_selected": len(discovery.selected),
         "discovery_omitted": len(discovery.omitted),
-        "dense_status": str(cast("dict[str, object]", record["dense"])["status"]),
+        "dense_status": discovery.dense_status,
     }
     run.facts["discovery_over_budget"] = discovery.over_budget
-    if not discovery.selected:
-        return discovery.empty_outcome, {}
+    stopped, run.lexical_only = discovery.stop_reason(embeddings)
+    if stopped is not None:
+        return stopped, {}
     generation = generate_proposals(inputs=inputs, discovery=discovery, config=config)
     run.facts |= generation.provider_facts()
     if generation.outcome not in {"generated", "exhausted"}:
@@ -405,12 +419,7 @@ def _compose(run: _Run, input_root: Path) -> Outcome:
             {"path": item.path, "sha256": item.sha256} for item in manifest.files
         ],
         "generation": {
-            "config_sha256": config_sha256,
-            "model": config.model,
-            "reasoning_effort": config.reasoning_effort,
-            "max_output_tokens": config.max_output_tokens,
-            "timeout_seconds": config.timeout_seconds,
-            "max_retries": MAX_RETRIES,
+            **settings,
             "outcome": generation.outcome,
             "request": generation.request,
             "response": generation.response,

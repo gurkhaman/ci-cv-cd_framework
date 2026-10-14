@@ -15,6 +15,7 @@ from ._local_dispatch import DESCRIPTORS, assemble_bundle, validate_bundle
 from ._run_input import identify_committed_run
 from ._stage_runtime import (
     StageExecution,
+    check_key_bindings,
     committed_stage_sources,
     execute_identified_stage,
     load_stage_adapter,
@@ -97,7 +98,8 @@ def _identify_submitted_run(  # noqa: PLR0913
     run_request_path: str,
     execution_id: str,
     service_repository: Path,
-    generation_config: str,
+    composition_config: str,
+    generator: str | None,
 ) -> tuple[dict[str, Any], GitRepository, dict[str, StageInputSource]]:
     identified = identify_committed_run(
         repository_path=repository_path,
@@ -113,7 +115,8 @@ def _identify_submitted_run(  # noqa: PLR0913
     ) | supplied_stage_sources(
         repository,
         service_repository=service_repository,
-        generation_config=generation_config,
+        composition_config=composition_config,
+        generator=generator,
     )
     return identified, repository, run_inputs
 
@@ -131,7 +134,8 @@ def preflight_jenkins_run(  # noqa: PLR0913
     build_started_at_millis: str,
     resource_nodes: Mapping[str, str],
     service_repository: Path,
-    generation_config: str,
+    composition_config: str,
+    generator: str | None,
 ) -> dict[str, Any]:
     """Revalidate one submitted run, every Stage, and allocated resources."""
     enforce_integration_execution_boundary()
@@ -144,14 +148,15 @@ def preflight_jenkins_run(  # noqa: PLR0913
     if dict(resource_nodes) != EXPECTED_RESOURCE_NODES:
         msg = "Jenkins resource mapping does not match the reviewed topology"
         raise InputError(msg)
-    identified, repository, _run_inputs = _identify_submitted_run(
+    identified, repository, run_inputs = _identify_submitted_run(
         repository_path=repository_path,
         requested_ref=requested_ref,
         resolved_commit=resolved_commit,
         run_request_path=run_request_path,
         execution_id=execution_id,
         service_repository=service_repository,
-        generation_config=generation_config,
+        composition_config=composition_config,
+        generator=generator,
     )
     for expected_stage, descriptor_path in DESCRIPTORS:
         descriptor, profile = load_stage_adapter(repository, descriptor_path)
@@ -163,6 +168,7 @@ def preflight_jenkins_run(  # noqa: PLR0913
         ):
             msg = f"{expected_stage} does not match its reviewed Jenkins Stage"
             raise InputError(msg)
+        check_key_bindings(descriptor, run_inputs)
     return identified
 
 
@@ -230,7 +236,8 @@ def execute_jenkins_stage(  # noqa: PLR0913
     work_limit_seconds: int,
     run_deadline_epoch_millis: str,
     service_repository: Path,
-    generation_config: str,
+    composition_config: str,
+    generator: str | None,
 ) -> dict[str, Any]:
     """Execute the next Stage from validated committed and stashed inputs."""
     identified, repository, run_inputs = _identify_submitted_run(
@@ -240,7 +247,8 @@ def execute_jenkins_stage(  # noqa: PLR0913
         run_request_path=run_request_path,
         execution_id=execution_id,
         service_repository=service_repository,
-        generation_config=generation_config,
+        composition_config=composition_config,
+        generator=generator,
     )
     executions, available_inputs = _load_execution_prefix(
         prior_attempt_roots,
@@ -310,7 +318,8 @@ def finalize_jenkins_run(  # noqa: PLR0913
     run_deadline_expired: bool,
     bundle_root: Path,
     service_repository: Path,
-    generation_config: str,
+    composition_config: str,
+    generator: str | None,
 ) -> dict[str, Any]:
     """Materialize skips and assemble one complete validated Jenkins result."""
     enforce_integration_execution_boundary()
@@ -321,7 +330,8 @@ def finalize_jenkins_run(  # noqa: PLR0913
         run_request_path=run_request_path,
         execution_id=execution_id,
         service_repository=service_repository,
-        generation_config=generation_config,
+        composition_config=composition_config,
+        generator=generator,
     )
     executions, _available_inputs = _load_execution_prefix(
         attempt_roots,

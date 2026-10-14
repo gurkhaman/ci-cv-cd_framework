@@ -100,8 +100,8 @@
       "slot": "service_repository"
     },
     {
-      "sha256": "337d36b1cff3cd3e26362e18353349462cb4b59fd81e92ca50d0d5c92850ac44",
-      "slot": "generation_config"
+      "sha256": "352b1a9e903dcf32a95afcbe4a2edfeb93f6278fbf76f05137f9c1ffcd36fea5",
+      "slot": "composition_settings"
     }
   ],
   "testcase_id": "TC-03"

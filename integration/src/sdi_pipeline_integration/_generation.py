@@ -1,11 +1,9 @@
 """Model generation of composition proposals through the OpenAI Responses API.
 
-A generation config file selects the model, its endpoint and the environment
-variable holding its key, and optionally the embeddings endpoint and the context
-budget that discovery uses to select the descriptions the model sees. Use the
-self-hosted Qwen config while its endpoint is up and rerun with the OpenAI luna
-config when it is not. Each endpoint reads only its own key, so the OpenAI key
-never reaches another server.
+Each generator in the composition config names its model, limits, endpoint, the
+environment variable holding its key, and the context budget that discovery uses
+to select the descriptions the model sees. Each endpoint reads only its own key,
+so a key never reaches another server.
 """
 
 from __future__ import annotations
@@ -23,9 +21,7 @@ from pydantic import (
     PositiveInt,
     ValidationError,
     create_model,
-    model_validator,
 )
-from pydantic.json_schema import SkipJsonSchema  # noqa: TC002
 
 from ._assessment import (
     AssessmentInputs,
@@ -34,8 +30,8 @@ from ._assessment import (
     Proposal,
     ServicePlacement,
 )
-from ._contracts import ContractModel, reject_explicit_nulls
-from ._discovery import DEFAULT_MAX_CONTEXT_BYTES, EmbeddingsConfig, service_block
+from ._contracts import ContractModel
+from ._discovery import service_block
 from ._json_input import canonical_json
 
 if TYPE_CHECKING:
@@ -106,24 +102,17 @@ INCOMPLETE_OUTCOMES: dict[str, Outcome] = {
 }
 
 
-class GenerationConfig(ContractModel):
-    """The model, limits and endpoint for one generation request."""
+class GeneratorConfig(ContractModel):
+    """One generator's model, limits, context budget and endpoint."""
 
-    schema_version: Literal["sdi.generation-config/v1"]
     model: str = Field(min_length=1)
     reasoning_effort: Literal["low", "medium", "high", "xhigh"]
     max_output_tokens: PositiveInt
     timeout_seconds: PositiveInt
+    # A model-capacity limit, so each generator sets its own.
+    max_context_bytes: PositiveInt
     base_url: str = Field(min_length=1)
     api_key_env: str = Field(min_length=1)
-    embeddings: EmbeddingsConfig | SkipJsonSchema[None] = None
-    max_context_bytes: PositiveInt = DEFAULT_MAX_CONTEXT_BYTES
-
-    @model_validator(mode="before")
-    @classmethod
-    def reject_explicit_unknowns(cls, data: object) -> object:
-        """Require absent embeddings to be omitted rather than null."""
-        return reject_explicit_nulls(data, ("embeddings",))
 
 
 def _generation_model(
@@ -217,7 +206,7 @@ class GenerationResult:
 
 
 def generate_proposals(
-    *, inputs: AssessmentInputs, discovery: Discovery, config: GenerationConfig
+    *, inputs: AssessmentInputs, discovery: Discovery, config: GeneratorConfig
 ) -> GenerationResult:
     """Ask the configured model for proposals and report how the request ended.
 

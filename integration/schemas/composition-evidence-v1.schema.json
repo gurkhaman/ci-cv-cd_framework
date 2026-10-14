@@ -24,12 +24,28 @@
     },
     "GenerationRecord": {
       "additionalProperties": false,
-      "description": "The settings, exact request and response summary of one generation.",
+      "description": "The selected generator's settings, exact request and response summary.",
       "properties": {
-        "config_sha256": {
-          "pattern": "^[0-9a-f]{64}$",
-          "title": "Config Sha256",
+        "base_url": {
+          "minLength": 1,
+          "title": "Base Url",
           "type": "string"
+        },
+        "composition_config_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Composition Config Sha256",
+          "type": "string"
+        },
+        "generator": {
+          "maxLength": 63,
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+          "title": "Generator",
+          "type": "string"
+        },
+        "max_context_bytes": {
+          "exclusiveMinimum": 0,
+          "title": "Max Context Bytes",
+          "type": "integer"
         },
         "max_output_tokens": {
           "exclusiveMinimum": 0,
@@ -80,11 +96,14 @@
         }
       },
       "required": [
-        "config_sha256",
+        "composition_config_sha256",
+        "generator",
         "model",
         "reasoning_effort",
         "max_output_tokens",
         "timeout_seconds",
+        "max_context_bytes",
+        "base_url",
         "max_retries",
         "outcome",
         "request",
