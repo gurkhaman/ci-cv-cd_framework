@@ -1337,7 +1337,7 @@ def load_stage_adapter(
 def _adapter_environment(
     descriptor: AdapterDescriptor, input_models: Mapping[str, BaseModel]
 ) -> tuple[dict[str, str], tuple[bytes, ...]]:
-    """Build the adapter's environment, forwarding only its bound model key."""
+    """Build the adapter's environment, forwarding only its bound model keys."""
     environment = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "LC_ALL": "C.UTF-8",
@@ -1345,7 +1345,10 @@ def _adapter_environment(
     config = input_models.get("generation_config")
     if not isinstance(config, GenerationConfig) or not descriptor.secret_bindings:
         return environment, ()
-    if config.api_key_env not in descriptor.secret_bindings:
+    key_names = [config.api_key_env]
+    if config.embeddings is not None:
+        key_names.append(config.embeddings.api_key_env)
+    if not set(key_names) <= set(descriptor.secret_bindings):
         msg = "generation config names a key the adapter descriptor does not bind"
         raise InputError(msg)
     environment.update(
@@ -1355,11 +1358,13 @@ def _adapter_environment(
             if name in os.environ
         }
     )
-    api_key = os.environ.get(config.api_key_env)
-    if not api_key:
-        return environment, ()
-    environment[config.api_key_env] = api_key
-    return environment, (api_key.encode(),)
+    secrets: list[bytes] = []
+    for name in dict.fromkeys(key_names):
+        api_key = os.environ.get(name)
+        if api_key:
+            environment[name] = api_key
+            secrets.append(api_key.encode())
+    return environment, tuple(secrets)
 
 
 def enforce_jenkins_agent_boundary(descriptor: AdapterDescriptor) -> None:

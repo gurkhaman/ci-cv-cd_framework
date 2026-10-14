@@ -1,9 +1,11 @@
 """Implemented composition Stage adapter: generate, assess and publish.
 
-The adapter asks the configured model for proposals over the supplied service
-descriptions, assesses them, and publishes the preferred proposal as the
+The adapter discovers the service descriptions relevant to the requirements and
+profile, asks the configured model for proposals over those, assesses them
+against the whole repository, and publishes the preferred proposal as the
 composition blueprint and deployment schema. Every successful execution also
-publishes evidence of the exact request, response and assessment. Reason
+publishes evidence of the discovery trace and the exact request, response and
+assessment. Reason
 summaries and the diagnostic come only from fixed templates, so provider text
 never reaches durable output.
 """
@@ -15,7 +17,7 @@ import hashlib
 import re
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from pydantic import BaseModel, ValidationError
 
@@ -26,6 +28,7 @@ from ._contracts import (
     RunRequest,
     TargetExecutionProfile,
 )
+from ._discovery import EMBEDDINGS_TIMEOUT_SECONDS, discover
 from ._domain_contracts import (
     CompositionBlueprint,
     CompositionEvidence,
@@ -92,6 +95,18 @@ OUTCOMES: dict[str, tuple[str, str, str, str]] = {
         "failed",
         "domain",
         "No generated proposal was eligible.",
+    ),
+    "discovery-no-result": (
+        "failed",
+        "not_evaluated",
+        "input",
+        "Discovery retrieved no service description.",
+    ),
+    "discovery-over-budget": (
+        "failed",
+        "not_evaluated",
+        "input",
+        "No retrieved service description fits the context budget.",
     ),
     "invalid-service-description": (
         "failed",
@@ -326,14 +341,13 @@ def _compose(run: _Run, input_root: Path) -> Outcome:
         parse_yaml(contents["generation_config"], "generation-config.yaml"),
         "generation-config.yaml",
     )
+    reserve = TIMEOUT_RESERVE_SECONDS + (
+        0 if config.embeddings is None else EMBEDDINGS_TIMEOUT_SECONDS
+    )
     config = config.model_copy(
         update={
             "timeout_seconds": max(
-                1,
-                min(
-                    config.timeout_seconds,
-                    request.work_limit_seconds - TIMEOUT_RESERVE_SECONDS,
-                ),
+                1, min(config.timeout_seconds, request.work_limit_seconds - reserve)
             )
         }
     )
@@ -344,6 +358,7 @@ def _compose(run: _Run, input_root: Path) -> Outcome:
         "reasoning_effort": config.reasoning_effort,
         "max_output_tokens": config.max_output_tokens,
         "timeout_seconds": config.timeout_seconds,
+        "max_context_bytes": config.max_context_bytes,
     }
     identity: dict[str, object] = {
         "evidence_basis": "implemented",
@@ -366,7 +381,21 @@ def _compose(run: _Run, input_root: Path) -> Outcome:
         return "invalid-service-description", {}
     inputs = AssessmentInputs(files, profile, requirements, requirements_body)
 
-    generation = generate_proposals(inputs=inputs, config=config)
+    discovery = discover(
+        inputs,
+        embeddings=config.embeddings,
+        max_context_bytes=config.max_context_bytes,
+    )
+    record = discovery.record
+    run.facts |= {
+        "discovery_selected": len(discovery.selected),
+        "discovery_omitted": len(discovery.omitted),
+        "dense_status": str(cast("dict[str, object]", record["dense"])["status"]),
+    }
+    run.facts["discovery_over_budget"] = discovery.over_budget
+    if not discovery.selected:
+        return discovery.empty_outcome, {}
+    generation = generate_proposals(inputs=inputs, discovery=discovery, config=config)
     run.facts |= generation.provider_facts()
     if generation.outcome not in {"generated", "exhausted"}:
         return GENERATION_FAILURES[generation.outcome], {}
@@ -386,6 +415,7 @@ def _compose(run: _Run, input_root: Path) -> Outcome:
             "request": generation.request,
             "response": generation.response,
         },
+        "discovery": record,
     }
     proposals = generation.proposals
     if proposals is None:
@@ -395,10 +425,17 @@ def _compose(run: _Run, input_root: Path) -> Outcome:
             )
         }
     assessment = assess_proposals(proposals, inputs)
+    assessed = assessment.to_evidence()
+    if assessment.preferred is None and not discovery.complete:
+        # Search limits bound this result; they say nothing about feasibility.
+        assessed["reason"] = (
+            f"{assessed['reason']} within the bounded supplied context; "
+            "see discovery.omitted"
+        )
     documents: dict[str, BaseModel] = {
         "composition_evidence": validate_contract(
             CompositionEvidence,
-            evidence | {"assessment": assessment.to_evidence()},
+            evidence | {"assessment": assessed},
             "composition-evidence.json",
         )
     }

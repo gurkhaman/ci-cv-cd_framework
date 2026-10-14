@@ -4,8 +4,9 @@ Live tests cover generated, exhausted and rejected-key outcomes against the real
 provider. A refusal, a content-filter stop, output outside the proposal schema,
 a failed response and a chosen set of proposals cannot be requested from it, so
 these tests point a generation config's base_url at this stub, which answers
-every request with one recorded Responses body. The real SDK still parses every
-answer.
+every Responses request with one recorded body. Embeddings requests get a small
+deterministic vector per input text, so discovery's dense ranking runs without
+a provider. The real SDK still parses every answer.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ import json
 import threading
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -84,16 +85,41 @@ def proposals_body(proposals: list[dict[str, object]]) -> dict[str, object]:
     return _response("completed", _text(json.dumps({"proposals": proposals})))
 
 
+def _embeddings(request: dict[str, Any]) -> bytes:
+    """Embed each text by its counts of a few mission words."""
+    words = ("navigat", "face", "speech", "audio", "camera", "map")
+    return json.dumps(
+        {
+            "object": "list",
+            "model": request["model"],
+            "data": [
+                {
+                    "object": "embedding",
+                    "index": index,
+                    "embedding": [1.0] + [float(text.count(word)) for word in words],
+                }
+                for index, text in enumerate(request["input"])
+            ],
+            "usage": {"prompt_tokens": 1, "total_tokens": 1},
+        }
+    ).encode()
+
+
 class _Handler(BaseHTTPRequestHandler):
     body: ClassVar[bytes] = b""
 
     def do_POST(self) -> None:
-        self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        request = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        body = (
+            _embeddings(json.loads(request))
+            if self.path.endswith("/embeddings")
+            else self.body
+        )
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(self.body)))
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(self.body)
+        self.wfile.write(body)
 
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002
         del format, args
@@ -113,7 +139,7 @@ def stub_provider(body: dict[str, object]) -> Generator[str]:
         server.server_close()
 
 
-def stub_config(base_url: str) -> str:
+def stub_config(base_url: str, extra: str = "") -> str:
     """Return a generation config that sends requests to the stub."""
     return (
         "schema_version: sdi.generation-config/v1\n"
@@ -123,4 +149,15 @@ def stub_config(base_url: str) -> str:
         "timeout_seconds: 30\n"
         f"base_url: {base_url}\n"
         "api_key_env: VLLM_KEY\n"
+        f"{extra}"
+    )
+
+
+def stub_embeddings(base_url: str) -> str:
+    """Return the config lines that send embeddings requests to the stub."""
+    return (
+        "embeddings:\n"
+        "  model: stub/embeddings\n"
+        f"  base_url: {base_url}\n"
+        "  api_key_env: VLLM_KEY\n"
     )

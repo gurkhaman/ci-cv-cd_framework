@@ -5,7 +5,7 @@ from __future__ import annotations
 import functools
 import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Annotated, Literal, cast
 
 from pydantic import Field
@@ -59,6 +59,15 @@ type CoverageStatus = Literal[
 ]
 type PlacementStatus = Literal["resolved", "unresolved", "rejected"]
 type AssessmentOutcome = Literal["preferred", "scoped-rejection", "insufficient"]
+type RankingCriterion = Literal["supported", "gaps", "model-order"]
+RANKING = {
+    "criteria": (
+        "most requirements supported after the checks",
+        "then fewest gaps",
+    ),
+    "performance_evidence": "none available, so it decides nothing",
+    "ties": "first in the model's order",
+}
 NO_PREFERENCE_REASONS: dict[AssessmentOutcome, str] = {
     "scoped-rejection": "every proposal lost all of its services to placement removals",
     "insufficient": "no proposal is eligible",
@@ -123,6 +132,21 @@ class PlacedService:
 
 
 @dataclass(frozen=True)
+class Score:
+    """Counts that rank an eligible proposal; only supported and gaps decide."""
+
+    supported: int
+    gaps: int
+    missing: int
+    uncertain: int
+
+    @property
+    def key(self) -> tuple[int, int]:
+        """Sort key: most supported first, then fewest gaps."""
+        return (-self.supported, self.gaps)
+
+
+@dataclass(frozen=True)
 class AssessedProposal:
     """One proposal and the outcome of every check it reached.
 
@@ -136,7 +160,9 @@ class AssessedProposal:
     services: list[PlacedService] | None = None
     bindings: list[dict[str, object]] | None = None
     coverage: list[CoverageClaim] | None = None
-    score: tuple[int, int] | None = None
+    score: Score | None = None
+    # How the ranking ordered this proposal behind the preferred one.
+    decided_by: RankingCriterion | None = None
 
     @property
     def kept(self) -> list[PlacedService]:
@@ -169,7 +195,13 @@ class AssessedProposal:
             else [entry.model_dump(mode="json") for entry in self.coverage],
             "score": None
             if self.score is None
-            else {"gaps": self.score[0], "missing": self.score[1]},
+            else {
+                "supported": self.score.supported,
+                "gaps": self.score.gaps,
+                "missing": self.score.missing,
+                "uncertain": self.score.uncertain,
+            },
+            "decided_by": self.decided_by,
             "proposal": self.proposal.model_dump(mode="json", exclude_unset=True),
         }
 
@@ -181,6 +213,7 @@ class Assessment:
     proposals: list[AssessedProposal]
     preferred: AssessedProposal | None
     tie_broken_by_model_order: bool
+    order: list[str]
 
     @property
     def outcome(self) -> AssessmentOutcome:
@@ -199,6 +232,8 @@ class Assessment:
             "preferred": None if self.preferred is None else self.preferred.proposal_id,
             "tie_broken_by_model_order": self.tie_broken_by_model_order,
             "reason": NO_PREFERENCE_REASONS.get(self.outcome),
+            "ranking": RANKING
+            | {"criteria": list(RANKING["criteria"]), "order": self.order},
             "proposals": [item.to_evidence() for item in self.proposals],
         }
 
@@ -561,9 +596,11 @@ def _check(
         services=placed,
         bindings=bindings,
         coverage=coverage,
-        score=(
-            sum(1 for finding in findings if finding["gap"]),
-            sum(1 for entry in coverage if entry.status == "missing"),
+        score=Score(
+            supported=sum(1 for entry in coverage if entry.status == "supported"),
+            gaps=sum(1 for finding in findings if finding["gap"]),
+            missing=sum(1 for entry in coverage if entry.status == "missing"),
+            uncertain=sum(1 for entry in coverage if entry.status == "uncertain"),
         ),
     )
 
@@ -571,7 +608,11 @@ def _check(
 def assess_proposals(
     proposals: CompositionProposals, inputs: AssessmentInputs
 ) -> Assessment:
-    """Check every proposal and prefer the eligible one with fewest gaps."""
+    """Check every proposal and prefer the eligible one supporting the most.
+
+    Supported coverage ranks first and fewer gaps second; no performance
+    evidence is available, so equal proposals keep the model's order.
+    """
     services = {file.description.service_id: file.description for file in inputs.files}
     assessed: list[AssessedProposal] = []
     for index, proposal in enumerate(proposals.proposals):
@@ -584,17 +625,45 @@ def assess_proposals(
             if ineligible
             else _check(proposal_id, proposal, services, inputs.profile)
         )
-    # Sorting is stable, so equal scores keep the model's order.
+    # Sorting is stable, so equal keys keep the model's order.
     ranked = sorted(
         (item for item in assessed if item.score is not None),
-        key=lambda item: item.score or (0, 0),
+        key=lambda item: item.score.key if item.score else (0, 0),
+    )
+    if ranked:
+        decided = {
+            item.proposal_id: _decided_by(ranked[0], item) for item in ranked[1:]
+        }
+        assessed = [
+            replace(item, decided_by=decided.get(item.proposal_id)) for item in assessed
+        ]
+    preferred = next(
+        (
+            item
+            for item in assessed
+            if ranked and item.proposal_id == ranked[0].proposal_id
+        ),
+        None,
     )
     return Assessment(
         proposals=assessed,
-        preferred=ranked[0] if ranked else None,
+        preferred=preferred,
         tie_broken_by_model_order=len(ranked) > 1
-        and ranked[0].score == ranked[1].score,
+        and _decided_by(ranked[0], ranked[1]) == "model-order",
+        order=[item.proposal_id for item in ranked],
     )
+
+
+def _decided_by(
+    preferred: AssessedProposal, other: AssessedProposal
+) -> RankingCriterion:
+    """Name the first criterion that ranks other behind preferred."""
+    first, second = cast("Score", preferred.score), cast("Score", other.score)
+    if first.supported != second.supported:
+        return "supported"
+    if first.gaps != second.gaps:
+        return "gaps"
+    return "model-order"
 
 
 @dataclass(frozen=True)

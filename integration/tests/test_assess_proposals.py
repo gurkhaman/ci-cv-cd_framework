@@ -107,8 +107,14 @@ WITHOUT_FACE_RECOG = _variant(
 )
 
 
+WITHOUT_CAMERA = _variant(
+    drop=("v4l2-camera",),
+    coverage={"verify-recipient-face": ("supported", ["face-recog"])},
+)
+
+
 @pytest.mark.parametrize(
-    ("proposals", "scores", "preferred", "tie"),
+    ("proposals", "ranks", "preferred", "tie"),
     [
         pytest.param(
             [
@@ -124,44 +130,45 @@ WITHOUT_FACE_RECOG = _variant(
                 ),
                 COMPLETE,
             ],
-            [(2, 2), (0, 0)],
+            [(3, 2, "supported"), (5, 0, None)],
             "proposal-2",
             False,
             id="complete-beats-without-localization",
         ),
         pytest.param(
             [WITHOUT_FACE_RECOG, COMPLETE],
-            [(0, 1), (0, 0)],
+            [(4, 0, "supported"), (5, 0, None)],
             "proposal-2",
             False,
-            id="missing-count-decides",
+            id="supported-count-decides",
         ),
         pytest.param(
-            [
-                _variant(
-                    drop=("v4l2-camera",),
-                    coverage={"verify-recipient-face": ("supported", ["face-recog"])},
-                ),
-                WITHOUT_FACE_RECOG,
-            ],
-            [(1, 0), (0, 1)],
+            [WITHOUT_FACE_RECOG, WITHOUT_CAMERA],
+            [(4, 0, "supported"), (5, 1, None)],
             "proposal-2",
             False,
-            id="gaps-beat-missing",
+            id="coverage-beats-gaps",
+        ),
+        pytest.param(
+            [WITHOUT_CAMERA, COMPLETE],
+            [(5, 1, "gaps"), (5, 0, None)],
+            "proposal-2",
+            False,
+            id="gaps-decide-equal-coverage",
         ),
         pytest.param(
             [COMPLETE, _variant(hosts={"nav2-navigation": "waffle"})],
-            [(0, 0), (0, 0)],
+            [(5, 0, None), (5, 0, "model-order")],
             "proposal-1",
             True,
             id="tie-broken-by-model-order",
         ),
     ],
 )
-def test_prefers_the_proposal_with_fewest_gaps_then_missing_coverage(
+def test_prefers_the_most_supported_proposal_then_fewest_gaps(
     tmp_path: Path,
     proposals: list[dict[str, Any]],
-    scores: list[tuple[int, int] | None],
+    ranks: list[tuple[int, int, str | None]],
     preferred: str,
     *,
     tie: bool,
@@ -169,13 +176,17 @@ def test_prefers_the_proposal_with_fewest_gaps_then_missing_coverage(
     assessment = _assessment(tmp_path, proposals)
 
     assert [
-        None
-        if proposal["score"] is None
-        else (proposal["score"]["gaps"], proposal["score"]["missing"])
+        (
+            proposal["score"]["supported"],
+            proposal["score"]["gaps"],
+            proposal["decided_by"],
+        )
         for proposal in assessment["proposals"]
-    ] == scores
+    ] == ranks
     assert assessment["preferred"] == preferred
     assert assessment["tie_broken_by_model_order"] is tie
+    assert assessment["ranking"]["order"][0] == preferred
+    assert "none available" in assessment["ranking"]["performance_evidence"]
     assert assessment["proposals"][0]["proposal"] == proposals[0]
 
 

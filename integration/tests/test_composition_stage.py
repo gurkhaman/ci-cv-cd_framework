@@ -126,12 +126,12 @@ def _dispatch(
 
 
 def _dispatch_stub(
-    tmp_path: Path, body: dict[str, object]
+    tmp_path: Path, body: dict[str, object], extra: str = ""
 ) -> subprocess.CompletedProcess[str]:
     with stub_provider(body) as base_url:
         commit_sha = _repository(
             tmp_path,
-            {"integration/generation-configs/stub.yaml": stub_config(base_url)},
+            {"integration/generation-configs/stub.yaml": stub_config(base_url, extra)},
         )
         return _dispatch(
             tmp_path,
@@ -317,6 +317,11 @@ def test_publishes_the_preferred_stubbed_proposal(tmp_path: Path) -> None:
     assert composition["execution_conclusion"] == "succeeded"
     assert composition["domain_outcome"] == "succeeded"
     assert composition["reason"]["code"] == "sdi.composition.preferred-proposal"
+    discovery = _evidence(tmp_path)["discovery"]
+    assert discovery["dense"] == {"status": "not-configured"}
+    assert {item["service_id"] for item in COMPLETE["services"]} <= {
+        item["service_id"] for item in discovery["selected"]
+    }
     assert _composition_files(result) == {
         "composition_blueprint",
         "deployment_schema",
@@ -358,6 +363,66 @@ def test_publishes_only_evidence_without_an_eligible_proposal(
     assert image_build["reason"]["code"] == "sdi.dependency.prerequisite-blocked"
     _validate_bundle(tmp_path)
     assert STUB_KEY not in _bundle_text(tmp_path) + completed.stdout
+
+
+def test_a_result_within_a_bounded_context_says_so(tmp_path: Path) -> None:
+    navigation_only: dict[str, object] = {
+        "rationale": "Only navigation fits the context budget.",
+        "services": [
+            {
+                "service_id": "nav2-navigation",
+                "artifact_id": "jazzy-debs",
+                "host": "orin",
+                "capability": "path planning",
+            }
+        ],
+        # Missing coverage that cites a service makes the proposal ineligible.
+        "coverage": [
+            entry
+            | {
+                "status": "missing",
+                "services": ["nav2-navigation"]
+                if entry["requirement_id"] == "return-to-origin"
+                else [],
+            }
+            for entry in COMPLETE["coverage"]
+        ],
+    }
+
+    completed = _dispatch_stub(
+        tmp_path, proposals_body([navigation_only]), "max_context_bytes: 4000\n"
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    composition = json.loads(completed.stdout)["attempts"][0]
+    assert composition["reason"]["code"] == "sdi.composition.insufficient-proposals"
+    evidence = _evidence(tmp_path)
+    assert evidence["discovery"]["complete"] is False
+    assert evidence["assessment"]["reason"] == (
+        "no proposal is eligible within the bounded supplied context; "
+        "see discovery.omitted"
+    )
+    diagnostic = (tmp_path / "bundle/stages/composition/diagnostic.txt").read_text()
+    assert "\ndiscovery_selected: 1\n" in diagnostic
+    _validate_bundle(tmp_path)
+
+
+def test_a_budget_no_description_fits_fails_before_generation(
+    tmp_path: Path,
+) -> None:
+    completed = _dispatch_stub(
+        tmp_path, proposals_body([COMPLETE]), "max_context_bytes: 100\n"
+    )
+
+    assert completed.returncode == 1, completed.stderr
+    composition = json.loads(completed.stdout)["attempts"][0]
+    assert composition["execution_conclusion"] == "failed"
+    assert composition["reason"]["code"] == "sdi.composition.discovery-over-budget"
+    assert _composition_files(json.loads(completed.stdout)) == {"diagnostic"}
+    diagnostic = (tmp_path / "bundle/stages/composition/diagnostic.txt").read_text()
+    assert "\ndiscovery_selected: 0\n" in diagnostic
+    assert "\ndiscovery_over_budget: 0\n" not in diagnostic
+    _validate_bundle(tmp_path)
 
 
 def test_an_invalid_description_fails_before_generation(tmp_path: Path) -> None:
