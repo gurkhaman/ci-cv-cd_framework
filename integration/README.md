@@ -40,7 +40,8 @@ write no record, and assign no Execution ID.
 ## Execute One Stage
 
 `execute-stage` identifies the committed run, selects its reviewed adapter
-descriptor, verifies the descriptor-bound Stage profile, and invokes the adapter
+descriptor, verifies that its Stage profile equals the one rendered from the
+slot registry, and invokes the adapter
 through the one-shot process interface. It accepts declared files only after the
 complete candidate bundle, response correlation, file limits, and Domain schemas
 validate:

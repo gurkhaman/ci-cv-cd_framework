@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import os
@@ -9,14 +10,23 @@ import signal
 import subprocess
 import time
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
-from sdi_pipeline_integration._stage_contracts import EXPECTED_STAGE_INPUT_SLOTS
-from sdi_pipeline_integration._stage_runtime import ADAPTER_SHUTDOWN_GRACE_SECONDS
+from sdi_pipeline_integration._local_dispatch import dispatch_local
+from sdi_pipeline_integration._stage_contracts import (
+    EXPECTED_STAGE_INPUT_SLOTS,
+    STAGE_GRANTS,
+)
+from sdi_pipeline_integration._stage_profiles import stage_profile_bytes
+from sdi_pipeline_integration._stage_runtime import (
+    ADAPTER_SHUTDOWN_GRACE_SECONDS,
+    SuppliedInputs,
+)
 from tests._fixture_inputs import (
     FIXTURE_COMPOSITION_CONFIG,
+    FIXTURE_SERVICE_REPOSITORY,
     SUPPLIED_INPUT_ARGUMENTS,
     write_fixture_composition_descriptor,
     write_scripted_adapter,
@@ -151,38 +161,47 @@ def _select_adapter(repository: Path, adapter: Path, *, mode: str = "fixture") -
     return _git(repository, "rev-parse", "HEAD")
 
 
-def _configure_composition(
-    repository: Path, *, mode: str | None = None, work_limit_seconds: int | None = None
-) -> str:
-    profile = repository / "integration/stage-profiles/composition-v1.yaml"
+def _configure_composition(repository: Path, *, mode: str) -> str:
     descriptor = repository / "deployment/jenkins/adapters/composition-v1.yaml"
-    if work_limit_seconds is not None:
-        profile.write_text(
-            profile.read_text().replace(
-                "work_limit_seconds: 600",
-                f"work_limit_seconds: {work_limit_seconds}",
-            ),
-            encoding="utf-8",
-        )
-    descriptor_text = descriptor.read_text()
-    if mode is not None:
-        descriptor_text = descriptor_text.replace(
-            "implementation_mode: fixture", f"implementation_mode: {mode}"
-        )
-    old_digest = next(
-        line.split(": ", 1)[1]
-        for line in descriptor_text.splitlines()
-        if line.startswith("stage_profile_sha256:")
-    )
     descriptor.write_text(
-        descriptor_text.replace(
-            old_digest, hashlib.sha256(profile.read_bytes()).hexdigest()
+        descriptor.read_text().replace(
+            "implementation_mode: fixture", f"implementation_mode: {mode}"
         ),
         encoding="utf-8",
     )
     _git(repository, "add", ".")
     _git(repository, "commit", "-m", "Configure composition conformance case")
     return _git(repository, "rev-parse", "HEAD")
+
+
+def _dispatch_with_composition_limit(
+    monkeypatch: pytest.MonkeyPatch,
+    repository: Path,
+    bundle_root: Path,
+    run_request_path: str = RUN_REQUEST_PATH,
+) -> dict[str, Any]:
+    """Run in process so the registry's one-second limit reaches the run."""
+    monkeypatch.setitem(
+        STAGE_GRANTS,
+        "composition",
+        dataclasses.replace(STAGE_GRANTS["composition"], work_limit_seconds=1),
+    )
+    (repository / "integration/stage-profiles/composition-v1.yaml").write_bytes(
+        stage_profile_bytes("composition")
+    )
+    _git(repository, "add", ".")
+    _git(repository, "commit", "-m", "Shorten the composition work limit")
+    return dispatch_local(
+        repository_path=repository,
+        requested_ref="refs/heads/main",
+        resolved_commit=_git(repository, "rev-parse", "HEAD"),
+        run_request_path=run_request_path,
+        bundle_root=bundle_root,
+        supplied=SuppliedInputs(
+            service_repository=FIXTURE_SERVICE_REPOSITORY,
+            composition_config=FIXTURE_COMPOSITION_CONFIG,
+        ),
+    )
 
 
 @pytest.mark.parametrize("combination_id", S04_COMBINATION_EXPECTATIONS)
@@ -502,22 +521,21 @@ def test_exact_digest_fixture_cases_settle_as_complete_failed_results(
 
 
 @pytest.mark.slow
-def test_exact_digest_timeout_case_records_timeout_and_skips(tmp_path: Path) -> None:
+def test_exact_digest_timeout_case_records_timeout_and_skips(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repository, _ = _commit_fixture_repository(tmp_path)
-    commit_sha = _configure_composition(repository, work_limit_seconds=1)
 
     started = time.monotonic()
-    completed = _dispatch(
+    result = _dispatch_with_composition_limit(
+        monkeypatch,
         repository,
-        commit_sha,
         tmp_path / "bundle",
         "runs/conformance/composition-timeout.yaml",
     )
 
-    assert completed.returncode == 1, completed.stderr
     # The terminated adapter is reaped, so its exit does not wait out the grace.
     assert time.monotonic() - started < ADAPTER_SHUTDOWN_GRACE_SECONDS
-    result = json.loads(completed.stdout)
     attempt = result["attempts"][0]
     assert attempt["execution_conclusion"] == "timed_out"
     assert attempt["process"]["termination"] == "timed_out"
@@ -526,7 +544,7 @@ def test_exact_digest_timeout_case_records_timeout_and_skips(tmp_path: Path) -> 
 
 @pytest.mark.slow
 def test_stage_timeout_terminates_attached_descendants_and_cleans_work(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repository, _ = _commit_fixture_repository(tmp_path)
     adapter = tmp_path / "timeout-tree-adapter"
@@ -543,13 +561,10 @@ time.sleep(60)
 """,
     )
     _select_adapter(repository, adapter)
-    commit_sha = _configure_composition(repository, work_limit_seconds=1)
     bundle_root = tmp_path / "timeout-bundle"
 
-    completed = _dispatch(repository, commit_sha, bundle_root)
+    result = _dispatch_with_composition_limit(monkeypatch, repository, bundle_root)
 
-    assert completed.returncode == 1, completed.stderr
-    result = json.loads(completed.stdout)
     assert result["attempts"][0]["execution_conclusion"] == "timed_out"
     assert not list(tmp_path.glob(".timeout-bundle.*-*"))
     child_pid = int(child_pid_path.read_text())

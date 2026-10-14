@@ -8,7 +8,6 @@ exact digest.
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 
 from sdi_pipeline_integration import _fixture_regeneration
@@ -40,7 +39,6 @@ def write_fixture_composition_descriptor(
     mode: str = "fixture",
 ) -> None:
     """Select a composition adapter bound to the repository's reviewed profile."""
-    profile = repository / "integration/stage-profiles/composition-v1.yaml"
     descriptor = repository / COMPOSITION_DESCRIPTOR
     descriptor.parent.mkdir(parents=True, exist_ok=True)
     descriptor.write_text(
@@ -52,7 +50,6 @@ entrypoint: {entrypoint}
 process_contract_version: sdi.stage-adapter-process/v1
 stage_profile: integration/stage-profiles/composition-v1.yaml
 stage_profile_version: sdi.composition-stage-profile/v1
-stage_profile_sha256: {hashlib.sha256(profile.read_bytes()).hexdigest()}
 agent_label: composition
 secret_bindings: []
 """,

@@ -79,6 +79,10 @@ def test_verification_is_the_complete_fail_fast_acceptance_gate(tmp_path: Path) 
         "uv sync --frozen --all-groups",
         "uv run --frozen sdi-integration schemas --check --directory schemas",
         (
+            "uv run --frozen sdi-integration stage-profiles --check "
+            "--directory stage-profiles"
+        ),
+        (
             "uv run --frozen python -m "
             "sdi_pipeline_integration._fixture_regeneration --check"
         ),

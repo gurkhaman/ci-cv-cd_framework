@@ -42,6 +42,7 @@ from ._run_input import identify_committed_run
 from ._schemas import check_schemas, write_schemas
 from ._service_descriptions import read_service_repository
 from ._stage_contracts import AdapterDescriptor
+from ._stage_profiles import check_stage_profiles, write_stage_profiles
 from ._stage_runtime import ExternalCancellation, SuppliedInputs, execute_stage
 from ._yaml_input import InputError, parse_yaml
 
@@ -92,6 +93,14 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     schema_action.add_argument("--check", action="store_true")
     schema_action.add_argument("--write", action="store_true")
     schemas.add_argument("--directory", type=Path, default=Path("schemas"))
+    profiles = commands.add_parser(
+        "stage-profiles",
+        help="write or check the Stage profiles rendered from the slot registry",
+    )
+    profile_action = profiles.add_mutually_exclusive_group(required=True)
+    profile_action.add_argument("--check", action="store_true")
+    profile_action.add_argument("--write", action="store_true")
+    profiles.add_argument("--directory", type=Path, default=Path("stage-profiles"))
     installation = commands.add_parser(
         "validate-installation",
         help="validate every tracked source against the installation authority",
@@ -421,6 +430,16 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
                 write_schemas(arguments.directory)
             else:
                 check_schemas(arguments.directory)
+        except (InputError, OSError) as error:
+            sys.stderr.write(f"sdi-integration: {error}\n")
+            return 2
+        return 0
+    if arguments.command == "stage-profiles":
+        try:
+            if arguments.write:
+                write_stage_profiles(arguments.directory)
+            else:
+                check_stage_profiles(arguments.directory)
         except (InputError, OSError) as error:
             sys.stderr.write(f"sdi-integration: {error}\n")
             return 2
