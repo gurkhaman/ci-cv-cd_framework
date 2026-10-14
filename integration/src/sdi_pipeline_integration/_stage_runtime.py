@@ -14,7 +14,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, get_args
 
 from pydantic import BaseModel, ValidationError
 
@@ -49,9 +49,12 @@ from ._service_descriptions import (
 from ._stage_contracts import (
     ASCII_CONTROL_LIMIT,
     ASCII_DELETE,
+    COMMITTED_SLOTS,
     EXPECTED_STAGE_EVIDENCE,
     EXPECTED_STAGE_INPUT_SLOTS,
     EXPECTED_STAGE_OUTPUTS,
+    SLOT_BY_NAME,
+    SLOT_BY_SCHEMA,
     AcceptedAttemptEnvelope,
     AdapterDescriptor,
     AdapterRequest,
@@ -115,24 +118,37 @@ class ExternalCancellation(BaseException):
         super().__init__(f"externally cancelled by signal {signal_number}")
 
 
+def _schema_version(model: type[BaseModel]) -> str:
+    (version,) = get_args(model.model_fields["schema_version"].annotation)
+    return version
+
+
+# Each parse model names its slot through its own schema version.
+SLOT_MODELS: dict[str, type[BaseModel]] = {
+    SLOT_BY_SCHEMA[_schema_version(model)].name: model
+    for model in (
+        RunRequest,
+        MobilityRequirementsSpecification,
+        TargetExecutionProfile,
+        ServiceRepositoryManifest,
+        CompositionSettings,
+        CompositionBlueprint,
+        DeploymentSchema,
+        ImageBuildResult,
+        ValidationEvidence,
+        DeploymentResult,
+    )
+}
 INPUT_MODELS: dict[str, type[BaseModel]] = {
-    "sdi.pipeline-integration-run-request/v1": RunRequest,
-    "sdi.mobility-requirements-specification/v1": MobilityRequirementsSpecification,
-    "sdi.target-execution-profile/v1": TargetExecutionProfile,
-    "sdi.composition-blueprint/v1": CompositionBlueprint,
-    "sdi.deployment-schema/v1": DeploymentSchema,
-    "sdi.image-build-result/v1": ImageBuildResult,
-    "sdi.validation-evidence/v1": ValidationEvidence,
-    "sdi.service-repository-manifest/v1": ServiceRepositoryManifest,
-    "sdi.composition-settings/v1": CompositionSettings,
+    SLOT_BY_NAME[name].schema_version: model for name, model in SLOT_MODELS.items()
 }
 OUTPUT_MODELS: dict[str, type[BaseModel]] = {
-    "sdi.composition-blueprint/v1": CompositionBlueprint,
-    "sdi.deployment-schema/v1": DeploymentSchema,
-    "sdi.image-build-result/v1": ImageBuildResult,
-    "sdi.validation-evidence/v1": ValidationEvidence,
-    "sdi.deployment-result/v1": DeploymentResult,
-    "sdi.composition-evidence/v1": CompositionEvidence,
+    **{
+        SLOT_BY_NAME[name].schema_version: model
+        for name, model in SLOT_MODELS.items()
+        if SLOT_BY_NAME[name].origin not in {"committed", "supplied"}
+    },
+    _schema_version(CompositionEvidence): CompositionEvidence,
 }
 
 
@@ -872,29 +888,13 @@ def _materialize_stage_inputs(
 def committed_stage_sources(
     repository: GitRepository, identified: Mapping[str, Any]
 ) -> dict[str, StageInputSource]:
-    """Revalidate and capture the three immutable committed run inputs."""
-    expected = {
-        "sdi.pipeline-integration-run-request/v1": (
-            "run_request",
-            "application/yaml",
-        ),
-        "sdi.mobility-requirements-specification/v1": (
-            "requirements_specification",
-            "text/markdown",
-        ),
-        "sdi.target-execution-profile/v1": (
-            "target_profile",
-            "application/yaml",
-        ),
-    }
+    """Revalidate and capture the immutable committed run inputs."""
     sources: dict[str, StageInputSource] = {}
     for provenance in identified["inputs"]:
-        schema_version = provenance["schema_version"]
-        definition = expected.get(schema_version)
-        if definition is None:
+        slot = SLOT_BY_SCHEMA.get(provenance["schema_version"])
+        if slot is None or slot.origin != "committed":
             msg = "identified run contains an unsupported input contract"
             raise InputError(msg)
-        slot, media_type = definition
         blob = repository.read_regular_file(provenance["path"])
         digest = hashlib.sha256(blob.content).hexdigest()
         if (
@@ -905,28 +905,38 @@ def committed_stage_sources(
             raise InputError(msg)
         source = StageInputSource(
             source_path=blob.path,
-            media_type=media_type,
-            schema_version=schema_version,
+            media_type=slot.media_type,
+            schema_version=slot.schema_version,
             content=blob.content,
         )
-        model = INPUT_MODELS[schema_version]
-        _validate_source_model(model, source)
-        sources[slot] = source
-    if set(sources) != {"run_request", "requirements_specification", "target_profile"}:
+        _validate_source_model(SLOT_MODELS[slot.name], source)
+        sources[slot.name] = source
+    if list(sources) != [slot.name for slot in COMMITTED_SLOTS]:
         msg = "identified run does not contain its exact committed input set"
         raise InputError(msg)
     return sources
 
 
+def _supplied_source(
+    name: str, content: bytes, attachments: tuple[tuple[str, bytes], ...] = ()
+) -> StageInputSource:
+    slot = SLOT_BY_NAME[name]
+    return StageInputSource(
+        source_path=slot.file_name,
+        media_type=slot.media_type,
+        schema_version=slot.schema_version,
+        content=content,
+        attachments=attachments,
+    )
+
+
 def service_repository_source(root: Path) -> StageInputSource:
     """Capture every description under a supplied directory and its manifest."""
     snapshot = capture_service_repository(root)
-    return StageInputSource(
-        source_path="service-repository.json",
-        media_type="application/json",
-        schema_version="sdi.service-repository-manifest/v1",
-        content=canonical_json(snapshot.manifest.model_dump(mode="json")),
-        attachments=tuple(
+    return _supplied_source(
+        "service_repository",
+        canonical_json(snapshot.manifest.model_dump(mode="json")),
+        tuple(
             (f"{SERVICE_REPOSITORY_ROOT}/{path}", content)
             for path, content in snapshot.files.items()
         ),
@@ -960,11 +970,9 @@ def composition_settings_source(
 ) -> StageInputSource:
     """Capture the settings a composition config's bytes resolve to."""
     settings = resolve_composition_settings(content, path=path, generator=generator)
-    return StageInputSource(
-        source_path="composition-settings.json",
-        media_type="application/json",
-        schema_version="sdi.composition-settings/v1",
-        content=canonical_json(settings.model_dump(mode="json", exclude_none=True)),
+    return _supplied_source(
+        "composition_settings",
+        canonical_json(settings.model_dump(mode="json", exclude_none=True)),
     )
 
 

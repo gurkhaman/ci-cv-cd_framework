@@ -14,9 +14,6 @@ from pydantic import (
 )
 from pydantic.json_schema import SkipJsonSchema  # noqa: TC002
 
-RUN_REQUEST_SCHEMA_VERSION = "sdi.pipeline-integration-run-request/v1"
-REQUIREMENTS_SCHEMA_VERSION = "sdi.mobility-requirements-specification/v1"
-TARGET_PROFILE_SCHEMA_VERSION = "sdi.target-execution-profile/v1"
 REPOSITORY_PATH_SCHEMA_PATTERN = (
     r"^(?!/)(?![A-Za-z]:/)(?!.*(?:^|/)\.{1,2}(?:/|$))(?!.*//)(?!.*\\)"
     r"(?!.*[\x00-\x1f\x7f]).*[^/]$"

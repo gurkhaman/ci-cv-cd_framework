@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Literal, Self, cast
 
@@ -39,6 +40,7 @@ CV_PROFILE_VERSION = "sdi.cv-stage-profile/v1"
 CD_PROFILE_VERSION = "sdi.cd-stage-profile/v1"
 
 type StageName = Literal["composition", "image_build", "cv", "cd"]
+type SlotOrigin = Literal["committed", "supplied"] | StageName
 type ImplementationMode = Literal["fixture", "implemented", "not_implemented"]
 type ExecutionConclusion = Literal["succeeded", "failed", "timed_out", "skipped"]
 type AdapterExecutionConclusion = Literal["succeeded", "failed"]
@@ -95,56 +97,103 @@ PROFILE_VERSIONS: dict[StageName, str] = {
     "cv": CV_PROFILE_VERSION,
     "cd": CD_PROFILE_VERSION,
 }
-BASE_INPUT_GRANTS = {
-    "run_request": (
+
+
+@dataclass(frozen=True)
+class Slot:
+    """One Domain artifact a Stage may be granted, in canonical order.
+
+    A committed slot comes from the run's committed inputs, a supplied slot from
+    the operator's flags, and any other slot is the Domain output of its Stage.
+    """
+
+    name: str
+    file_name: str
+    media_type: str
+    schema_version: str
+    origin: SlotOrigin
+
+
+SLOTS = (
+    Slot(
+        "run_request",
         "run-request.yaml",
         "application/yaml",
         "sdi.pipeline-integration-run-request/v1",
+        "committed",
     ),
-    "requirements_specification": (
+    Slot(
+        "requirements_specification",
         "requirements-specification.md",
         "text/markdown",
         "sdi.mobility-requirements-specification/v1",
+        "committed",
     ),
-    "target_profile": (
+    Slot(
+        "target_profile",
         "target-profile.yaml",
         "application/yaml",
         "sdi.target-execution-profile/v1",
+        "committed",
     ),
-    "composition_blueprint": (
-        "composition-blueprint.json",
-        "application/json",
-        "sdi.composition-blueprint/v1",
-    ),
-    "deployment_schema": (
-        "deployment-schema.json",
-        "application/json",
-        "sdi.deployment-schema/v1",
-    ),
-    "image_build_result": (
-        "image-build-result.json",
-        "application/json",
-        "sdi.image-build-result/v1",
-    ),
-    "validation_evidence": (
-        "validation-evidence.json",
-        "application/json",
-        "sdi.validation-evidence/v1",
-    ),
-    "service_repository": (
+    Slot(
+        "service_repository",
         "service-repository.json",
         "application/json",
         "sdi.service-repository-manifest/v1",
+        "supplied",
     ),
-    "composition_settings": (
+    Slot(
+        "composition_settings",
         "composition-settings.json",
         "application/json",
         "sdi.composition-settings/v1",
+        "supplied",
     ),
-}
+    Slot(
+        "composition_blueprint",
+        "composition-blueprint.json",
+        "application/json",
+        "sdi.composition-blueprint/v1",
+        "composition",
+    ),
+    Slot(
+        "deployment_schema",
+        "deployment-schema.json",
+        "application/json",
+        "sdi.deployment-schema/v1",
+        "composition",
+    ),
+    Slot(
+        "image_build_result",
+        "image-build-result.json",
+        "application/json",
+        "sdi.image-build-result/v1",
+        "image_build",
+    ),
+    Slot(
+        "validation_evidence",
+        "validation-evidence.json",
+        "application/json",
+        "sdi.validation-evidence/v1",
+        "cv",
+    ),
+    Slot(
+        "deployment_result",
+        "deployment-result.json",
+        "application/json",
+        "sdi.deployment-result/v1",
+        "cd",
+    ),
+)
+SLOT_BY_NAME = {slot.name: slot for slot in SLOTS}
+SLOT_BY_SCHEMA = {slot.schema_version: slot for slot in SLOTS}
+COMMITTED_SLOTS = tuple(slot for slot in SLOTS if slot.origin == "committed")
 # Run-supplied inputs come from the operator's flags, not from committed run
 # inputs or an earlier Stage, so no result provenance names their source.
-SUPPLIED_INPUT_SLOTS = frozenset({"service_repository", "composition_settings"})
+SUPPLIED_INPUT_SLOTS = frozenset(
+    slot.name for slot in SLOTS if slot.origin == "supplied"
+)
 EXPECTED_STAGE_INPUT_SLOTS: dict[StageName, tuple[str, ...]] = {
     "composition": (
         "run_request",
@@ -174,39 +223,12 @@ EXPECTED_STAGE_INPUT_SLOTS: dict[StageName, tuple[str, ...]] = {
     ),
 }
 EXPECTED_STAGE_OUTPUTS: dict[StageName, dict[str, tuple[str, str, str]]] = {
-    "composition": {
-        "composition_blueprint": (
-            "outputs/composition-blueprint.json",
-            "application/json",
-            "sdi.composition-blueprint/v1",
-        ),
-        "deployment_schema": (
-            "outputs/deployment-schema.json",
-            "application/json",
-            "sdi.deployment-schema/v1",
-        ),
-    },
-    "image_build": {
-        "image_build_result": (
-            "outputs/image-build-result.json",
-            "application/json",
-            "sdi.image-build-result/v1",
-        ),
-    },
-    "cv": {
-        "validation_evidence": (
-            "outputs/validation-evidence.json",
-            "application/json",
-            "sdi.validation-evidence/v1",
-        ),
-    },
-    "cd": {
-        "deployment_result": (
-            "outputs/deployment-result.json",
-            "application/json",
-            "sdi.deployment-result/v1",
-        ),
-    },
+    stage: {
+        slot.name: (f"outputs/{slot.file_name}", slot.media_type, slot.schema_version)
+        for slot in SLOTS
+        if slot.origin == stage
+    }
+    for stage in EXPECTED_STAGE_INPUT_SLOTS
 }
 # Optional evidence records how an implemented Stage reached its outcome. It is
 # never a Domain input to a later Stage.
@@ -484,8 +506,12 @@ class StageProfile(ContractModel):
             msg = f"{self.stage} profile has an unsupported profile version"
             raise ValueError(msg)
         expected_inputs = {
-            slot: BASE_INPUT_GRANTS[slot]
-            for slot in EXPECTED_STAGE_INPUT_SLOTS[self.stage]
+            name: (
+                SLOT_BY_NAME[name].file_name,
+                SLOT_BY_NAME[name].media_type,
+                SLOT_BY_NAME[name].schema_version,
+            )
+            for name in EXPECTED_STAGE_INPUT_SLOTS[self.stage]
         }
         actual_inputs = {
             item.slot: (item.path, item.media_type, item.schema_version)
