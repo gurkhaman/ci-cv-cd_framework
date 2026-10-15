@@ -163,6 +163,18 @@ def test_runner_image_verifies_the_pinned_download_and_runs_unprivileged() -> No
     assert "sudo" not in dockerfile
 
 
+def test_runner_image_and_check_require_the_git_options_the_cli_uses() -> None:
+    dockerfile = (RUNNER_ROOT / "Dockerfile").read_text(encoding="utf-8")
+    entrypoint = (RUNNER_ROOT / "sdi-runner-entrypoint").read_text(encoding="utf-8")
+    git_input = (
+        REPOSITORY_ROOT / "integration/src/sdi_pipeline_integration/_git_input.py"
+    ).read_text(encoding="utf-8")
+
+    assert '"--no-lazy-fetch",' in git_input
+    assert "    && git --no-lazy-fetch --version\n" in dockerfile
+    assert "        git --no-lazy-fetch --version >/dev/null || fail" in entrypoint
+
+
 class _FakeJenkins(BaseHTTPRequestHandler):
     """Answer the administrator quiesce and resume calls of `smoke-check`."""
 

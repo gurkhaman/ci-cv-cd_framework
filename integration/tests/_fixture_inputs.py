@@ -24,7 +24,7 @@ FIXTURE_SERVICE_REPOSITORY = (
 )
 RUNTIME_IMAGE = (
     "docker.io/library/python@sha256:"
-    "4766d8b510c428e595d74b9cc5bbb2fae8e26316fffb4adc89908d79aacd58a2"
+    "229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36"
 )
 SUPPLIED_INPUT_ARGUMENTS = (
     "--service-repository",

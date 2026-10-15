@@ -621,7 +621,7 @@ runner pin in all of those places as one review unit. Automatic updates are
 disabled, and GitHub stops assigning jobs to a runner that falls too far behind
 its current release, so repin the runner promptly after each Actions runner
 release rather than treating the bump as optional. The Debian `git` and
-`libicu72` packages are installed with `apt-get` during the build and are not
+`libicu76` packages are installed with `apt-get` during the build and are not
 version-pinned.
 
 Controller health and Fixture execution prove pipeline machinery only. They are
