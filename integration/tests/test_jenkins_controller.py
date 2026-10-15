@@ -454,14 +454,18 @@ def test_root_pipeline_is_a_thin_scheduler_over_public_cli_operations() -> None:
 
     assert "env[name]" not in pipeline
     assert "checkout scm" not in pipeline
-    assert "$class: 'GitSCM'" in pipeline
-    assert "branches: [[name: env.RESOLVED_COMMIT_SHA]]" in pipeline
-    assert "honorRefspec: true" in pipeline
-    assert "noTags: true" in pipeline
+    assert "$class: 'GitSCM'" not in pipeline
+    assert (
+        "clone --filter=blob:none --no-checkout --no-tags --single-branch "
+        '--branch main "$SDI_CHECKOUT_REPOSITORY_URL" .'
+    ) in pipeline
+    assert "git sparse-checkout set --no-cone '/*' '!/CV/'" in pipeline
+    assert 'checkout --quiet --detach "$RESOLVED_COMMIT_SHA"' in pipeline
+    assert "--depth" not in pipeline
     assert "'pipeline-integration': env.SDI_REPOSITORY_URL," in pipeline
     assert "'pipeline-integration-fork': env.SDI_FORK_REPOSITORY_URL," in pipeline
     assert "][env.JOB_NAME]" in pipeline
-    assert "url: repositoryUrl," in pipeline
+    assert '"SDI_CHECKOUT_REPOSITORY_URL=${repositoryUrl}"' in pipeline
     assert "env.JENKINS_PIPELINE_RUN_LIMIT_SECONDS" in pipeline
     assert "timeout(time: runLimitSeconds, unit: 'SECONDS')" in pipeline
     assert "timeout(time: schedulingLimitSeconds, unit: 'SECONDS')" in pipeline
@@ -636,7 +640,7 @@ def test_live_check_compiles_the_tracked_jenkinsfile_with_workflow_cps(  # noqa:
                     "<honorRefspec>true</honorRefspec>"
                     "<noTags>true</noTags>"
                     "</hudson.plugins.git.extensions.impl.CloneOption>"
-                    "<hudson.plugins.git.extensions.impl.WipeWorkspace/>"
+                    "<hudson.plugins.git.extensions.impl.CleanBeforeCheckout/>"
                     "</extensions></scm>"
                     "<scriptPath>Jenkinsfile</scriptPath>"
                     "<lightweight>false</lightweight></definition>"

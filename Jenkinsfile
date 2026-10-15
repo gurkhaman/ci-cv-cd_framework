@@ -54,6 +54,13 @@ def isTimeoutInterruption = { interruption ->
 // against the repository that submitted the run. The job names match
 // deployment/jenkins/jobs/pipeline-integration.groovy; this installation does
 // not bind the scm variable, so the URL is selected by job name.
+//
+// The clone keeps full protected-main commit history for the ancestry check but
+// fetches only the blobs a sparse checkout without the unused CV/ Gazebo assets
+// needs; CV/ is nearly all of the repository's bytes. The CLI reads committed
+// blobs with lazy fetching disabled, so it fails closed outside that set. The
+// git plugin's checkout step cannot filter blobs, so plain git is used. Only the
+// transfer is retried, with stalled transfers aborted; no Stage attempt is.
 def checkoutSubmittedCommit = {
     def repositoryUrl = [
         'pipeline-integration': env.SDI_REPOSITORY_URL,
@@ -62,21 +69,35 @@ def checkoutSubmittedCommit = {
     if (!repositoryUrl) {
         error("Job ${env.JOB_NAME} has no configured repository")
     }
-    checkout([
-        $class: 'GitSCM',
-        branches: [[name: env.RESOLVED_COMMIT_SHA]],
-        extensions: [[$class: 'CloneOption', honorRefspec: true, noTags: true]],
-        userRemoteConfigs: [[
-            refspec: '+refs/heads/main:refs/remotes/origin/main',
-            url: repositoryUrl,
-        ]],
-    ])
-    sh '''set -eu
-test "$(git rev-parse HEAD)" = "$RESOLVED_COMMIT_SHA"
-git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/sdi-protected-main'
+    withEnv(["SDI_CHECKOUT_REPOSITORY_URL=${repositoryUrl}"]) {
+        sh '''set -eu
+transfer() {
+  git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 "$@"
+}
+attempt=1
+until transfer clone --filter=blob:none --no-checkout --no-tags --single-branch --branch main "$SDI_CHECKOUT_REPOSITORY_URL" .; do
+  if [ "$attempt" -ge 3 ]; then
+    echo "protected-main clone failed after $attempt attempts" >&2
+    exit 1
+  fi
+  attempt=$((attempt + 1))
+  find . -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+done
+git update-ref refs/remotes/origin/sdi-protected-main refs/remotes/origin/main
 git merge-base --is-ancestor "$RESOLVED_COMMIT_SHA" refs/remotes/origin/sdi-protected-main
+git sparse-checkout set --no-cone '/*' '!/CV/'
+attempt=1
+until transfer checkout --quiet --detach "$RESOLVED_COMMIT_SHA"; do
+  if [ "$attempt" -ge 3 ]; then
+    echo "submitted-commit checkout failed after $attempt attempts" >&2
+    exit 1
+  fi
+  attempt=$((attempt + 1))
+done
+test "$(git rev-parse HEAD)" = "$RESOLVED_COMMIT_SHA"
 git update-ref refs/heads/main "$RESOLVED_COMMIT_SHA"
 '''
+    }
 }
 
 // Only composition is given the checked-out service repository. The Domain
