@@ -102,6 +102,25 @@ class MobilityRequirementsSpecification(ContractModel):
         return self
 
 
+class DeclaredProvenance(ContractModel):
+    """Facts asserted by an accountable upstream source."""
+
+    basis: Literal["declared"]
+    source: NonBlank
+
+
+class PlaceholderProvenance(ContractModel):
+    """Facts that only exercise an interface; the label is carried."""
+
+    basis: Literal["placeholder"]
+    note: NonBlank
+
+
+Provenance = Annotated[
+    DeclaredProvenance | PlaceholderProvenance, Field(discriminator="basis")
+]
+
+
 class MobilityTarget(ContractModel):
     """The mobility target described by a reusable profile."""
 
@@ -188,6 +207,7 @@ class TargetExecutionProfile(ContractModel):
 
     schema_version: Literal["sdi.target-execution-profile/v1"]
     profile_id: Slug
+    provenance: Provenance
     target: MobilityTarget
     hosts: Annotated[dict[Slug, Host], Field(min_length=1)]
     connections: list[Connection] | SkipJsonSchema[None] = None

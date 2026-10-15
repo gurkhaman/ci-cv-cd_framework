@@ -39,6 +39,9 @@ The mobility target shall reach the selected destination.
 TARGET_PROFILE = """\
 schema_version: sdi.target-execution-profile/v1
 profile_id: waffle-native-arm64
+provenance:
+  basis: placeholder
+  note: Test-only profile.
 target:
   target_id: turtlebot3-waffle
   kind: sdv

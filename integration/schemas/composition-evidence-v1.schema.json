@@ -175,6 +175,14 @@
     "generation": {
       "$ref": "#/$defs/GenerationRecord"
     },
+    "profile_basis": {
+      "enum": [
+        "declared",
+        "placeholder"
+      ],
+      "title": "Profile Basis",
+      "type": "string"
+    },
     "profile_id": {
       "maxLength": 63,
       "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
@@ -275,6 +283,7 @@
     "testcase_id",
     "combination_id",
     "profile_id",
+    "profile_basis",
     "source_inputs",
     "descriptions",
     "generation",

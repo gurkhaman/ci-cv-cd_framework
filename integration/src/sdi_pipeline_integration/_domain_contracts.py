@@ -128,6 +128,7 @@ class CompositionBlueprint(ContractModel):
     testcase_id: TestcaseId
     combination_id: CombinationId
     profile_id: Slug
+    profile_basis: Literal["declared", "placeholder"]
     source_inputs: Annotated[list[SourceInputDigest], ProducerInputs("composition")]
     requirement_ids: Annotated[list[Slug], Field(min_length=1)]
     services: Annotated[list[BlueprintService], Field(min_length=1)]
@@ -186,6 +187,7 @@ class DeploymentSchema(ContractModel):
     testcase_id: TestcaseId
     combination_id: CombinationId
     profile_id: Slug
+    profile_basis: Literal["declared", "placeholder"]
     source_inputs: Annotated[list[SourceInputDigest], ProducerInputs("composition")]
     placements: Annotated[list[ServicePlacement], Field(min_length=1)]
 
@@ -337,6 +339,7 @@ class CompositionEvidence(ContractModel):
     testcase_id: TestcaseId
     combination_id: CombinationId
     profile_id: Slug
+    profile_basis: Literal["declared", "placeholder"]
     source_inputs: Annotated[list[SourceInputDigest], ProducerInputs("composition")]
     descriptions: Annotated[list[EvidenceDescription], Field(min_length=1)]
     generation: GenerationRecord
