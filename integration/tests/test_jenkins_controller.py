@@ -449,23 +449,36 @@ def test_job_dsl_defines_no_build_trigger_or_credential() -> None:
     assert "credential" not in job_dsl.lower()
 
 
+def test_root_pipeline_checks_out_the_submitted_commit_without_cv_assets() -> None:
+    pipeline = (REPOSITORY_ROOT / "Jenkinsfile").read_text()
+
+    assert "$class: 'GitSCM'" not in pipeline
+    assert (
+        "reset_clone clone --filter=blob:none --no-checkout --no-tags --single-branch "
+        '--branch main "$SDI_CHECKOUT_REPOSITORY_URL" .'
+    ) in pipeline
+    assert "git sparse-checkout set --no-cone '/*' '!/CV/'" in pipeline
+    assert 'reset_checkout checkout --quiet --detach "$RESOLVED_COMMIT_SHA"' in pipeline
+    assert (
+        "until timeout 300 git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 "
+        '"$@"; do'
+    ) in pipeline
+    assert 'if [ "$attempt" -ge 3 ]; then' in pipeline
+    assert pipeline.count("git_transfer_with_retries '") == 2
+    assert "--depth" not in pipeline
+    assert '"SDI_CHECKOUT_REPOSITORY_URL=${repositoryUrl}"' in pipeline
+    assert "refs/remotes/origin/sdi-protected-main" in pipeline
+    assert "git merge-base --is-ancestor" in pipeline
+
+
 def test_root_pipeline_is_a_thin_scheduler_over_public_cli_operations() -> None:
     pipeline = (REPOSITORY_ROOT / "Jenkinsfile").read_text()
 
     assert "env[name]" not in pipeline
     assert "checkout scm" not in pipeline
-    assert "$class: 'GitSCM'" not in pipeline
-    assert (
-        "clone --filter=blob:none --no-checkout --no-tags --single-branch "
-        '--branch main "$SDI_CHECKOUT_REPOSITORY_URL" .'
-    ) in pipeline
-    assert "git sparse-checkout set --no-cone '/*' '!/CV/'" in pipeline
-    assert 'checkout --quiet --detach "$RESOLVED_COMMIT_SHA"' in pipeline
-    assert "--depth" not in pipeline
     assert "'pipeline-integration': env.SDI_REPOSITORY_URL," in pipeline
     assert "'pipeline-integration-fork': env.SDI_FORK_REPOSITORY_URL," in pipeline
     assert "][env.JOB_NAME]" in pipeline
-    assert '"SDI_CHECKOUT_REPOSITORY_URL=${repositoryUrl}"' in pipeline
     assert "env.JENKINS_PIPELINE_RUN_LIMIT_SECONDS" in pipeline
     assert "timeout(time: runLimitSeconds, unit: 'SECONDS')" in pipeline
     assert "timeout(time: schedulingLimitSeconds, unit: 'SECONDS')" in pipeline
@@ -478,8 +491,6 @@ def test_root_pipeline_is_a_thin_scheduler_over_public_cli_operations() -> None:
     assert "System.currentTimeMillis() < schedulingDeadlineEpochMillis" in pipeline
     assert "TimeoutStepExecution.ExceededTimeout" in pipeline
     assert "throw interruption" in pipeline
-    assert "refs/remotes/origin/sdi-protected-main" in pipeline
-    assert "git merge-base --is-ancestor" in pipeline
     assert "System.currentTimeMillis() >= runDeadlineEpochMillis" in pipeline
     assert len(re.findall(r"try \{\n\s+deleteDir\(\)", pipeline)) == 4
     assert [

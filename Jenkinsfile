@@ -71,29 +71,34 @@ def checkoutSubmittedCommit = {
     }
     withEnv(["SDI_CHECKOUT_REPOSITORY_URL=${repositoryUrl}"]) {
         sh '''set -eu
-transfer() {
-  git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 "$@"
+# Runs one git transfer up to three times. Each attempt is killed after 300
+# seconds and aborts sooner if it moves under 1000 bytes/s for 60 seconds;
+# reset_attempt undoes a failed attempt's partial state before the next.
+git_transfer_with_retries() {
+  description=$1
+  reset_attempt=$2
+  shift 2
+  attempt=1
+  until timeout 300 git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 "$@"; do
+    if [ "$attempt" -ge 3 ]; then
+      echo "$description failed after $attempt attempts" >&2
+      exit 1
+    fi
+    attempt=$((attempt + 1))
+    "$reset_attempt"
+  done
 }
-attempt=1
-until transfer clone --filter=blob:none --no-checkout --no-tags --single-branch --branch main "$SDI_CHECKOUT_REPOSITORY_URL" .; do
-  if [ "$attempt" -ge 3 ]; then
-    echo "protected-main clone failed after $attempt attempts" >&2
-    exit 1
-  fi
-  attempt=$((attempt + 1))
+reset_clone() {
   find . -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-done
+}
+reset_checkout() {
+  rm -f .git/index.lock
+}
+git_transfer_with_retries 'protected-main clone' reset_clone clone --filter=blob:none --no-checkout --no-tags --single-branch --branch main "$SDI_CHECKOUT_REPOSITORY_URL" .
 git update-ref refs/remotes/origin/sdi-protected-main refs/remotes/origin/main
 git merge-base --is-ancestor "$RESOLVED_COMMIT_SHA" refs/remotes/origin/sdi-protected-main
 git sparse-checkout set --no-cone '/*' '!/CV/'
-attempt=1
-until transfer checkout --quiet --detach "$RESOLVED_COMMIT_SHA"; do
-  if [ "$attempt" -ge 3 ]; then
-    echo "submitted-commit checkout failed after $attempt attempts" >&2
-    exit 1
-  fi
-  attempt=$((attempt + 1))
-done
+git_transfer_with_retries 'submitted-commit checkout' reset_checkout checkout --quiet --detach "$RESOLVED_COMMIT_SHA"
 test "$(git rev-parse HEAD)" = "$RESOLVED_COMMIT_SHA"
 git update-ref refs/heads/main "$RESOLVED_COMMIT_SHA"
 '''
