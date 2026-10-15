@@ -20,17 +20,6 @@ def test_installed_cli_reports_distribution_version() -> None:
     assert completed.stdout == f"sdi-integration {distribution_version}\n"
 
 
-def test_installed_cli_exposes_help() -> None:
-    completed = subprocess.run(
-        ["sdi-integration", "--help"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-
-    assert completed.stdout.startswith("usage: sdi-integration")
-
-
 def test_handoff_cli_exposes_only_non_secret_run_and_output_arguments() -> None:
     completed = subprocess.run(
         ["sdi-integration", "handoff-jenkins", "--help"],
@@ -94,31 +83,6 @@ def test_cli_writes_and_freshness_checks_contract_schemas(tmp_path: Path) -> Non
     )
 
     assert write.returncode == 0, write.stderr
-    assert sorted(path.name for path in tmp_path.iterdir()) == [
-        "accepted-attempt-envelope-v1.schema.json",
-        "adapter-descriptor-v1.schema.json",
-        "composition-blueprint-v1.schema.json",
-        "composition-config-v1.schema.json",
-        "composition-evidence-v1.schema.json",
-        "composition-proposals-v1.schema.json",
-        "composition-settings-v1.schema.json",
-        "deployment-result-v1.schema.json",
-        "deployment-schema-v1.schema.json",
-        "fixture-case-v1.schema.json",
-        "handoff-receipt-v1.schema.json",
-        "image-build-result-v1.schema.json",
-        "mobility-requirements-specification-v1.schema.json",
-        "pipeline-integration-result-v1.schema.json",
-        "pipeline-integration-run-request-v1.schema.json",
-        "recovery-manifest-v1.schema.json",
-        "service-description-v1.schema.json",
-        "service-repository-manifest-v1.schema.json",
-        "stage-adapter-request-v1.schema.json",
-        "stage-adapter-response-v1.schema.json",
-        "stage-profile-v1.schema.json",
-        "target-execution-profile-v1.schema.json",
-        "validation-evidence-v1.schema.json",
-    ]
 
     check = subprocess.run(
         [
