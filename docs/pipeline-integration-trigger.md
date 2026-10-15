@@ -15,25 +15,28 @@ Before enabling dispatch:
 3. Restrict that environment's deployment branches to protected branches only.
 4. Add required reviewers when the repository's deployment policy requires
    human release approval.
-5. Add environment variables `SDI_JENKINS_BASE_URL`,
-   `SDI_JENKINS_JOB_PATH`, `SDI_JENKINS_REPOSITORY`, and
-   `SDI_JENKINS_USERNAME`.
+5. Add environment variables `SDI_JENKINS_JOB_PATH`,
+   `SDI_JENKINS_REPOSITORY`, and `SDI_JENKINS_USERNAME`. The workflow
+   hard-codes the Jenkins base URL `http://controller:8080` and no longer reads
+   `SDI_JENKINS_BASE_URL`; delete that variable where it remains.
 6. Add environment secret `SDI_JENKINS_API_TOKEN` containing the named Jenkins
    machine user's API token, not its password.
 7. Require approval for every external fork workflow and never approve untrusted
    workflow code for this repository-scoped self-hosted runner.
-8. Register only the repository's dedicated runner described in
-   `deployment/github-runner/README.md` with default labels disabled and the sole
-   custom label `sdi-jenkins-handoff`.
+8. Register only the repository's dedicated stack runner service described in
+   `deployment/jenkins/README.md`, which disables default labels and uses the
+   sole custom label `sdi-jenkins-handoff`.
 9. Permit no other repository workflow to target `sdi-jenkins-handoff`.
 
-For the tracked local Jenkins deployment, use the loopback base URL and
-username `github-handoff`. Upstream uses job path `pipeline-integration` and
+For the tracked local Jenkins deployment, use username `github-handoff`. Upstream uses job path `pipeline-integration` and
 repository identity `github.com/open-SDI/ci-cv-cd_framework`; the fork uses job
 path `pipeline-integration-fork` and repository identity
 `github.com/gurkhaman/ci-cv-cd_framework`. Each repository has its own runner
-account and registration. Runners must be on the Jenkins host because Jenkins is
-not externally published.
+service and registration. The runners are Jenkins stack services that reach
+`http://controller:8080` over an internal Compose network, because Jenkins is
+not externally published. Only one installation may have an online upstream
+runner at a time, because GitHub assigns a queued job to any online runner with
+the label.
 
 Both repositories share one set of agent images, built from fork `main`.
 Dispatch on upstream only after a sync pull request has brought upstream `main`
@@ -50,7 +53,18 @@ write collaborator and protected-main reviewer and treats the custom label as
 an operational selector. Public users cannot manually dispatch the workflow.
 Never approve untrusted external-fork workflow code for this runner. An
 organization workflow-restricted runner group requires a separately reviewed
-extension to the runner interface before it can replace this configuration.
+extension to the runner service before it can replace this configuration.
+
+Each runner reaches the controller only over its own internal network and the
+internet only over its own egress network. It has no Docker socket, no Jenkins
+state or secret files, and no Jenkins credential except the API token GitHub
+releases to the protected handoff job. Its outbound traffic is not limited to
+GitHub, matching the retired native runner: Docker cannot filter by domain, and
+GitHub's endpoints change. Code from any workflow that targets
+`sdi-jenkins-handoff` in the repository can therefore reach arbitrary hosts and
+the Jenkins HTTP API, though it still needs credentials it does not otherwise
+have. A follow-up issue will restrict runner egress to GitHub Actions endpoints
+through an allowlisting proxy.
 
 ## Dispatch One Request
 
@@ -114,7 +128,8 @@ aggregate result, Domain verdict, or KPI claim.
 ## Observe And Retrieve
 
 A queued run may be waiting for environment approval, for the repository's
-dedicated runner to become idle, or for an offline runner to reconnect. GitHub
+dedicated runner to become idle, or for an offline runner to reconnect; an
+operator checks an offline runner with `stack status` and `stack logs`. GitHub
 is authoritative for this state; an absent Jenkins queue item is expected until
 the visible handoff step reaches its `submitting` phase.
 

@@ -290,9 +290,7 @@ def test_controller_image_and_complete_plugin_set_are_exactly_pinned() -> None:
     assert "matrix-auth:3.3" in plugin_lines
 
 
-def test_compose_exposes_only_loopback_http_and_persists_only_controller_state() -> (
-    None
-):
+def test_compose_exposes_only_loopback_http_and_persists_only_named_state() -> None:
     compose = _load_yaml(JENKINS_ROOT / "compose.yaml")
     controller = compose["services"]["controller"]
 
@@ -322,8 +320,14 @@ def test_compose_exposes_only_loopback_http_and_persists_only_controller_state()
         "controller-image-build",
         "controller-cv",
         "controller-cd",
+        "runner-upstream-controller",
+        "runner-fork-controller",
     }
-    assert set(compose["volumes"]) == {"jenkins-home"}
+    assert set(compose["volumes"]) == {
+        "jenkins-home",
+        "runner-upstream-state",
+        "runner-fork-state",
+    }
     assert "50000" not in (JENKINS_ROOT / "compose.yaml").read_text()
 
 

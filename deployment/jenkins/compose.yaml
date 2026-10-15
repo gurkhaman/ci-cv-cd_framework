@@ -33,6 +33,8 @@ services:
       - controller-cv
       - controller-cd
       - controller-egress
+      - runner-upstream-controller
+      - runner-fork-controller
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8080/health"]
       interval: 5s
@@ -221,8 +223,68 @@ services:
       start_period: 60s
       start_interval: 1s
 
+  runner-upstream:
+    profiles: [runner-upstream]
+    image: sdi-jenkins-runner:2.337.0
+    platform: linux/amd64
+    build:
+      context: ../..
+      dockerfile: deployment/jenkins/runner/Dockerfile
+    restart: "no"
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /home/runner:rw,nosuid,nodev,mode=0700,uid=1000,gid=1000,size=2g
+      - /tmp:rw,nosuid,nodev,mode=1777,size=512m
+    volumes:
+      - runner-upstream-state:/var/lib/sdi-runner
+    networks: [runner-upstream-controller, runner-upstream-egress]
+    depends_on:
+      controller:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, sdi-runner-probe, listener]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 60s
+      start_interval: 1s
+
+  runner-fork:
+    profiles: [runner-fork]
+    image: sdi-jenkins-runner:2.337.0
+    platform: linux/amd64
+    build:
+      context: ../..
+      dockerfile: deployment/jenkins/runner/Dockerfile
+    restart: "no"
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /home/runner:rw,nosuid,nodev,mode=0700,uid=1000,gid=1000,size=2g
+      - /tmp:rw,nosuid,nodev,mode=1777,size=512m
+    volumes:
+      - runner-fork-state:/var/lib/sdi-runner
+    networks: [runner-fork-controller, runner-fork-egress]
+    depends_on:
+      controller:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, sdi-runner-probe, listener]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 60s
+      start_interval: 1s
+
 volumes:
   jenkins-home:
+  runner-upstream-state:
+  runner-fork-state:
 
 networks:
   controller-integration:
@@ -236,6 +298,12 @@ networks:
   controller-cd:
     internal: ${JENKINS_AGENT_NETWORK_INTERNAL:-false}
   controller-egress:
+  runner-upstream-controller:
+    internal: true
+  runner-upstream-egress:
+  runner-fork-controller:
+    internal: true
+  runner-fork-egress:
 
 secrets:
   jenkins-admin-password:

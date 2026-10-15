@@ -278,7 +278,9 @@ token, and safety limits are trusted environment configuration rather than
 command arguments or workflow inputs. The required settings are
 `SDI_JENKINS_BASE_URL`, `SDI_JENKINS_JOB_PATH`, `SDI_JENKINS_REPOSITORY`,
 `SDI_JENKINS_USERNAME`, and `SDI_JENKINS_API_TOKEN`. Plain HTTP is accepted only
-on loopback; relocated Jenkins endpoints require verified HTTPS. The command
+for loopback hosts and exactly the host `controller`, which the stack runner
+reaches over its internal network; relocated Jenkins endpoints require verified
+HTTPS. The command
 does not support passwords, crumbs, remote-trigger tokens, URL credentials, or
 redirects. Preflight verifies the authenticated machine identity and access to
 the configured fixed job before submission.

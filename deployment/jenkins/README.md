@@ -6,7 +6,9 @@ and is started only on demand. One dedicated `integration` agent performs only
 integration work; four independently replaceable agents provide the
 `composition`, `image-build`, `cv`, and `cd` scheduling labels. The root pipeline
 executes one submitted run across those five agents: implemented composition,
-then the image-build, CV, and CD Fixtures.
+then the image-build, CV, and CD Fixtures. Optional GitHub self-hosted runner
+services, one per repository, pick up the protected handoff job and reach the
+controller over an internal network.
 
 The tracked authority is:
 
@@ -17,13 +19,17 @@ The tracked authority is:
 - `agents/Dockerfile`: the exact Jenkins Remoting, Python 3.12.13, `uv`, and
   locked production integration package used to construct each minimal agent
   image without inherited volume metadata.
+- `runner/Dockerfile`: the GitHub Actions runner `2.337.0` image for the
+  handoff runners, with the same Python runtime and locked production
+  integration package as the agents.
 - `casc/jenkins.yaml`: global security, zero-executor, five-node, retention, and
   Job DSL configuration.
 - `jobs/pipeline-integration.groovy`: the two fixed parameterized Pipeline SCM
   jobs, `pipeline-integration` for upstream and `pipeline-integration-fork` for
   the fork.
 - `compose.yaml`: loopback-only controller publication, named controller state,
-  five agent services, and a separate egress-capable network for each agent.
+  five agent services, a separate egress-capable network for each agent, and
+  the two optional runner services `runner-upstream` and `runner-fork`.
 - `Jenkinsfile`: the thin repository-owned scheduler over public integration CLI
   operations.
 - `bin/stack`: the supported validation and lifecycle interface.
@@ -46,8 +52,8 @@ but they are not configuration authority.
 - Python 3 for the isolated smoke-check client.
 - `uv` for strict adapter-descriptor validation and runtime-image selection.
 - Outbound HTTPS access to Docker Hub, GHCR, the Jenkins update service during a
-  clean image build, PyPI during a clean agent build, and GitHub for each
-  agent's independent immutable checkout.
+  clean image build, PyPI during a clean agent or runner build, and GitHub for
+  the runner release download and each agent's independent immutable checkout.
 
 Supported releases and minimum tool majors are explicit in
 `deployment/installation.env`. The tracked setup does not install or update the
@@ -114,28 +120,29 @@ issue the named machine-user API token and place it only in the protected
 `pipeline-integration-jenkins` GitHub environment. Password authentication is
 not the GitHub-to-Jenkins contract.
 
-Each dedicated GitHub runner uses the host interface under
-`deployment/github-runner/`. It is a separate low-privilege user service with no
-Docker socket or Jenkins-state access. The service environment never persists
-this API token; GitHub releases it only to the protected handoff job.
+Each dedicated GitHub runner is a stack service, described in
+[GitHub Handoff Runners](#github-handoff-runners). It runs as a non-root user
+with no Docker socket, Jenkins state, or secret files. The container receives
+no environment and never persists this API token; GitHub releases it only to
+the protected handoff job.
 
 Jenkins serves two repositories through two otherwise identical jobs:
 `pipeline-integration` clones upstream and `pipeline-integration-fork` clones
 the fork. Fork-specific names carry the `-fork` suffix. The `Jenkinsfile`
 selects the repository by its job name and refuses any other job, so the
 protected-main ancestry check runs against the repository that submitted the
-run. Each repository has its own runner account, such as `sdi-runner` for
-upstream and `sdi-runner-fork` for the fork, and its own
+run. Each repository has its own runner service, `runner-upstream` for upstream
+and `runner-fork` for the fork, and its own
 `pipeline-integration-jenkins` GitHub environment whose `SDI_JENKINS_JOB_PATH`
 names its job. Both jobs share the five agents, each with one executor, so
 overlapping runs queue or time out.
 
-The agent images bake the integration code of the checkout that ran
+The agent and runner images bake the integration code of the checkout that ran
 `stack start`, normally fork `main`, while each run executes the workflow,
 handoff, and `Jenkinsfile` of its own repository. Dispatch on upstream only
 after a sync pull request has brought upstream `main` level with the fork
 `main` commit the images were built from. A run whose integration code differs
-from the baked code fails before any Stage work, as described below.
+from the baked code fails before any handoff or Stage work, as described below.
 
 JCasC owns one reviewed script-sandbox approval: reading
 `FlowInterruptedException.getCauses()` lets the thin scheduler distinguish a
@@ -207,20 +214,88 @@ deployment/jenkins/bin/stack exercise-live
 deployment/jenkins/bin/stack stop
 ```
 
-`start` builds the exact controller and five agent images, starts all six
-containers, rejects an agent image that declares any volume, and waits for
-process health. Jenkins is available only at
+`start` builds the exact controller and five agent images and the runner image
+of every runner configured in `GITHUB_RUNNERS`, starts the controller, all five
+agents, and those runners, rejects an agent image that declares any volume, and
+waits for process health. It refuses a configured runner that is not registered
+and refuses while a runner executes a job. Jenkins is published on the host only
+at
 `http://127.0.0.1:<configured-port>`. No inbound-agent TCP port is published;
 all agents connect over WebSocket. `stop` removes all containers and networks
 but retains only the `jenkins-home` named volume. Agent workspaces are separate
 tmpfs mounts, have no shared or persistent filesystem, and disappear whenever
 their container is replaced. Their five separate networks allow GitHub checkout
-without making peer agents reachable. Every image the stack builds carries the
-label `org.sdi.project=ci-cv-cd_framework`.
+without making peer agents reachable. `stop`, `status`, `logs`, and `destroy`
+include the runner containers. Every image the stack builds carries the label
+`org.sdi.project=ci-cv-cd_framework`.
+
+### GitHub Handoff Runners
+
+The protected handoff job runs on a dedicated self-hosted GitHub runner with the
+sole label `sdi-jenkins-handoff`. Each repository's runner is an optional stack
+service: `runner-upstream` for `JENKINS_REPOSITORY_URL` and `runner-fork` for
+`JENKINS_FORK_REPOSITORY_URL`. The optional `GITHUB_RUNNERS` key in
+`config/local/controller.env` selects which ones `start` builds and starts. It
+is empty by default, or `upstream`, `fork`, or `upstream,fork`.
+
+Register a configured runner once, with the stack running, by piping a fresh
+registration token into `register-runner`. The token is a one-hour GitHub token
+that only a repository administrator can create:
+
+```sh acceptance=stack-register-runner
+gh api -X POST repos/open-SDI/ci-cv-cd_framework/actions/runners/registration-token \
+  --jq .token | deployment/jenkins/bin/stack register-runner upstream
+deployment/jenkins/bin/stack start
+deployment/jenkins/bin/stack verify-live
+```
+
+For the fork, request the token from
+`repos/gurkhaman/ci-cv-cd_framework/actions/runners/registration-token` and run
+`register-runner fork`. The command requires the runner in `GITHUB_RUNNERS`,
+refuses a token typed at a terminal, refuses while that runner's container
+runs, builds the image, and checks that the runner network reaches the
+controller. It registers against the configured repository URL without `.git`
+and prints the repository URL and runner name, never the token. The default
+names are `jenkins-handoff-stack` and `jenkins-handoff-stack-fork`; another
+installation passes its own with `--name NAME`. An existing registration is
+refused unless `--replace` is given, which discards the local registration and
+replaces a same-named runner in GitHub. `start` refuses a configured runner that
+is not registered and prints the exact registration command.
+
+GitHub assigns a queued job to any online runner with the label, so only one
+installation may have an online upstream runner at a time. When another
+installation's upstream runner goes live, stop this one by setting
+`GITHUB_RUNNERS=fork` and restarting the stack.
+
+Each runner image installs the Actions runner release, verified against its
+pinned SHA-256, with automatic updates and default labels disabled. It bakes the
+integration environment at `/opt/sdi/integration/.venv` and its code digest at
+`/etc/sdi/integration-code-digest`, so handoff jobs download and compile
+nothing. The protected workflow fails a job whose checkout's integration digest
+differs from the runner's; rebuild with `stack start` from a clean checkout of
+that revision. The container runs as the non-root `runner` user without sudo,
+with a read-only root, all capabilities dropped, `no-new-privileges`, no
+environment, secrets, Docker socket, or published ports, and no automatic
+restart. Its job workspace and `/tmp` are tmpfs mounts, so every checkout,
+including its sparse-checkout patterns, is discarded whenever the container
+restarts. The named volume `runner-<repo>-state` holds the runner binaries,
+which the entrypoint replaces from the image on every start, and the
+registration. The registration files `.runner`, `.credentials`, and
+`.credentials_rsaparams` are long-lived credentials of that runner. The runner
+reaches Jenkins as `http://controller:8080` over the internal network
+`runner-<repo>-controller`, shared only with the controller, and the internet
+over its own `runner-<repo>-egress` network.
+
+To remove a runner, stop the stack, remove it from `GITHUB_RUNNERS`, delete the
+runner in the repository's Actions runner settings, and delete its registration
+with `docker volume rm <project>_runner-<repo>-state`, for example
+`sdi-jenkins_runner-upstream-state`. `destroy` also deletes both runner state
+volumes; the GitHub-side runner then stays offline until it is deleted in GitHub
+or re-registered with `--replace`.
 
 Agent images install the integration package when they are built, so a
 pipeline run checks out the submitted commit but runs the adapter code baked
-into its agent image. Each image records a digest of the integration
+into its agent image. Runner images bake it the same way. Each image records a digest of the integration
 `pyproject.toml`, `uv.lock`, `src`, and `fixtures` it bakes in
 `/etc/sdi/integration-code-digest`. Before any Stage work, the run compares
 every agent's digest with its checkout's, and each Stage agent repeats the
@@ -232,9 +307,12 @@ does, including dev-only dependency or tool settings.
 
 So after merging a change to the baked paths, shut the stack down as in
 [Safe Shutdown](#safe-shutdown) and run `stack start`, which rebuilds the agent
-images; the guard fails every run until you do. Images built before the guard
+and runner images; the guard fails every run until you do. Images built before the guard
 existed record no digest, and the first run on them fails because their older
 CLI rejects the new digest arguments rather than with the typed reason.
+The runner image records the same digest, and the protected workflow's
+"Confirm runner integration code matches the revision" step fails the handoff
+job before contacting Jenkins when it differs from the checkout's.
 `stack exercise-live` and the `verify` smoke check assert that each agent
 records the digest of the working tree that built it. The image build copies
 the working tree, not the commit, so run `stack start` from a clean checkout:
@@ -270,31 +348,35 @@ identity and scheduling label remain unchanged. Only the selected agent's
 registration secret is validated or mounted during reconciliation.
 
 `bin/stack destroy` is the explicit destructive operation for reconstruction. It
-removes the controller and its named volume. Back up operational state first if
-it must be retained.
+removes the controller, its named volume, and the runner state volumes with
+their registrations. Back up operational state first if it must be retained.
 
 ## Safe Shutdown
 
-Prevent new protected-environment delivery and stop every dedicated GitHub
-runner before shutdown. Then quiesce Jenkins and stop the stack:
+Prevent new protected-environment delivery before shutdown. Then quiesce the
+runners and Jenkins and stop the stack:
 
 ```sh acceptance=stack-safe-shutdown
 deployment/jenkins/bin/stack quiesce
 deployment/jenkins/bin/stack stop
 ```
 
-`quiesce` asks Jenkins to stop accepting new work and refuses while the fixed
-job has queued or building work. If it observes active work, it cancels quiet
-mode and leaves the stack running. Do not use `stop` directly during an active
-run. `stop` gives every container 60 seconds to terminate, rejects a forced
-SIGKILL shutdown, and only then removes the containers. Resume an intentionally
-quiesced live controller with `stack resume`; after a full shutdown, start the
-stack and then the runner after validation.
+`quiesce` refuses while any runner executes a job and stops the running runner
+containers, giving each 60 seconds. It then asks Jenkins to stop accepting new
+work and refuses while the fixed job has queued or building work. If it
+observes active work, it cancels quiet mode, restarts the runners, and leaves
+the stack running. A job that GitHub assigns between the runner check and the
+stop is cancelled gracefully by the stop, and its workflow run shows cancelled.
+Do not use `stop` directly during an active run. `stop` gives every container
+60 seconds to terminate, rejects a forced SIGKILL shutdown, and only then
+removes the containers. Resume an intentionally quiesced live controller and
+its configured runners with `stack resume`; after a full shutdown, `stack start`
+starts the stack and its configured runners.
 
 ## Backup And Restore
 
 Snapshots are manual, cold, and sensitive. Select an operator-encrypted
-destination outside both the checkout and Docker volume, stop the runner and
+destination outside both the checkout and Docker volume, stop the
 protected-environment handoff, and run:
 
 ```sh acceptance=recovery-snapshot
@@ -305,9 +387,11 @@ deployment/jenkins/bin/recovery snapshot \
 ```
 
 The acknowledgement flags record operator decisions; the scaffold cannot prove
-storage encryption or GitHub-side quiescence. The command then quiesces Jenkins,
-refuses queued or building runs, cleanly stops all six containers, and archives
-the complete `jenkins-home` named volume with numeric ownership. It creates an
+storage encryption or GitHub-side quiescence. The command then runs
+`stack quiesce`, which stops the runners and quiesces Jenkins, refuses queued
+or building runs, cleanly stops every container, and archives the complete
+`jenkins-home` named volume with numeric ownership. The runner state volumes,
+and so the runner registrations, are not part of the snapshot. It creates an
 owner-only archive and a path-free recovery manifest containing the approved
 commit, UTC timestamp, byte size, SHA-256, and every exact installation pin.
 Both outputs must remain encrypted and outside the repository. There is no
@@ -321,7 +405,8 @@ deployment/jenkins/bin/recovery verify \
   --manifest /operator/encrypted/off-host-location/jenkins-home-....manifest.json
 ```
 
-Restore only from the exact approved commit recorded in the manifest. Stage new
+Restore only from the exact approved commit recorded in the manifest, with
+`GITHUB_RUNNERS` empty so no runner starts during restoration. Stage new
 administrator and machine-user bootstrap passwords after the snapshot was
 created, and configure five distinct writable agent-secret paths outside the
 checkout. The restore interface checks the controller files' modification
@@ -349,11 +434,13 @@ disposable stack is then stopped and removed. The target archive is restored,
 its archived user API tokens are removed, and the proven replacement HMAC key is
 installed before the exact stack starts and convergence is proved again.
 Archived controller and agent credentials therefore never become active on the
-target. Before restarting the runner or protected-environment handoff, the
-administrator must issue a successor token for the handoff machine user, replace
-`SDI_JENKINS_API_TOKEN` in the protected `pipeline-integration-jenkins`
-environment, and perform the documented machine-user preflight without exposing
-the token. A failed target extraction leaves a partial volume that must be
+target. Before configuring the runners in `GITHUB_RUNNERS` again or restoring
+protected-environment handoff, the administrator must issue a successor token
+for the handoff machine user, replace `SDI_JENKINS_API_TOKEN` in the protected
+`pipeline-integration-jenkins` environment, and perform the documented
+machine-user preflight without exposing the token. Then register each runner as
+in [GitHub Handoff Runners](#github-handoff-runners), with `--replace` when
+its state volume or the GitHub-side runner still holds an old registration. A failed target extraction leaves a partial volume that must be
 destroyed before retrying. Keep the archive until restoration and the
 protected-main Fixture check are accepted.
 
@@ -375,11 +462,13 @@ history:
    identities and labels, one executor per agent, clean isolated workspaces,
    exact pins, and convergence. Run `stack smoke` separately for repository
    acceptance; it uses an isolated ephemeral project.
-6. As the runner account, run `runner preflight`; as the GitHub/Jenkins machine
-   user, perform the documented handoff preflight without printing its token.
-7. Start the runner and execute one reviewed protected-main Fixture through the
-   GitHub workflow. Record only its exact run and artifact URLs in the readiness
-   checklist.
+6. As the GitHub/Jenkins machine user, perform the documented handoff preflight
+   without printing its token. Set `GITHUB_RUNNERS` and register each runner
+   with `stack register-runner`, using `--replace` because `destroy` deleted
+   the old registrations.
+7. Run `stack start` and `stack verify-live`, then execute one reviewed
+   protected-main Fixture through the GitHub workflow. Record only its exact run
+   and artifact URLs in the readiness checklist.
 
 The local smoke is not a substitute for the protected-main run. Reconstruction
 does not create host accounts, users, tokens, branch rules, environment rules,
@@ -391,8 +480,9 @@ Maintain one runner, Domain agent, or credential at a time while no run is
 queued or building. Use the order provision, validate, run one immediate
 protected-main Fixture, then revoke the predecessor. `reconcile-agent` enters
 Jenkins quiet mode, refuses replacement unless the queue and both fixed jobs are
-idle, and resumes Jenkins after replacement or failure. Stop the GitHub runner
-first so no handoff is stranded in GitHub while Jenkins is quiet. A descriptor
+idle, and resumes Jenkins after replacement or failure. Run `stack quiesce`
+first, which stops the GitHub runners so no handoff is stranded in GitHub while
+Jenkins is quiet, and `stack resume` afterwards to restart them. A descriptor
 replacement is valid only by changing that descriptor's immutable image digest
 and then reconciling its one matching agent.
 
@@ -412,18 +502,36 @@ automatic upgrade or periodic rotation machinery is provided.
 Before readiness, manually confirm protected-main-only dispatch, `contents: read`
 workflow permission, protected-environment secret delivery, trusted collaborator
 and fork policy, loopback-only Jenkins publication, a least-privilege handoff
-machine user, separate administrator and agent identities, a low-privilege
-runner without Docker or Jenkins-state access, Stage-scoped secret bindings, and
-sanitized evidence. Use `docs/installation-readiness-checklist.md`; do not paste
-Jenkins console output as evidence.
+machine user, separate administrator and agent identities, hardened runner
+containers, Stage-scoped secret bindings, and sanitized evidence. Use
+`docs/installation-readiness-checklist.md`; do not paste Jenkins console output
+as evidence.
+
+Each runner reaches the controller only over its own internal network and the
+internet only over its own egress network. It has no Docker socket, no Jenkins
+state or secret files, and no Jenkins credential except the API token GitHub
+releases to the protected handoff job. Its outbound traffic is not limited to
+GitHub, matching the retired native runner: Docker cannot filter by domain, and
+GitHub's endpoints change. The residual risk is that code from any workflow that
+targets `sdi-jenkins-handoff` in that repository can reach arbitrary hosts and
+the Jenkins HTTP API, though it still needs credentials it does not otherwise
+have. The label remains an operational selector, not an authorization control.
+A follow-up issue will restrict runner egress to GitHub Actions endpoints
+through an allowlisting proxy.
 
 ## Troubleshooting
 
 - Preflight failures: fix the named host capability as an administrator, then
   rerun preflight. Do not weaken a check or add privilege escalation.
-- Offline runner: verify the user service and GitHub repository runner status;
-  an offline runner leaves workflow work queued and does not justify bypassing
-  the protected workflow.
+- Offline runner: check `stack status`, `stack logs`, and the repository's
+  Actions runner list; an offline runner leaves workflow work queued and does
+  not justify bypassing the protected workflow.
+- Unregistered runner: `start` prints the exact registration command; pipe a
+  fresh token into `stack register-runner`, with `--replace` when GitHub still
+  lists a same-named runner.
+- Runner digest mismatch: the "Confirm runner integration code matches the
+  revision" step failed; run `stack start` from a clean checkout of that
+  revision to rebuild the runner image.
 - Offline agent: check only the affected container and secret file, then use
   one-at-a-time reconciliation after Jenkins is idle.
 - JCasC or Job DSL drift: stop new handoffs, restart from the approved commit,
@@ -452,12 +560,15 @@ and execute twice on every label to prove correct node allocation, clean
 workspaces, the integration/Domain role boundary, one-secret visibility, missing
 Docker access, and runtime network isolation. The checker also distinguishes
 missing labels, invalid mappings, incorrect executor counts, unavailable agents,
-and admissible busy agents.
+and admissible busy agents. The smoke builds the runner image and, without
+contacting GitHub, proves that registration reaches the controller over the
+runner network and rejects an invalid token, and that `start` refuses the
+unregistered runner. It never registers a runner.
 
 The smoke then mutates controller and node configuration, deletes one managed
-node and both fixed jobs, restarts all six containers while preserving the
-controller volume, and proves JCasC and Job DSL restore repository state. Agent
-tmpfs workspaces are recreated empty. Cleanup removes the isolated smoke volume
+node and both fixed jobs, restarts the controller and all five agents while
+preserving the controller volume, and proves JCasC and Job DSL restore
+repository state. Agent tmpfs workspaces are recreated empty. Cleanup removes the isolated smoke volume
 and prunes dangling images labelled `org.sdi.project=ci-cv-cd_framework`, such
 as superseded builds of the fixed image tags. Unlabelled images, base images,
 and the build cache are untouched.
@@ -496,6 +607,22 @@ than inherited as the final image, preventing the upstream anonymous volume
 declarations from persisting agent state. The custom entrypoint exists only to
 read the externally mounted registration file without placing its value in
 Compose environment configuration.
+
+The runner image uses the same CPython 3.12.13 runtime and `uv` inputs and
+shares the agents' integration build stage. It downloads Actions runner
+`2.337.0` with a Docker `ADD --checksum` SHA-256 check, so the build fails on a
+mismatch, and asserts that the installed listener reports the pinned version.
+`SDI_GITHUB_RUNNER_VERSION` and `SDI_GITHUB_RUNNER_SHA256` in
+`deployment/installation.env` must match the `RUNNER_VERSION` and
+`RUNNER_SHA256` arguments in `runner/Dockerfile` and the runner image tag in
+`compose.yaml`, and `SDI_GITHUB_RUNNER_LABEL` must match the label in
+`runner/sdi-runner-entrypoint`; `validate-installation` checks them. Change a
+runner pin in all of those places as one review unit. Automatic updates are
+disabled, and GitHub stops assigning jobs to a runner that falls too far behind
+its current release, so repin the runner promptly after each Actions runner
+release rather than treating the bump as optional. The Debian `git` and
+`libicu72` packages are installed with `apt-get` during the build and are not
+version-pinned.
 
 Controller health and Fixture execution prove pipeline machinery only. They are
 not Domain success, Validation evidence, deployment evidence, or KPI evidence.
