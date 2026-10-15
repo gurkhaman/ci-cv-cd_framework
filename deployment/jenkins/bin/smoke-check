@@ -40,6 +40,10 @@ EXPECTED_AGENTS = {
 UPSTREAM_JOB = "pipeline-integration"
 FORK_JOB = "pipeline-integration-fork"
 JOBS = (UPSTREAM_JOB, FORK_JOB)
+# The exercise script stops its builds at its own deadline, which leaves the
+# client time for job deletion to wait out any build it interrupted.
+AGENT_EXERCISE_CLIENT_SECONDS = 120
+AGENT_EXERCISE_SCRIPT_SECONDS = 90
 EXPECTED_SCRIPT_APPROVAL = (
     "method org.jenkinsci.plugins.workflow.steps.FlowInterruptedException getCauses"
 )
@@ -337,15 +341,20 @@ def _exercise_agents(args: argparse.Namespace) -> None:
 import hudson.model.FreeStyleProject
 import hudson.model.Result
 import hudson.tasks.Shell
+import java.util.concurrent.TimeUnit
 import jenkins.model.Jenkins
 
 def j = Jenkins.get()
 def mappings = [{mapping}]
-def jobs = []
+def jobs = [:]
+def failures = []
+def deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(
+  {AGENT_EXERCISE_SCRIPT_SECONDS}
+)
 try {{
   mappings.each {{ agentName, labelName ->
     def job = j.createProject(FreeStyleProject, "agent-smoke-" + agentName)
-    jobs.add(job)
+    jobs[agentName] = job
     job.setAssignedLabel(j.getLabel(labelName))
     def agentRole = agentName == 'integration' ? 'integration' : 'domain'
     def agentLabel = agentName == 'integration' ? '' : labelName
@@ -399,35 +408,69 @@ if [ "$BUILD_NUMBER" = 1 ]; then
 fi
 '''
     job.getBuildersList().add(new Shell(command))
-    (1..2).each {{ buildIndex ->
-      def build = job.scheduleBuild2(0).get()
+  }}
+  // Each round builds every agent at once. The second round starts only
+  // after every first build settled cleanly, so one agent's failure never
+  // starts more builds on the others.
+  for (buildIndex in 1..2) {{
+    if (failures) {{
+      break
+    }}
+    def builds = [:]
+    jobs.each {{ agentName, job ->
+      def build = job.scheduleBuild2(0)
+      if (build == null) {{
+        failures << agentName + " workspace build " + buildIndex + " was not scheduled"
+      }} else {{
+        builds[agentName] = build
+      }}
+    }}
+    builds.each {{ agentName, future ->
+      def labelName = mappings[agentName]
+      def build
+      try {{
+        build = future.get(
+          Math.max(0L, deadline - System.nanoTime()), TimeUnit.NANOSECONDS
+        )
+      }} catch (Exception error) {{
+        future.cancel(true)
+        failures << agentName + " workspace build " + buildIndex + " did not finish: " + error
+        return
+      }}
+      def problem = null
       if (build.getResult() != Result.SUCCESS) {{
-        throw new IllegalStateException(
-          agentName + " workspace build " + buildIndex + " failed: " +
+        problem = agentName + " workspace build " + buildIndex + " failed: " +
           build.getLog(100).join("\\n")
-        )
+      }} else if (build.getBuiltOnStr() != agentName) {{
+        problem = labelName + " ran on " + build.getBuiltOnStr() + ", expected " + agentName
+      }} else {{
+        def workspace = j.getNode(agentName).getWorkspaceFor(jobs[agentName])
+        def marker = workspace.child('.sdi-agent-workspace-marker')
+        def tree = workspace.child('.sdi-agent-workspace-tree')
+        if (marker.exists() || tree.exists()) {{
+          problem = agentName + " workspace was not clean after build " + buildIndex
+        }}
       }}
-      if (build.getBuiltOnStr() != agentName) {{
-        throw new IllegalStateException(
-          labelName + " ran on " + build.getBuiltOnStr() + ", expected " + agentName
-        )
-      }}
-      def workspace = j.getNode(agentName).getWorkspaceFor(job)
-      def marker = workspace.child('.sdi-agent-workspace-marker')
-      def tree = workspace.child('.sdi-agent-workspace-tree')
-      if (marker.exists() || tree.exists()) {{
-        throw new IllegalStateException(
-          agentName + " workspace was not clean after build " + buildIndex
-        )
+      if (problem != null) {{
+        failures << problem
       }}
     }}
   }}
 }} finally {{
-  jobs.each {{ job -> job.delete() }}
+  jobs.values().each {{ job ->
+    try {{
+      job.delete()
+    }} catch (Exception error) {{
+      failures << "could not delete " + job.getName() + ": " + error
+    }}
+  }}
+}}
+if (failures) {{
+  throw new IllegalStateException(failures.join("\\n"))
 }}
 println('agent-exercise-passed')
 """
-    body = _run_script(admin, script, timeout=120)
+    body = _run_script(admin, script, timeout=AGENT_EXERCISE_CLIENT_SECONDS)
     _equal(body.strip(), b"agent-exercise-passed", "agent exercise response")
 
 
