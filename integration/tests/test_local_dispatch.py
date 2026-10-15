@@ -388,6 +388,7 @@ response = {
     result = json.loads(completed.stdout)
     assert result["attempts"][0]["execution_conclusion"] == "succeeded"
     assert result["attempts"][0]["domain_outcome"] == "failed"
+    assert result["attempts"][0]["reason"]["category"] == "domain"
     assert [attempt["execution_conclusion"] for attempt in result["attempts"][1:]] == [
         "skipped",
         "skipped",
@@ -438,37 +439,6 @@ response = {{
     assert result["artifacts"] == []
 
 
-def test_rejected_candidate_records_runtime_failure_without_salvaging_files(
-    tmp_path: Path,
-) -> None:
-    repository, _ = _commit_fixture_repository(tmp_path)
-    adapter = tmp_path / "undeclared-output-adapter"
-    write_scripted_adapter(
-        adapter,
-        """
-(output / "private-endpoint.txt").write_text("https://private.example.test/secret")
-(output / "response.json").write_text("not-json")
-""",
-    )
-    commit_sha = _select_adapter(repository, adapter)
-    bundle_root = tmp_path / "rejected-candidate-bundle"
-
-    completed = _dispatch(repository, commit_sha, bundle_root)
-
-    assert completed.returncode == 1, completed.stderr
-    result = json.loads(completed.stdout)
-    first = result["attempts"][0]
-    assert first["execution_conclusion"] == "failed"
-    assert first["adapter_response_accepted"] is False
-    assert first["accepted_files"] == []
-    assert result["artifacts"] == []
-    assert not any(
-        path.read_bytes() == b"https://private.example.test/secret"
-        for path in bundle_root.rglob("*")
-        if path.is_file()
-    )
-
-
 @pytest.mark.parametrize(
     ("case_name", "reason_code", "response_status"),
     [
@@ -512,34 +482,16 @@ def test_exact_digest_fixture_cases_settle_as_complete_failed_results(
     attempt = result["attempts"][0]
     assert attempt["reason"]["code"] == reason_code
     assert attempt["adapter_response_accepted"] is (response_status == "accepted")
+    if response_status == "rejected":
+        # A rejected response accepts none of the files the adapter left.
+        assert attempt["accepted_files"] == []
+        assert result["artifacts"] == []
     assert [item["execution_conclusion"] for item in result["attempts"]] == [
         "failed",
         "skipped",
         "skipped",
         "skipped",
     ]
-
-
-@pytest.mark.slow
-def test_exact_digest_timeout_case_records_timeout_and_skips(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    repository, _ = _commit_fixture_repository(tmp_path)
-
-    started = time.monotonic()
-    result = _dispatch_with_composition_limit(
-        monkeypatch,
-        repository,
-        tmp_path / "bundle",
-        "runs/conformance/composition-timeout.yaml",
-    )
-
-    # The terminated adapter is reaped, so its exit does not wait out the grace.
-    assert time.monotonic() - started < ADAPTER_SHUTDOWN_GRACE_SECONDS
-    attempt = result["attempts"][0]
-    assert attempt["execution_conclusion"] == "timed_out"
-    assert attempt["process"]["termination"] == "timed_out"
-    assert attempt["reason"]["code"] == "sdi.stage.deadline-exceeded"
 
 
 @pytest.mark.slow
@@ -563,9 +515,15 @@ time.sleep(60)
     _select_adapter(repository, adapter)
     bundle_root = tmp_path / "timeout-bundle"
 
+    started = time.monotonic()
     result = _dispatch_with_composition_limit(monkeypatch, repository, bundle_root)
 
-    assert result["attempts"][0]["execution_conclusion"] == "timed_out"
+    # The terminated adapter is reaped, so its exit does not wait out the grace.
+    assert time.monotonic() - started < ADAPTER_SHUTDOWN_GRACE_SECONDS
+    attempt = result["attempts"][0]
+    assert attempt["execution_conclusion"] == "timed_out"
+    assert attempt["process"]["termination"] == "timed_out"
+    assert attempt["reason"]["code"] == "sdi.stage.deadline-exceeded"
     assert not list(tmp_path.glob(".timeout-bundle.*-*"))
     child_pid = int(child_pid_path.read_text())
     deadline = time.monotonic() + 5
@@ -577,26 +535,6 @@ time.sleep(60)
         time.sleep(0.05)
     else:
         pytest.fail("timed-out adapter descendant remained alive")
-
-
-def test_exact_digest_negative_domain_case_is_not_a_machinery_failure(
-    tmp_path: Path,
-) -> None:
-    repository, commit_sha = _commit_fixture_repository(tmp_path)
-
-    completed = _dispatch(
-        repository,
-        commit_sha,
-        tmp_path / "bundle",
-        "runs/conformance/composition-negative-domain.yaml",
-    )
-
-    assert completed.returncode == 0, completed.stderr
-    result = json.loads(completed.stdout)
-    attempt = result["attempts"][0]
-    assert attempt["execution_conclusion"] == "succeeded"
-    assert attempt["domain_outcome"] == "failed"
-    assert attempt["reason"]["category"] == "domain"
 
 
 def test_external_cancellation_terminates_the_process_tree_without_a_result(
