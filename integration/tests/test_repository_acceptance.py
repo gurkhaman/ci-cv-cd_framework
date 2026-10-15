@@ -101,11 +101,17 @@ def test_verification_is_the_complete_fail_fast_acceptance_gate(tmp_path: Path) 
     assert "uv 0.12.1" in completed.stdout
     assert "SDI_GITHUB_RUNNER_VERSION=2.337.0" in completed.stdout
     assert "workflow-cps:4378.v7a_08f1b_b_f8f4" in completed.stdout
-    assert "Repository acceptance passed." in completed.stdout
-    assert "permanent integration scaffold and Fixture behavior" in completed.stdout
-    assert "Real Domain stages, KPI evaluation, product security assurance" in (
-        completed.stdout
-    )
+    assert (
+        "Repository acceptance passed.\n"
+        "Passing proves the integration scaffold, the Fixture behavior of the "
+        "image-build, CV, and CD Stages, and the composition Stage contract: "
+        "outcomes, outputs, evidence, and diagnostics.\n"
+        "Live-model composition tests are skipped when their provider keys are "
+        "unavailable.\n"
+        "Passing proves no real image build, CV verdict, deployment, or KPI "
+        "evaluation; product security assurance, availability, and deferred "
+        "infrastructure remain out of scope.\n"
+    ) in completed.stdout
 
     failed = subprocess.run(
         [verify],
