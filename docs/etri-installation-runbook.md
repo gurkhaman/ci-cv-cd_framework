@@ -28,8 +28,8 @@ and have a working systemd user manager with lingering enabled.
 
 Use Ubuntu LTS 24.04 or 26.04 on x86_64 with:
 
-- Docker Engine 27 or newer and Docker Compose v2, available to the stack
-  operator without privilege escalation;
+- Docker Engine 27 or newer and the Docker Compose plugin 2.20.2 or newer,
+  available to the stack operator without privilege escalation;
 - Git 2 or newer, Python 3, `uv` 0.12.1, systemd, `curl`, `sha256sum`, and
   `tar`;
 - the native libraries required by GitHub Actions runner 2.337.0;

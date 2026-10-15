@@ -40,8 +40,9 @@ but they are not configuration authority.
 ## Host Requirements
 
 - Ubuntu LTS on x86_64.
-- Docker Engine with the Compose v2 plugin, usable by the operator without
-  privilege escalation.
+- Docker Engine 27 or newer with the Docker Compose plugin 2.20.2 or newer,
+  which the healthcheck `start_interval` key requires, usable by the operator
+  without privilege escalation.
 - Python 3 for the isolated smoke-check client.
 - `uv` for strict adapter-descriptor validation and runtime-image selection.
 - Outbound HTTPS access to Docker Hub, GHCR, the Jenkins update service during a
