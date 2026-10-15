@@ -26,6 +26,7 @@ from sdi_pipeline_integration._jenkins_handoff import (
     _preflight,  # pyright: ignore[reportPrivateUsage]
     load_handoff_settings,
 )
+from sdi_pipeline_integration._yaml_input import InputError
 from tests._fixture_inputs import (
     FIXTURE_COMPOSITION_CONFIG,
     SUPPLIED_INPUT_ARGUMENTS,
@@ -1001,3 +1002,39 @@ def test_http_deadline_does_not_strand_a_lock_held_by_the_request(
     assert raised.value.limit_seconds == 1
     assert not released.is_set()
     assert pool_lock.acquire(timeout=3)
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://127.0.0.1:8080",
+        "http://localhost:8080",
+        "http://[::1]:8080",
+        "http://controller:8080",
+        "https://jenkins.example",
+    ],
+)
+def test_handoff_accepts_plaintext_only_on_loopback_or_the_stack_controller(
+    base_url: str,
+) -> None:
+    settings = load_handoff_settings(
+        JENKINS_ENVIRONMENT | {"SDI_JENKINS_BASE_URL": base_url}
+    )
+
+    assert settings.base_url == base_url
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://controller.example:8080",
+        "http://controllerx:8080",
+        "http://10.0.0.5:8080",
+        "http://jenkins.example",
+    ],
+)
+def test_handoff_rejects_plaintext_beyond_loopback_and_the_stack_controller(
+    base_url: str,
+) -> None:
+    with pytest.raises(InputError, match="plaintext Jenkins base URL"):
+        load_handoff_settings(JENKINS_ENVIRONMENT | {"SDI_JENKINS_BASE_URL": base_url})

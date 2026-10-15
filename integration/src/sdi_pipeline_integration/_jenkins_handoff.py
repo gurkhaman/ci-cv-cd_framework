@@ -341,12 +341,18 @@ def load_handoff_settings(environment: Mapping[str, str]) -> HandoffSettings:
     ):
         msg = "trusted Jenkins base URL is invalid"
         raise InputError(msg)
+    # `controller` is the Jenkins service on the handoff runner's internal
+    # Compose network, which carries no other hosts.
     if parsed_url.scheme == "http" and parsed_url.hostname not in {
         "127.0.0.1",
         "localhost",
         "::1",
+        "controller",
     }:
-        msg = "plaintext Jenkins base URL must use the loopback interface"
+        msg = (
+            "plaintext Jenkins base URL must use the loopback interface "
+            "or the stack controller"
+        )
         raise InputError(msg)
 
     job_path = _required(environment, "SDI_JENKINS_JOB_PATH")

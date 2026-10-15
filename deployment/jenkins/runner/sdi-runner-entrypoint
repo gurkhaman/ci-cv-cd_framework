@@ -1,0 +1,120 @@
+#!/bin/sh
+set -eu
+
+# The runner writes its registration, migration markers, and diagnostics
+# beside its binaries, so its root is the state volume. Every start discards
+# everything else there, including the `.env` and `.path` files the runner
+# loads, and copies the image's runner back, so job code cannot persist
+# changes to the runner's binaries or environment.
+distribution=/opt/actions-runner
+root=/var/lib/sdi-runner
+work=/home/runner/_work
+
+fail() {
+    printf 'sdi-runner-entrypoint: %s\n' "$1" >&2
+    exit 2
+}
+
+refresh_runner() {
+    find "$root" -mindepth 1 -maxdepth 1 \
+        ! -name .runner ! -name .runner_migrated \
+        ! -name .credentials ! -name .credentials_migrated \
+        ! -name .credentials_rsaparams ! -name _diag \
+        -exec rm -rf -- {} +
+    cp -R -- "$distribution/." "$root/"
+    if [ -d "$root/_diag" ]; then
+        find "$root/_diag" -type f -mtime +14 -exec rm -f -- {} +
+    fi
+}
+
+registration() {
+    python3 - "$root/.runner" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+runner = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8-sig"))
+print(f"{runner['gitHubUrl']} {runner['agentName']}")
+PY
+}
+
+action=${1:-run}
+[ "$#" -eq 0 ] || shift
+case "$action" in
+    run)
+        [ "$#" -eq 0 ] || fail 'run accepts no arguments'
+        [ -s "$root/.runner" ] || \
+            fail 'the runner is not registered; run stack register-runner first'
+        refresh_runner
+        cd "$root"
+        RUNNER_MANUALLY_TRAP_SIG=1
+        export RUNNER_MANUALLY_TRAP_SIG
+        exec ./run.sh
+        ;;
+    register)
+        [ "$#" -ge 2 ] && [ "$#" -le 3 ] || \
+            fail 'register requires a repository URL, a runner name, and optionally --replace'
+        repository_url=$1
+        runner_name=$2
+        replace=${3-}
+        case "$repository_url" in
+            https://github.com/*/*) ;;
+            *) fail 'the repository URL must be an HTTPS GitHub repository URL' ;;
+        esac
+        case "$runner_name" in
+            ''|*[!A-Za-z0-9_.-]*) fail 'the runner name contains an invalid character' ;;
+        esac
+        case "$replace" in
+            ''|--replace) ;;
+            *) fail 'register accepts only --replace after the runner name' ;;
+        esac
+        [ ! -t 0 ] || fail 'the registration token must arrive on standard input'
+        token=$(tr -d '\r\n')
+        case "$token" in
+            ''|*[!A-Za-z0-9]*) fail 'the registration token is empty or invalid' ;;
+        esac
+        if [ -n "$replace" ]; then
+            rm -f -- "$root/.runner" "$root/.runner_migrated" \
+                "$root/.credentials" "$root/.credentials_migrated" \
+                "$root/.credentials_rsaparams"
+        fi
+        [ ! -e "$root/.runner" ] || \
+            fail 'the runner is already registered; pass --replace to register it again'
+        refresh_runner
+        cd "$root"
+        ACTIONS_RUNNER_INPUT_TOKEN=$token
+        export ACTIONS_RUNNER_INPUT_TOKEN
+        ./config.sh \
+            --unattended \
+            --url "$repository_url" \
+            --name "$runner_name" \
+            --labels sdi-jenkins-handoff \
+            --no-default-labels \
+            --disableupdate \
+            --work "$work" \
+            ${replace:+--replace} || fail 'GitHub refused the registration'
+        [ -s "$root/.runner" ] || fail 'GitHub refused the registration'
+        registration
+        ;;
+    show)
+        [ "$#" -eq 0 ] || fail 'show accepts no arguments'
+        [ -s "$root/.runner" ] || exit 3
+        registration
+        ;;
+    check)
+        [ "$#" -eq 0 ] || fail 'check accepts no arguments'
+        [ -s /etc/sdi/integration-code-digest ] || fail 'the integration code digest is missing'
+        sdi-integration --version >/dev/null || fail 'the integration CLI is unusable'
+        git --version >/dev/null || fail 'Git is unusable'
+        python3 - <<'PY' || fail 'the controller is unreachable over the runner network'
+import urllib.request
+
+try:
+    with urllib.request.urlopen("http://controller:8080/login", timeout=10) as response:
+        raise SystemExit(0 if response.status == 200 else 1)
+except OSError:
+    raise SystemExit(1) from None
+PY
+        ;;
+    *) fail "unknown action: $action" ;;
+esac
