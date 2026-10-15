@@ -555,6 +555,9 @@ def test_workflow_is_one_protected_main_only_handoff_job() -> None:
         "ref": "${{ github.sha }}",
         "fetch-depth": 1,
         "persist-credentials": False,
+        "filter": "blob:none",
+        "sparse-checkout-cone-mode": False,
+        "sparse-checkout": "/*\n!/CV/\n",
     }
     assert steps[1]["uses"] == (
         "astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4"
