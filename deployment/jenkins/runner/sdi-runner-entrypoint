@@ -105,7 +105,7 @@ case "$action" in
         [ "$#" -eq 0 ] || fail 'check accepts no arguments'
         [ -s /etc/sdi/integration-code-digest ] || fail 'the integration code digest is missing'
         sdi-integration --version >/dev/null || fail 'the integration CLI is unusable'
-        git --version >/dev/null || fail 'Git is unusable'
+        git --no-lazy-fetch --version >/dev/null || fail 'Git is unusable or older than 2.44'
         python3 - <<'PY' || fail 'the controller is unreachable over the runner network'
 import urllib.request
 

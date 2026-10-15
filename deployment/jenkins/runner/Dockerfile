@@ -1,4 +1,4 @@
-ARG RUNTIME_IMAGE=docker.io/library/python@sha256:4766d8b510c428e595d74b9cc5bbb2fae8e26316fffb4adc89908d79aacd58a2
+ARG RUNTIME_IMAGE=docker.io/library/python@sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.12.1@sha256:cf4eedcaa81655197f625739489effcbe71b61ceb1506f332c3facae5deceded
 ARG RUNNER_VERSION=2.337.0
 ARG RUNNER_SHA256=70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613
@@ -33,7 +33,7 @@ ARG RUNNER_VERSION
 
 USER root
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git libicu72 \
+    && apt-get install -y --no-install-recommends git libicu76 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=runner-dist /opt/actions-runner /opt/actions-runner
 COPY --from=tooling /opt/sdi/integration/.venv /opt/sdi/integration/.venv
@@ -53,7 +53,7 @@ RUN useradd --uid 1000 --user-group --no-create-home --home-dir /home/runner \
     && test "$(/opt/actions-runner/bin/Runner.Listener --version)" = "$RUNNER_VERSION" \
     && rm -rf /opt/actions-runner/_diag \
     && python3 --version \
-    && git --version
+    && git --no-lazy-fetch --version
 COPY --from=tooling \
     /opt/sdi/integration-code-digest \
     /etc/sdi/integration-code-digest
