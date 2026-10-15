@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Any, cast
 
 from ruamel.yaml import YAML
 
+from sdi_pipeline_integration._integration_code import STALE_IMAGE_REASON
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
@@ -527,6 +529,17 @@ def test_root_pipeline_is_a_thin_scheduler_over_public_cli_operations() -> None:
     assert '"execution_conclusion"' not in pipeline
     assert '"domain_outcome"' not in pipeline
     assert "lastBuild" not in pipeline
+
+
+def test_root_pipeline_reports_stale_agent_images_as_their_typed_reason() -> None:
+    pipeline = (REPOSITORY_ROOT / "Jenkinsfile").read_text()
+
+    assert f"currentBuild.description = '{STALE_IMAGE_REASON}'" in pipeline
+    assert "preflightStatus == 4" in pipeline
+    assert "stageExecutionStatus == 4" in pipeline
+    assert pipeline.count("--baked-code-digest") == 1
+    for resource in ("integration", "composition", "image-build", "cv", "cd"):
+        assert pipeline.count(f"--{resource}-baked-code-digest") == 1
 
 
 def test_live_check_compiles_the_tracked_jenkinsfile_with_workflow_cps(  # noqa: C901

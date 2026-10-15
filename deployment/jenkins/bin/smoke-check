@@ -72,6 +72,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--jenkinsfile", type=Path)
     parser.add_argument("--inventory", type=Path)
     parser.add_argument("--agent-secret-directory", type=Path)
+    parser.add_argument("--integration-code-digest")
     return parser
 
 
@@ -320,6 +321,14 @@ def _provision_agent_secrets(args: argparse.Namespace) -> None:
 
 def _exercise_agents(args: argparse.Namespace) -> None:
     admin = _JenkinsClient(args.url, args.admin_id, _password(args.admin_password_file))
+    # Every agent image must record the digest of the integration code it was
+    # built from, which is this working tree's.
+    code_digest = args.integration_code_digest or ""
+    _require(
+        condition=len(code_digest) == 64
+        and all(character in "0123456789abcdef" for character in code_digest),
+        message="--integration-code-digest must be a SHA-256 hex digest",
+    )
     mapping = ", ".join(
         f"'{name}': '{label}'" for name, label in EXPECTED_AGENTS.items()
     )
@@ -353,6 +362,8 @@ mkdir "$tree"
 touch "$tree/file"
 test "$(cat /etc/sdi/jenkins-agent-role)" = "''' + agentRole + '''"
 test "$(cat /etc/sdi/jenkins-agent-label)" = "''' + agentLabel + '''"
+test "$(cat /etc/sdi/integration-code-digest)" = "{code_digest}"
+test "$(stat -c %a /etc/sdi/integration-code-digest)" = 444
 test "$(python3 --version)" = "Python 3.12.13"
 test "$(uv --version)" = "uv 0.12.1 (x86_64-unknown-linux-musl)"
 test "$(java -jar /usr/share/jenkins/agent.jar -version)" = "3391.va_37fa_a_305d6d"

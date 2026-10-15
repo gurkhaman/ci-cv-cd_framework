@@ -29,6 +29,7 @@ from ._handoff_contracts import (
     HandoffPhase,
     HandoffReceipt,
 )
+from ._integration_code import STALE_IMAGE_REASON
 from ._json_input import canonical_json, parse_json
 from ._local_dispatch import MAX_RESULT_BYTES, parse_pipeline_result, validate_bundle
 from ._result_contracts import PIPELINE_RESULT_PATH, PipelineIntegrationResult
@@ -852,7 +853,7 @@ def _wait_for_completion(
             response = client.request(
                 "GET",
                 (
-                    f"{relative}api/json?tree=number,queueId,building,result,url,"
+                    f"{relative}api/json?tree=number,queueId,building,result,description,url,"
                     "actions[parameters[name,value]],artifacts[fileName,relativePath]"
                 ),
                 phase_started=started,
@@ -901,6 +902,12 @@ def _wait_for_completion(
             or result not in JENKINS_RESULTS
         ):
             raise _failure("http_operation", "running")
+        if result == "FAILURE" and document.get("description") == STALE_IMAGE_REASON:
+            raise _failure(
+                "stale_agent_image",
+                "running",
+                jenkins_result=result,
+            )
         artifacts = document.get("artifacts")
         if not isinstance(artifacts, list):
             raise _failure(

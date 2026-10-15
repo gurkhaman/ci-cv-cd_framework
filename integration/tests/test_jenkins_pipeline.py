@@ -15,6 +15,7 @@ from tests._fixture_inputs import (
     FIXTURE_COMPOSITION_CONFIG,
     FIXTURE_SERVICE_REPOSITORY,
     SUPPLIED_INPUT_ARGUMENTS,
+    copy_baked_integration_code,
     write_fixture_composition_descriptor,
     write_scripted_adapter,
 )
@@ -33,6 +34,13 @@ WORK_LIMITS = {
     "image_build": "1800",
     "cv": "2700",
     "cd": "900",
+}
+RESOURCE_NODES = {
+    "integration": "integration",
+    "ci": "composition",
+    "image-build": "image-build",
+    "cv": "cv",
+    "cd": "cd",
 }
 COMMITTED_FILES = (
     SUCCESS_REQUEST,
@@ -81,6 +89,7 @@ def _repository(tmp_path: Path) -> tuple[Path, str]:
         destination = repository / relative_path
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes((SOURCE_ROOT / relative_path).read_bytes())
+    copy_baked_integration_code(repository)
     write_fixture_composition_descriptor(repository)
     _git(repository, "add", ".")
     _git(repository, "commit", "-m", "Add distributed Fixture inputs")
@@ -102,6 +111,26 @@ def _common(repository: Path, commit_sha: str, request_path: str) -> list[str]:
     ]
 
 
+def _baked_code_digest(repository: Path) -> str:
+    """Record the checkout's integration code as a freshly built image would."""
+    completed = subprocess.run(
+        [
+            "sdi-integration",
+            "integration-code-digest",
+            "--root",
+            str(repository / "integration"),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
+def _fresh_image(repository: Path) -> tuple[str, str]:
+    return ("--baked-code-digest", _baked_code_digest(repository))
+
+
 def _supplied(stage: str) -> tuple[str, ...]:
     """Give the run-supplied inputs to composition, the only Stage granted them."""
     return SUPPLIED_INPUT_ARGUMENTS if stage == "composition" else ()
@@ -112,7 +141,10 @@ def _preflight(
     commit_sha: str,
     request_path: str,
     started_millis: str,
+    baked: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    fresh = _baked_code_digest(repository)
+    recorded = dict.fromkeys(RESOURCE_NODES, fresh) | (baked or {})
     return subprocess.run(
         [
             "sdi-integration",
@@ -138,6 +170,11 @@ def _preflight(
             "cv",
             "--cd-node",
             "cd",
+            *(
+                argument
+                for node, option in RESOURCE_NODES.items()
+                for argument in (f"--{option}-baked-code-digest", recorded[node])
+            ),
         ],
         check=False,
         capture_output=True,
@@ -168,6 +205,7 @@ def _execute_chain(  # noqa: PLR0913, PLR0917
             "sdi-integration",
             "execute-jenkins-stage",
             *_common(repository, commit_sha, request_path),
+            *_fresh_image(repository),
             *_supplied(stage),
             "--descriptor-path",
             descriptor,
@@ -280,6 +318,7 @@ def _execute_stage(
             "sdi-integration",
             "execute-jenkins-stage",
             *_common(repository, commit_sha, SUCCESS_REQUEST),
+            *_fresh_image(repository),
             *supplied,
             "--descriptor-path",
             descriptor,
@@ -424,6 +463,90 @@ def test_preflight_rejects_a_key_the_composition_descriptor_does_not_bind(
     assert "does not bind" in preflight.stderr
 
 
+def _commit_integration_change(repository: Path) -> str:
+    source = repository / "integration/src/sdi_pipeline_integration/_cli.py"
+    _ = source.write_text(f"{source.read_text()}# merged after the image build\n")
+    _git(repository, "commit", "-am", "Change the baked integration code")
+    return _git(repository, "rev-parse", "HEAD")
+
+
+def test_preflight_names_every_stale_agent_before_any_stage_work(
+    tmp_path: Path,
+) -> None:
+    repository, _commit_sha = _repository(tmp_path)
+    built = _baked_code_digest(repository)
+    commit_sha = _commit_integration_change(repository)
+
+    preflight = _preflight(
+        repository,
+        commit_sha,
+        SUCCESS_REQUEST,
+        str(int((time.time() - 1) * 1000)),
+        baked={"image-build": built, "cv": "missing"},
+    )
+
+    assert preflight.returncode == 4
+    assert preflight.stdout == ""
+    assert preflight.stderr.startswith("sdi-integration: sdi.agent.stale-image: ")
+    assert "agent images image-build, cv were built" in preflight.stderr
+    assert f"image-build {built[:12]}, cv missing" in preflight.stderr
+    assert "rebuild the agent images" in preflight.stderr
+
+
+def test_a_stale_integration_agent_judges_no_other_agent(tmp_path: Path) -> None:
+    repository, _commit_sha = _repository(tmp_path)
+    built = _baked_code_digest(repository)
+    commit_sha = _commit_integration_change(repository)
+
+    preflight = _preflight(
+        repository,
+        commit_sha,
+        SUCCESS_REQUEST,
+        str(int((time.time() - 1) * 1000)),
+        baked={"integration": built, "cv": "missing"},
+    )
+
+    assert preflight.returncode == 4
+    assert "the integration agent image was built" in preflight.stderr
+    assert "the other agents were not checked" in preflight.stderr
+    assert "cv" not in preflight.stderr
+
+
+def test_stale_stage_agent_refuses_its_stage_without_an_attempt(
+    tmp_path: Path,
+) -> None:
+    repository, _commit_sha = _repository(tmp_path)
+    built = _baked_code_digest(repository)
+    commit_sha = _commit_integration_change(repository)
+    attempt = tmp_path / "attempt"
+
+    executed = subprocess.run(
+        [
+            "sdi-integration",
+            "execute-jenkins-stage",
+            *_common(repository, commit_sha, SUCCESS_REQUEST),
+            "--baked-code-digest",
+            built,
+            *SUPPLIED_INPUT_ARGUMENTS,
+            "--descriptor-path",
+            DESCRIPTORS[0][1],
+            "--attempt-root",
+            str(attempt),
+            "--work-limit-seconds",
+            WORK_LIMITS["composition"],
+            "--run-deadline-epoch-millis",
+            str(int(time.time() * 1000) + 60_000),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert executed.returncode == 4
+    assert "sdi.agent.stale-image: the ci agent image was built" in executed.stderr
+    assert not attempt.exists()
+
+
 def test_malformed_final_bundle_is_rejected_by_public_cli(tmp_path: Path) -> None:
     repository, commit_sha = _repository(tmp_path)
     root = tmp_path / "run"
@@ -537,6 +660,7 @@ def test_expired_run_deadline_does_not_launch_stage(tmp_path: Path) -> None:
             "sdi-integration",
             "execute-jenkins-stage",
             *_common(repository, commit_sha, SUCCESS_REQUEST),
+            *_fresh_image(repository),
             *SUPPLIED_INPUT_ARGUMENTS,
             "--descriptor-path",
             DESCRIPTORS[0][1],
@@ -613,6 +737,7 @@ def test_tampered_attempt_transfer_is_rejected(tmp_path: Path) -> None:
             "sdi-integration",
             "execute-jenkins-stage",
             *_common(repository, commit_sha, SUCCESS_REQUEST),
+            *_fresh_image(repository),
             *SUPPLIED_INPUT_ARGUMENTS,
             "--descriptor-path",
             DESCRIPTORS[0][1],
@@ -683,6 +808,7 @@ def test_external_cancellation_publishes_no_attempt(tmp_path: Path) -> None:
             "sdi-integration",
             "execute-jenkins-stage",
             *_common(repository, commit_sha, SUCCESS_REQUEST),
+            *_fresh_image(repository),
             *SUPPLIED_INPUT_ARGUMENTS,
             "--descriptor-path",
             DESCRIPTORS[0][1],

@@ -133,7 +133,8 @@ The agent images bake the integration code of the checkout that ran
 `stack start`, normally fork `main`, while each run executes the workflow,
 handoff, and `Jenkinsfile` of its own repository. Dispatch on upstream only
 after a sync pull request has brought upstream `main` level with the fork
-`main` commit the images were built from.
+`main` commit the images were built from. A run whose integration code differs
+from the baked code fails before any Stage work, as described below.
 
 JCasC owns one reviewed script-sandbox approval: reading
 `FlowInterruptedException.getCauses()` lets the thin scheduler distinguish a
@@ -218,9 +219,26 @@ label `org.sdi.project=ci-cv-cd_framework`.
 
 Agent images install the integration package when they are built, so a
 pipeline run checks out the submitted commit but runs the adapter code baked
-into its agent image. After merging any change under `integration/`, shut the
-stack down as in [Safe Shutdown](#safe-shutdown) and run `stack start`, which
-rebuilds the agent images, so the next run uses the merged code.
+into its agent image. Each image records a digest of the integration
+`pyproject.toml`, `uv.lock`, `src`, and `fixtures` it bakes in
+`/etc/sdi/integration-code-digest`. Before any Stage work, the run compares
+every agent's digest with its checkout's, and each Stage agent repeats the
+comparison for itself before its Stage. A mismatch fails the Jenkins build with
+the reason `sdi.agent.stale-image`, naming the stale agents, and the handoff
+receipt records the failure code `stale_agent_image`. Changes elsewhere, such
+as docs, tests, and schemas, do not count; any change to the four baked paths
+does, including dev-only dependency or tool settings.
+
+So after merging a change to the baked paths, shut the stack down as in
+[Safe Shutdown](#safe-shutdown) and run `stack start`, which rebuilds the agent
+images; the guard fails every run until you do. Images built before the guard
+existed record no digest, and the first run on them fails because their older
+CLI rejects the new digest arguments rather than with the typed reason.
+`stack exercise-live` and the `verify` smoke check assert that each agent
+records the digest of the working tree that built it. The image build copies
+the working tree, not the commit, so run `stack start` from a clean checkout:
+an uncommitted or untracked file under the four baked paths bakes a digest that
+no submitted commit matches, and every run then fails as stale.
 
 The root pipeline deletes every allocated workspace before checkout and in a
 `finally` block. Each agent independently checks out and verifies the submitted
