@@ -54,6 +54,13 @@ def isTimeoutInterruption = { interruption ->
 // against the repository that submitted the run. The job names match
 // deployment/jenkins/jobs/pipeline-integration.groovy; this installation does
 // not bind the scm variable, so the URL is selected by job name.
+//
+// The clone keeps full protected-main commit history for the ancestry check but
+// fetches only the blobs a sparse checkout without the unused CV/ Gazebo assets
+// needs; CV/ is nearly all of the repository's bytes. The CLI reads committed
+// blobs with lazy fetching disabled, so it fails closed outside that set. The
+// git plugin's checkout step cannot filter blobs, so plain git is used. Only the
+// transfer is retried, with stalled transfers aborted; no Stage attempt is.
 def checkoutSubmittedCommit = {
     def repositoryUrl = [
         'pipeline-integration': env.SDI_REPOSITORY_URL,
@@ -62,21 +69,40 @@ def checkoutSubmittedCommit = {
     if (!repositoryUrl) {
         error("Job ${env.JOB_NAME} has no configured repository")
     }
-    checkout([
-        $class: 'GitSCM',
-        branches: [[name: env.RESOLVED_COMMIT_SHA]],
-        extensions: [[$class: 'CloneOption', honorRefspec: true, noTags: true]],
-        userRemoteConfigs: [[
-            refspec: '+refs/heads/main:refs/remotes/origin/main',
-            url: repositoryUrl,
-        ]],
-    ])
-    sh '''set -eu
-test "$(git rev-parse HEAD)" = "$RESOLVED_COMMIT_SHA"
-git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/sdi-protected-main'
+    withEnv(["SDI_CHECKOUT_REPOSITORY_URL=${repositoryUrl}"]) {
+        sh '''set -eu
+# Runs one git transfer up to three times. Each attempt is killed after 300
+# seconds and aborts sooner if it moves under 1000 bytes/s for 60 seconds;
+# reset_attempt undoes a failed attempt's partial state before the next.
+git_transfer_with_retries() {
+  description=$1
+  reset_attempt=$2
+  shift 2
+  attempt=1
+  until timeout 300 git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 "$@"; do
+    if [ "$attempt" -ge 3 ]; then
+      echo "$description failed after $attempt attempts" >&2
+      exit 1
+    fi
+    attempt=$((attempt + 1))
+    "$reset_attempt"
+  done
+}
+reset_clone() {
+  find . -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+}
+reset_checkout() {
+  rm -f .git/index.lock
+}
+git_transfer_with_retries 'protected-main clone' reset_clone clone --filter=blob:none --no-checkout --no-tags --single-branch --branch main "$SDI_CHECKOUT_REPOSITORY_URL" .
+git update-ref refs/remotes/origin/sdi-protected-main refs/remotes/origin/main
 git merge-base --is-ancestor "$RESOLVED_COMMIT_SHA" refs/remotes/origin/sdi-protected-main
+git sparse-checkout set --no-cone '/*' '!/CV/'
+git_transfer_with_retries 'submitted-commit checkout' reset_checkout checkout --quiet --detach "$RESOLVED_COMMIT_SHA"
+test "$(git rev-parse HEAD)" = "$RESOLVED_COMMIT_SHA"
 git update-ref refs/heads/main "$RESOLVED_COMMIT_SHA"
 '''
+    }
 }
 
 // Only composition is given the checked-out service repository. The Domain

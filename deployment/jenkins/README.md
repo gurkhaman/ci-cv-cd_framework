@@ -243,7 +243,11 @@ no submitted commit matches, and every run then fails as stale.
 
 The root pipeline deletes every allocated workspace before checkout and in a
 `finally` block. Each agent independently checks out and verifies the submitted
-protected-main commit. Accepted envelopes and their declared bounded files are
+protected-main commit. The checkout is a blobless partial clone with a sparse
+checkout that omits the unused `CV/` Gazebo assets, nearly all of the
+repository's bytes; full commit history is kept for the ancestry check. The
+controller's Pipeline-script checkout keeps its repository between builds and
+fetches only new commits. Accepted envelopes and their declared bounded files are
 the only cross-agent Stage data, transferred through Execution-ID-qualified
 Jenkins stashes. The integration agent validates the complete bundle before
 archiving all and only its declared files from the current build.

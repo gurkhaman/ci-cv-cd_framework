@@ -511,9 +511,10 @@ def _check_job_config(config_xml: bytes, repository_url: str, handoff_id: str) -
         "job SCM tag retrieval",
     )
     _require(
-        condition=root.find(".//extensions/hudson.plugins.git.extensions.impl.WipeWorkspace")
-        is not None,
-        message="job SCM preserves its Pipeline script workspace",
+        condition=root.find(".//extensions/hudson.plugins.git.extensions.impl.CleanBeforeCheckout")
+        is not None
+        and root.find(".//extensions/hudson.plugins.git.extensions.impl.WipeWorkspace") is None,
+        message="job SCM does not reuse a cleaned Pipeline script repository",
     )
     _equal(root.findtext(".//scriptPath"), "Jenkinsfile", "job pipeline source")
     _equal(root.findtext(".//lightweight"), "false", "job lightweight checkout")
