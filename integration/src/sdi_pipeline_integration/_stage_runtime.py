@@ -69,8 +69,10 @@ from ._stage_contracts import (
     StageProfile,
     contains_sensitive_contract_material,
     contains_sensitive_material,
+    render_stage_profile,
     require_unique_paths,
 )
+from ._stage_profiles import stage_profile_bytes
 from ._yaml_input import (
     InputError,
     parse_front_matter,
@@ -1433,25 +1435,23 @@ def execute_stage(  # noqa: PLR0913
 def load_stage_adapter(
     repository: GitRepository, descriptor_path: str
 ) -> tuple[AdapterDescriptor, StageProfile]:
-    """Load one descriptor and its digest-bound reviewed Stage profile."""
+    """Load one descriptor and the Stage profile rendered from the registry.
+
+    The committed profile must equal the rendering byte for byte, so a hand
+    edit fails here as well as in the freshness check.
+    """
     validate_repository_path(descriptor_path)
     descriptor_blob = repository.read_regular_file(descriptor_path)
     descriptor = _validate_yaml_model(AdapterDescriptor, descriptor_blob)
     profile_blob = repository.read_regular_file(descriptor.stage_profile)
-    if (
-        hashlib.sha256(profile_blob.content).hexdigest()
-        != descriptor.stage_profile_sha256
-    ):
-        msg = "Stage profile bytes do not match the reviewed descriptor digest"
+    if profile_blob.content != stage_profile_bytes(descriptor.stage):
+        msg = (
+            f"{descriptor.stage_profile} does not match the {descriptor.stage} "
+            "profile rendered from the registry; run "
+            "sdi-integration stage-profiles --write"
+        )
         raise InputError(msg)
-    profile = _validate_yaml_model(StageProfile, profile_blob)
-    if (
-        profile.stage != descriptor.stage
-        or profile.profile_version != descriptor.stage_profile_version
-    ):
-        msg = "Stage profile identity does not match the reviewed descriptor"
-        raise InputError(msg)
-    return descriptor, profile
+    return descriptor, render_stage_profile(descriptor.stage)
 
 
 def _adapter_environment(

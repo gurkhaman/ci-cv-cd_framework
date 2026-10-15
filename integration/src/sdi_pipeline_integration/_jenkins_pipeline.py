@@ -36,11 +36,11 @@ if TYPE_CHECKING:
     from ._stage_contracts import StageName
     from ._stage_runtime import StageInputSource, SuppliedInputs
 
-EXPECTED_STAGE_CONFIGURATION = {
-    "composition": ("composition", 10 * 60),
-    "image_build": ("image-build", 30 * 60),
-    "cv": ("cv", 45 * 60),
-    "cd": ("cd", 15 * 60),
+EXPECTED_AGENT_LABELS = {
+    "composition": "composition",
+    "image_build": "image-build",
+    "cv": "cv",
+    "cd": "cd",
 }
 EXPECTED_RESOURCE_NODES = {
     "integration": "integration",
@@ -148,12 +148,10 @@ def preflight_jenkins_run(  # noqa: PLR0913
     )
     key_names = composition_key_names(repository, supplied)
     for expected_stage, descriptor_path in DESCRIPTORS:
-        descriptor, profile = load_stage_adapter(repository, descriptor_path)
-        expected_label, expected_limit = EXPECTED_STAGE_CONFIGURATION[expected_stage]
+        descriptor, _ = load_stage_adapter(repository, descriptor_path)
         if (
             descriptor.stage != expected_stage
-            or descriptor.agent_label != expected_label
-            or profile.work_limit_seconds != expected_limit
+            or descriptor.agent_label != EXPECTED_AGENT_LABELS[expected_stage]
         ):
             msg = f"{expected_stage} does not match its reviewed Jenkins Stage"
             raise InputError(msg)

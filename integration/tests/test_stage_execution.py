@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -361,57 +360,15 @@ response = {
     assert {path.name for path in attempt_root.iterdir()} == {"accepted-attempt.json"}
 
 
-@pytest.mark.parametrize(
-    "profile_path",
-    ["/absolute/output.json", "../traversing/output.json"],
-)
-def test_rejects_unconfined_output_grants_before_invocation(
-    tmp_path: Path, profile_path: str
-) -> None:
+def test_rejects_a_hand_edited_profile_before_invocation(tmp_path: Path) -> None:
     repository, _ = _commit_fixture_repository(tmp_path)
     profile = repository / "integration/stage-profiles/composition-v1.yaml"
     profile.write_text(
-        profile.read_text().replace("outputs/composition-blueprint.json", profile_path),
-        encoding="utf-8",
-    )
-    descriptor = repository / "deployment/jenkins/adapters/composition-v1.yaml"
-    descriptor.write_text(
-        descriptor.read_text().replace(
-            next(
-                line.split(": ", 1)[1]
-                for line in descriptor.read_text().splitlines()
-                if line.startswith("stage_profile_sha256:")
-            ),
-            hashlib.sha256(profile.read_bytes()).hexdigest(),
-        ),
+        profile.read_text().replace("max_bytes: 262144", "max_bytes: 262145"),
         encoding="utf-8",
     )
     _git(repository, "add", ".")
-    _git(repository, "commit", "-m", "Add invalid output grant")
-    commit_sha = _git(repository, "rev-parse", "HEAD")
-
-    completed = _execute(repository, commit_sha, tmp_path / "must-not-exist")
-
-    assert completed.returncode == 2
-    assert completed.stdout == ""
-    assert "path" in completed.stderr.lower()
-
-
-def test_rejects_a_descriptor_profile_digest_mismatch_before_invocation(
-    tmp_path: Path,
-) -> None:
-    repository, _ = _commit_fixture_repository(tmp_path)
-    descriptor = repository / "deployment/jenkins/adapters/composition-v1.yaml"
-    old_digest = next(
-        line.split(": ", 1)[1]
-        for line in descriptor.read_text().splitlines()
-        if line.startswith("stage_profile_sha256:")
-    )
-    descriptor.write_text(
-        descriptor.read_text().replace(old_digest, "a" * 64), encoding="utf-8"
-    )
-    _git(repository, "add", ".")
-    _git(repository, "commit", "-m", "Add mismatched descriptor digest")
+    _git(repository, "commit", "-m", "Widen an output grant by hand")
     commit_sha = _git(repository, "rev-parse", "HEAD")
     attempt_root = tmp_path / "must-not-exist"
 
@@ -419,5 +376,9 @@ def test_rejects_a_descriptor_profile_digest_mismatch_before_invocation(
 
     assert completed.returncode == 2
     assert completed.stdout == ""
-    assert "descriptor digest" in completed.stderr
+    assert completed.stderr == (
+        "sdi-integration: integration/stage-profiles/composition-v1.yaml does not "
+        "match the composition profile rendered from the registry; run "
+        "sdi-integration stage-profiles --write\n"
+    )
     assert not attempt_root.exists()
