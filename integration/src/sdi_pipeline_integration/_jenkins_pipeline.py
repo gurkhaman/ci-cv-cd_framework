@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from ._git_input import GitRepository
 from ._handoff_contracts import HANDOFF_CONTRACT_VERSION
+from ._integration_code import integration_code_digest, require_fresh_agent_images
 from ._jenkins_agent_boundary import enforce_integration_execution_boundary
 from ._local_dispatch import DESCRIPTORS, assemble_bundle, validate_bundle
 from ._run_input import identify_committed_run
@@ -126,19 +127,32 @@ def preflight_jenkins_run(  # noqa: PLR0913
     github_run_attempt: str,
     build_started_at_millis: str,
     resource_nodes: Mapping[str, str],
+    baked_code_digests: Mapping[str, str],
     supplied: SuppliedInputs,
 ) -> dict[str, Any]:
-    """Revalidate one submitted run, every Stage, and allocated resources."""
+    """Revalidate one submitted run, every Stage, and allocated resources.
+
+    Every agent image must bake the submitted commit's integration code; that
+    is checked before anything else the agents' code judges.
+    """
     enforce_integration_execution_boundary()
+    if dict(resource_nodes) != EXPECTED_RESOURCE_NODES:
+        msg = "Jenkins resource mapping does not match the reviewed topology"
+        raise InputError(msg)
+    require_fresh_agent_images(
+        integration_code_digest(repository_path / "integration"),
+        {
+            resource_nodes[resource]: digest
+            for resource, digest in baked_code_digests.items()
+        },
+        integration_node=resource_nodes["integration"],
+    )
     _validate_handoff_scalars(
         handoff_contract_version=handoff_contract_version,
         github_run_id=github_run_id,
         github_run_attempt=github_run_attempt,
     )
     parse_build_started_at(build_started_at_millis)
-    if dict(resource_nodes) != EXPECTED_RESOURCE_NODES:
-        msg = "Jenkins resource mapping does not match the reviewed topology"
-        raise InputError(msg)
     identified, repository, _committed = _identify_submitted_run(
         repository_path=repository_path,
         requested_ref=requested_ref,
@@ -234,9 +248,20 @@ def execute_jenkins_stage(  # noqa: PLR0913
     prior_attempt_roots: Sequence[Path],
     work_limit_seconds: int,
     run_deadline_epoch_millis: str,
+    baked_code_digest: str,
     supplied: SuppliedInputs,
 ) -> dict[str, Any]:
-    """Execute the next Stage from validated committed and stashed inputs."""
+    """Execute the next Stage from validated committed and stashed inputs.
+
+    The executing agent's image must bake the submitted commit's integration
+    code; that is checked first, so stale code judges nothing else.
+    """
+    stage = DESCRIPTOR_STAGES.get(descriptor_path)
+    node = EXPECTED_RESOURCE_NODES[stage] if stage is not None else "executing"
+    require_fresh_agent_images(
+        integration_code_digest(repository_path / "integration"),
+        {node: baked_code_digest},
+    )
     identified, repository, committed = _identify_submitted_run(
         repository_path=repository_path,
         requested_ref=requested_ref,
@@ -244,7 +269,6 @@ def execute_jenkins_stage(  # noqa: PLR0913
         run_request_path=run_request_path,
         execution_id=execution_id,
     )
-    stage = DESCRIPTOR_STAGES.get(descriptor_path)
     granted: dict[str, StageInputSource] = {}
     if stage is not None:
         reject_ungranted_supplied_inputs(supplied, stage=stage)

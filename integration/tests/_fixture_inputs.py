@@ -8,9 +8,11 @@ exact digest.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 from sdi_pipeline_integration import _fixture_regeneration
+from sdi_pipeline_integration._integration_code import BAKED_ROOTS
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 
@@ -78,3 +80,24 @@ def write_scripted_adapter(path: Path, body: str) -> None:
     """Write an executable adapter whose body sees `request` and `output`."""
     path.write_text(SCRIPTED_ADAPTER_PREAMBLE + body, encoding="utf-8")
     path.chmod(0o755)
+
+
+def copy_baked_integration_code(repository: Path) -> None:
+    """Copy the tracked integration code an agent image bakes into a repository."""
+    tracked = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(REPOSITORY_ROOT),
+            "ls-files",
+            "-z",
+            "--",
+            *(f"integration/{root}" for root in BAKED_ROOTS),
+        ],
+        check=True,
+        capture_output=True,
+    ).stdout.decode()
+    for relative_path in filter(None, tracked.split("\0")):
+        destination = repository / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((REPOSITORY_ROOT / relative_path).read_bytes())

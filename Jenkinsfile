@@ -90,7 +90,18 @@ def commonArguments = '''\
   --run-request-path "$RUN_REQUEST_PATH" \
   --execution-id "$EXECUTION_ID"'''
 
+// Each agent image records a digest of the integration code it bakes in. An
+// image built before that record existed reports `missing`. Exit status 4 means
+// an agent image bakes integration code other than the submitted commit's; the
+// build description lets the handoff report that as a typed failure.
+def bakedCodeDigestCommand = 'cat /etc/sdi/integration-code-digest 2>/dev/null || printf missing'
+def failStaleAgentImages = { stageName ->
+    currentBuild.description = 'sdi.agent.stale-image'
+    error("${stageName} found stale agent images; rebuild them from a clean checkout")
+}
+
 def resourceNodes = [:]
+def bakedCodeDigests = [:]
 def acceptedStages = []
 def continueChain = true
 def runDeadlineExpired = false
@@ -109,6 +120,10 @@ timeout(time: runLimitSeconds, unit: 'SECONDS') {
                 try {
                     deleteDir()
                     resourceNodes[definition.stage] = env.NODE_NAME
+                    bakedCodeDigests[definition.stage] = sh(
+                        returnStdout: true,
+                        script: bakedCodeDigestCommand,
+                    ).trim()
                 } finally {
                     deleteDir()
                 }
@@ -128,8 +143,12 @@ timeout(time: runLimitSeconds, unit: 'SECONDS') {
                     "SDI_IMAGE_BUILD_NODE=${resourceNodes.image_build}",
                     "SDI_CV_NODE=${resourceNodes.cv}",
                     "SDI_CD_NODE=${resourceNodes.cd}",
+                    "SDI_COMPOSITION_BAKED_CODE_DIGEST=${bakedCodeDigests.composition}",
+                    "SDI_IMAGE_BUILD_BAKED_CODE_DIGEST=${bakedCodeDigests.image_build}",
+                    "SDI_CV_BAKED_CODE_DIGEST=${bakedCodeDigests.cv}",
+                    "SDI_CD_BAKED_CODE_DIGEST=${bakedCodeDigests.cd}",
                 ]) {
-                    sh """set -eu
+                    def preflightStatus = sh(returnStatus: true, script: """set -eu
 sdi-integration preflight-jenkins-run \\
 ${commonArguments} \\
   --handoff-contract-version \"\$HANDOFF_CONTRACT_VERSION\" \\
@@ -140,8 +159,18 @@ ${commonArguments} \\
   --composition-node \"\$SDI_COMPOSITION_NODE\" \\
   --image-build-node \"\$SDI_IMAGE_BUILD_NODE\" \\
   --cv-node \"\$SDI_CV_NODE\" \\
-  --cd-node \"\$SDI_CD_NODE\" >/dev/null
-"""
+  --cd-node \"\$SDI_CD_NODE\" \\
+  --integration-baked-code-digest \"\$(${bakedCodeDigestCommand})\" \\
+  --composition-baked-code-digest \"\$SDI_COMPOSITION_BAKED_CODE_DIGEST\" \\
+  --image-build-baked-code-digest \"\$SDI_IMAGE_BUILD_BAKED_CODE_DIGEST\" \\
+  --cv-baked-code-digest \"\$SDI_CV_BAKED_CODE_DIGEST\" \\
+  --cd-baked-code-digest \"\$SDI_CD_BAKED_CODE_DIGEST\" >/dev/null
+""")
+                    if (preflightStatus == 4) {
+                        failStaleAgentImages('Run preflight')
+                    } else if (preflightStatus != 0) {
+                        error('Run preflight failed')
+                    }
                 }
             } finally {
                 deleteDir()
@@ -178,6 +207,7 @@ ${commonArguments} \\
   --descriptor-path '${definition.descriptor}' \\
   --attempt-root 'transfers/${definition.stage}' \\
   ${priorArguments} \\
+  --baked-code-digest \"\$(${bakedCodeDigestCommand})\" \\
   --run-deadline-epoch-millis \"\$SDI_RUN_DEADLINE_EPOCH_MILLIS\" >/dev/null
 """)
                     }
@@ -208,6 +238,8 @@ ${commonArguments} \\
                     if (stageExecutionStatus == 3) {
                         runDeadlineExpired = true
                         continueChain = false
+                    } else if (stageExecutionStatus == 4) {
+                        failStaleAgentImages(definition.name)
                     } else if (stageExecutionStatus != 0) {
                         error("${definition.name} Stage execution failed before acceptance")
                     } else {

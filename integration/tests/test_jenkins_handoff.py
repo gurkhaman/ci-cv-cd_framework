@@ -121,11 +121,13 @@ class FakeJenkins:
         *,
         mode: str = "success",
         jenkins_result: str = "SUCCESS",
+        description: str | None = None,
     ) -> None:
         """Initialize exact artifacts and expected run identity."""
         self.artifacts: dict[str, bytes] = artifacts
         self.mode: str = mode
         self.jenkins_result: str = jenkins_result
+        self.description: str | None = description
         self.base_url: str = ""
         self.requests: list[tuple[str, str, str | None]] = []
         self.submitted_parameters: dict[str, list[str]] = {}
@@ -242,6 +244,7 @@ class FakeJenkins:
                             "queueId": 42,
                             "building": building,
                             "result": result,
+                            "description": None if building else fake.description,
                             "url": (f"{fake.base_url}/job/pipeline-integration/7/"),
                             "actions": [
                                 {
@@ -714,6 +717,37 @@ def test_handoff_preserves_typed_terminal_jenkins_failure(
     assert terminal["code"] == code
     assert terminal["jenkins_result"] == jenkins_result
     assert (tmp_path / "returned/bundle").exists() is (jenkins_result == "FAILURE")
+
+
+def test_handoff_names_a_build_failed_by_stale_agent_images(tmp_path: Path) -> None:
+    repository, commit_sha = _repository(tmp_path)
+    execution_id, _artifacts = _valid_bundle(
+        repository, commit_sha, tmp_path / "jenkins-bundle"
+    )
+    fake = FakeJenkins(
+        {}, jenkins_result="FAILURE", description="sdi.agent.stale-image"
+    )
+
+    with _serve(fake):
+        completed = _handoff(
+            repository,
+            commit_sha,
+            execution_id,
+            tmp_path / "returned",
+            fake,
+        )
+
+    assert completed.returncode == 1
+    assert "handoff failed: stale_agent_image" in completed.stderr
+    receipt = cast(
+        "dict[str, object]",
+        json.loads((tmp_path / "returned/handoff-receipt.json").read_text()),
+    )
+    terminal = cast("dict[str, object]", receipt["terminal"])
+    assert terminal["code"] == "stale_agent_image"
+    assert terminal["phase"] == "running"
+    assert terminal["jenkins_result"] == "FAILURE"
+    assert not (tmp_path / "returned/bundle").exists()
 
 
 @pytest.mark.parametrize(

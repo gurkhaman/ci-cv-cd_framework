@@ -24,6 +24,7 @@ from ._discovery import discover
 from ._generation import generate_proposals
 from ._github_actions import render_github_summary
 from ._github_dispatch import GitHubDispatchError, dispatch_s04
+from ._integration_code import StaleAgentImageError, integration_code_digest
 from ._jenkins_handoff import HandoffError, handoff_jenkins
 from ._jenkins_pipeline import (
     RunDeadlineExpiredError,
@@ -101,6 +102,11 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     profile_action.add_argument("--check", action="store_true")
     profile_action.add_argument("--write", action="store_true")
     profiles.add_argument("--directory", type=Path, default=Path("stage-profiles"))
+    code_digest = commands.add_parser(
+        "integration-code-digest",
+        help="print the digest of the integration code an agent image bakes",
+    )
+    code_digest.add_argument("--root", type=Path, required=True)
     installation = commands.add_parser(
         "validate-installation",
         help="validate every tracked source against the installation authority",
@@ -167,6 +173,8 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     preflight.add_argument("--image-build-node", required=True)
     preflight.add_argument("--cv-node", required=True)
     preflight.add_argument("--cd-node", required=True)
+    for resource in ("integration", "composition", "image-build", "cv", "cd"):
+        preflight.add_argument(f"--{resource}-baked-code-digest", required=True)
     _add_composition_selection_arguments(preflight)
     handoff = commands.add_parser(
         "handoff-jenkins",
@@ -189,6 +197,7 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     )
     jenkins_execute.add_argument("--work-limit-seconds", type=int, required=True)
     jenkins_execute.add_argument("--run-deadline-epoch-millis", required=True)
+    jenkins_execute.add_argument("--baked-code-digest", required=True)
     _add_supplied_input_arguments(jenkins_execute, require_service_repository=False)
     attempt_status = commands.add_parser(
         "attempt-allows-continuation",
@@ -444,6 +453,14 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
             sys.stderr.write(f"sdi-integration: {error}\n")
             return 2
         return 0
+    if arguments.command == "integration-code-digest":
+        try:
+            digest = integration_code_digest(arguments.root)
+        except (InputError, OSError) as error:
+            sys.stderr.write(f"sdi-integration: {error}\n")
+            return 2
+        sys.stdout.write(f"{digest}\n")
+        return 0
     if arguments.command == "validate-installation":
         try:
             authority = load_installation_authority(arguments.installation)
@@ -549,11 +566,21 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
                     "cv": arguments.cv_node,
                     "cd": arguments.cd_node,
                 },
+                baked_code_digests={
+                    "integration": arguments.integration_baked_code_digest,
+                    "composition": arguments.composition_baked_code_digest,
+                    "image_build": arguments.image_build_baked_code_digest,
+                    "cv": arguments.cv_baked_code_digest,
+                    "cd": arguments.cd_baked_code_digest,
+                },
                 supplied=SuppliedInputs(
                     composition_config=arguments.composition_config,
                     generator=arguments.generator,
                 ),
             )
+        except StaleAgentImageError as error:
+            sys.stderr.write(f"sdi-integration: {error}\n")
+            return 4
         except (InputError, OSError, ValidationError) as error:
             sys.stderr.write(f"sdi-integration: {error}\n")
             return 2
@@ -610,6 +637,7 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
                     prior_attempt_roots=arguments.prior_attempt_root,
                     work_limit_seconds=arguments.work_limit_seconds,
                     run_deadline_epoch_millis=arguments.run_deadline_epoch_millis,
+                    baked_code_digest=arguments.baked_code_digest,
                     supplied=_supplied_inputs(arguments),
                 )
         except ExternalCancellation as cancellation:
@@ -621,6 +649,9 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
             return 128 + cancellation.signal_number
         except RunDeadlineExpiredError:
             return 3
+        except StaleAgentImageError as error:
+            sys.stderr.write(f"sdi-integration: {error}\n")
+            return 4
         except (InputError, OSError, ValidationError) as error:
             sys.stderr.write(f"sdi-integration: {error}\n")
             return 2

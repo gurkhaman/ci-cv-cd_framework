@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 from ruamel.yaml import YAML
 
+from sdi_pipeline_integration._integration_code import BAKED_ROOTS
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
@@ -163,6 +165,28 @@ def test_domain_agents_use_their_descriptor_selected_runtime_image() -> None:
     assert "uv sync --frozen --no-dev --no-editable" in dockerfile
     assert "/etc/sdi/jenkins-agent-role" in dockerfile
     assert "/etc/sdi/jenkins-agent-label" in dockerfile
+
+
+def test_agent_images_digest_exactly_the_integration_code_they_bake() -> None:
+    dockerfile = (JENKINS_ROOT / "agents" / "Dockerfile").read_text()
+    copied = {
+        source.removeprefix("integration/")
+        for line in dockerfile.splitlines()
+        if line.startswith("COPY integration/")
+        for source in line.split()[1:-1]
+    }
+    dockerignore = (
+        (JENKINS_ROOT / "agents" / "Dockerfile.dockerignore").read_text().splitlines()
+    )
+
+    assert copied - {"README.md"} == set(BAKED_ROOTS)
+    for root in BAKED_ROOTS:
+        assert f"!integration/{root}" in dockerignore or (
+            f"!integration/{root}/**" in dockerignore
+        )
+    assert dockerignore[-2:] == ["integration/**/__pycache__", "integration/**/*.pyc"]
+    assert "integration-code-digest --root ." in dockerfile
+    assert "/etc/sdi/integration-code-digest" in dockerfile
 
 
 def test_jcasc_owns_exact_agent_identities_labels_and_executors() -> None:

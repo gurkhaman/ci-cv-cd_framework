@@ -770,10 +770,14 @@ case "$action" in
         ;;
     exercise-live)
         validate
+        integration_code_digest=$(uv run --project "$repository_root/integration" \
+            --frozen --quiet sdi-integration integration-code-digest \
+            --root "$repository_root/integration")
         "$root/bin/smoke-check" exercise-agents \
             --url "http://127.0.0.1:$JENKINS_HTTP_PORT" \
             --admin-id "$JENKINS_ADMIN_ID" \
-            --admin-password-file "$JENKINS_ADMIN_PASSWORD_FILE"
+            --admin-password-file "$JENKINS_ADMIN_PASSWORD_FILE" \
+            --integration-code-digest "$integration_code_digest"
         ;;
     *)
         usage >&2
