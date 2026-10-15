@@ -383,6 +383,7 @@ def _compose(run: _Run, input_root: Path) -> Outcome:
         "testcase_id": run_request.testcase_id,
         "combination_id": run_request.combination.combination_id,
         "profile_id": profile.profile_id,
+        "profile_basis": profile.provenance.basis,
         "source_inputs": [
             {"slot": item.slot, "sha256": item.sha256} for item in request.inputs
         ],

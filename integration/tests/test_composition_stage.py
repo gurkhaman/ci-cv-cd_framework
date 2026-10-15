@@ -366,6 +366,14 @@ def test_publishes_the_preferred_stubbed_proposal(tmp_path: Path) -> None:
         )
         for item in COMPLETE["services"]
     }
+    deployment = json.loads(
+        (tmp_path / "bundle/stages/composition/deployment-schema.json").read_text()
+    )
+    assert {
+        blueprint["profile_basis"],
+        deployment["profile_basis"],
+        evidence["profile_basis"],
+    } == {"placeholder"}
     _validate_bundle(tmp_path)
     assert STUB_KEY not in _bundle_text(tmp_path) + completed.stdout
 

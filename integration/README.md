@@ -104,7 +104,10 @@ composition blueprint and deployment schema. The preferred proposal supports the
 most requirements, then has the fewest gaps; no performance evidence is
 available, so equal proposals keep the model's order. The blueprint records the
 `proposal_id` and each requirement's checked coverage status; each placement is
-`resolved` or `unresolved`.
+`resolved` or `unresolved`. A placement stays unresolved when its host omits the
+device list or baseline the service's artifact needs. Both files and the
+evidence carry the target profile's provenance basis as `profile_basis`, so a
+placeholder profile stays labelled.
 
 Discovery queries the service repository once per requirement, with its ID and
 original Shall statement, and once with the profile's architectures, devices,
