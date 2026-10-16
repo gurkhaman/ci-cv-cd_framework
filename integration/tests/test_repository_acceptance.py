@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import os
 import shutil
+import signal
 import subprocess
+import threading
+import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Generator
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 VERIFY = REPOSITORY_ROOT / "integration" / "scripts" / "verify"
@@ -65,6 +73,75 @@ def _environment(tmp_path: Path) -> dict[str, str]:
     }
 
 
+def _survivors(tmp_path: Path) -> list[str]:
+    marker = f"ACCEPTANCE_LOG={tmp_path / 'acceptance.log'}".encode()
+    survivors: list[str] = []
+    for process in Path("/proc").iterdir():
+        try:
+            if marker in (process / "environ").read_bytes().split(b"\0"):
+                survivors.append(process.name)
+        except OSError:
+            continue
+    return survivors
+
+
+def _eventually(condition: Callable[[], bool]) -> bool:
+    deadline = time.monotonic() + 5
+    while not condition() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return condition()
+
+
+@pytest.fixture(autouse=True)
+def no_process_outlives_its_test(tmp_path: Path) -> Generator[None]:
+    yield
+    assert _eventually(lambda: not _survivors(tmp_path)), "processes outlived the test"
+
+
+def _kill_group(process: subprocess.Popen[str]) -> None:
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGKILL)
+
+
+@contextlib.contextmanager
+def _process_group(
+    arguments: list[str | Path],
+    checkout: Path,
+    environment: dict[str, str],
+    *,
+    timeout: float,
+) -> Generator[subprocess.Popen[str]]:
+    process = subprocess.Popen(
+        arguments,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=checkout,
+        env=environment,
+        text=True,
+        start_new_session=True,
+    )
+    watchdog = threading.Timer(timeout, _kill_group, [process])
+    watchdog.start()
+    try:
+        yield process
+    finally:
+        watchdog.cancel()
+        _kill_group(process)
+        process.communicate()
+
+
+def _run(
+    arguments: list[str | Path],
+    checkout: Path,
+    environment: dict[str, str],
+    *,
+    timeout: float = 30,
+) -> subprocess.CompletedProcess[str]:
+    with _process_group(arguments, checkout, environment, timeout=timeout) as process:
+        stdout, stderr = process.communicate()
+    return subprocess.CompletedProcess(arguments, process.returncode, stdout, stderr)
+
+
 def _git(checkout: Path, *arguments: str) -> None:
     subprocess.run(
         ["git", "-c", "user.name=t", "-c", "user.email=t@t", *arguments],
@@ -79,14 +156,7 @@ def test_verification_is_the_complete_fail_fast_acceptance_gate(tmp_path: Path) 
     log = tmp_path / "acceptance.log"
     environment = _environment(tmp_path)
 
-    completed = subprocess.run(
-        [verify],
-        check=False,
-        capture_output=True,
-        cwd=checkout,
-        env=environment,
-        text=True,
-    )
+    completed = _run([verify], checkout, environment)
 
     assert completed.returncode == 0, completed.stderr
     passed_commands = log.read_text(encoding="utf-8").splitlines()
@@ -129,13 +199,10 @@ def test_verification_is_the_complete_fail_fast_acceptance_gate(tmp_path: Path) 
         "infrastructure remain out of scope.\n"
     ) in completed.stdout
 
-    failed = subprocess.run(
+    failed = _run(
         [verify],
-        check=False,
-        capture_output=True,
-        cwd=checkout,
-        env=environment | {"FAIL_ACCEPTANCE_COMMAND": "run --frozen basedpyright"},
-        text=True,
+        checkout,
+        environment | {"FAIL_ACCEPTANCE_COMMAND": "run --frozen basedpyright"},
     )
 
     assert failed.returncode != 0
@@ -156,15 +223,7 @@ def _verify(
     environment: dict[str, str],
     *arguments: str,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [verify, *arguments],
-        check=False,
-        capture_output=True,
-        cwd=checkout,
-        env=environment,
-        text=True,
-        timeout=30,
-    )
+    return _run([verify, *arguments], checkout, environment)
 
 
 def _branch_checkout(tmp_path: Path) -> tuple[Path, Path]:
@@ -277,13 +336,16 @@ def test_stack_smoke_is_skipped_when_a_branch_changes_only_tests(
     )
 
 
-@pytest.mark.parametrize("untracked_name", ["new.py", "café.py"])
-def test_stack_smoke_runs_when_a_smoke_input_is_untracked(
-    tmp_path: Path, *, untracked_name: str
+@pytest.mark.parametrize("staged", [False, True], ids=["untracked", "staged"])
+@pytest.mark.parametrize("name", ["new.py", "café.py"])
+def test_stack_smoke_runs_when_an_uncommitted_smoke_input_changed(
+    tmp_path: Path, *, name: str, staged: bool
 ) -> None:
     checkout, verify = _branch_checkout(tmp_path)
     _commit(checkout, "integration/tests/test_changed.py")
-    _write(checkout, f"integration/src/{untracked_name}")
+    _write(checkout, f"integration/src/{name}")
+    if staged:
+        _git(checkout, "add", f"integration/src/{name}")
 
     completed = _verify(verify, checkout, _environment(tmp_path))
 
@@ -330,15 +392,7 @@ def test_a_caller_holding_the_host_lock_does_not_deadlock_verification(
     host_lock = _host_lock_spelling(tmp_path, spelling)
     environment = _environment(tmp_path) | {"SDI_HOST_LOCK": host_lock}
 
-    completed = subprocess.run(
-        ["flock", host_lock, verify],
-        check=False,
-        capture_output=True,
-        cwd=checkout,
-        env=environment,
-        text=True,
-        timeout=10,
-    )
+    completed = _run(["flock", host_lock, verify], checkout, environment, timeout=10)
 
     assert completed.returncode == 0, completed.stderr
     assert "waiting for" not in completed.stdout
@@ -356,27 +410,46 @@ def test_verification_waits_while_another_process_holds_the_host_lock(
 
     with (tmp_path / "host.lock").open("a") as held:
         fcntl.flock(held, fcntl.LOCK_EX)
-        verifying = subprocess.Popen(
-            [verify],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=checkout,
-            env=environment,
-            text=True,
-        )
-        assert verifying.stdout is not None
-        waiting = next(
-            (line for line in verifying.stdout if line.startswith("verify: waiting")),
-            None,
-        )
-        assert waiting == f"verify: waiting for {tmp_path / 'host.lock'}\n"
-        assert "uv run --frozen pytest -m slow" not in _commands(tmp_path)
-
-    _, stderr = verifying.communicate(timeout=10)
+        with _process_group([verify], checkout, environment, timeout=10) as verifying:
+            assert verifying.stdout is not None
+            waiting = next(
+                (
+                    line
+                    for line in verifying.stdout
+                    if line.startswith("verify: waiting")
+                ),
+                None,
+            )
+            assert waiting == f"verify: waiting for {tmp_path / 'host.lock'}\n"
+            assert "uv run --frozen pytest -m slow" not in _commands(tmp_path)
+            fcntl.flock(held, fcntl.LOCK_UN)
+            _, stderr = verifying.communicate()
     assert verifying.returncode == 0, stderr
     commands = _commands(tmp_path)
     assert "uv run --frozen pytest -m slow" in commands
     assert "stack smoke" in commands
+
+
+def test_stopping_a_waiting_verification_leaves_no_process_behind(
+    tmp_path: Path,
+) -> None:
+    checkout, verify = _acceptance_checkout(tmp_path)
+
+    with (tmp_path / "host.lock").open("a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        with _process_group(
+            [verify], checkout, _environment(tmp_path), timeout=10
+        ) as verifying:
+            assert verifying.stdout is not None
+            assert any(line.startswith("verify: waiting") for line in verifying.stdout)
+            assert _eventually(lambda: len(_survivors(tmp_path)) >= 2), (
+                "verify started no lock waiter"
+            )
+
+        assert verifying.returncode == -signal.SIGKILL
+        assert _eventually(lambda: not _survivors(tmp_path)), (
+            "the lock waiter outlived verify"
+        )
 
 
 def test_full_verification_fails_clearly_without_flock(tmp_path: Path) -> None:
