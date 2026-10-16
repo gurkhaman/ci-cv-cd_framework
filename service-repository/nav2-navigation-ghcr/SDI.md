@@ -43,7 +43,9 @@ but delivered as the upstream Nav2 Jazzy container image instead of Debian packa
 ## Limitations and known failure modes
 
 - The image is built for amd64 only; it does not run on arm64 hosts.
-- It is Nav2's CI builder image (with the source workspace), not a slim runtime image.
+- It is Nav2's CI builder image, not a runtime image: Nav2 itself is uncompiled
+  source in `/opt/overlay_ws`, with only its dependencies installed, so the image
+  cannot launch Nav2 as published. The artifact therefore has no recipe.
 - It carries no TurtleBot3 parameters: with Nav2's defaults it publishes `Twist`
   rather than `TwistStamped` on `/cmd_vel` and assumes a different robot footprint.
 - Endpoints are not listed.
