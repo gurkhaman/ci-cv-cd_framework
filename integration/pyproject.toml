@@ -27,7 +27,6 @@ sdi-image-build-adapter = "sdi_pipeline_integration._image_build_adapter:main"
 
 [dependency-groups]
 dev = [
-    "actionlint-py==1.7.12.25",
     "basedpyright==1.40.0",
     "check-jsonschema==0.38.0",
     "markdown-it-py==4.0.0",
@@ -35,6 +34,8 @@ dev = [
     "pytest-xdist==3.8.0",
     "ruff==0.16.6",
 ]
+# Built from an sdist that downloads its binary from GitHub, so only verify installs it.
+workflow-lint = ["actionlint-py==1.7.12.25"]
 
 [tool.pytest.ini_options]
 addopts = ["--strict-config", "--strict-markers"]

@@ -12,6 +12,9 @@ CONFIG = SOURCE_ROOT / ".github/actionlint.yaml"
 
 
 def actionlint_failures(workflows: list[Path]) -> list[str]:
+    assert ACTIONLINT.is_file(), (
+        "actionlint is in the workflow-lint dependency group; run uv sync --all-groups"
+    )
     completed = subprocess.run(
         [
             ACTIONLINT,
