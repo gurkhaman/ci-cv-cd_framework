@@ -77,7 +77,7 @@ def _compose() -> dict[str, Any]:
 
 
 @pytest.mark.parametrize("name", RUNNERS)
-def test_runner_service_is_hardened_and_reaches_only_the_controller_internally(
+def test_runner_service_is_hardened_and_reaches_only_the_controller_and_its_proxy(
     name: str,
 ) -> None:
     compose = _compose()
@@ -95,7 +95,15 @@ def test_runner_service_is_hardened_and_reaches_only_the_controller_internally(
     assert runner["read_only"] is True
     assert runner["cap_drop"] == ["ALL"]
     assert runner["security_opt"] == ["no-new-privileges:true"]
-    assert "environment" not in runner
+    proxy_url = f"http://{name}-proxy:3128"
+    assert runner["environment"] == {
+        "https_proxy": proxy_url,
+        "HTTPS_PROXY": proxy_url,
+        "http_proxy": proxy_url,
+        "HTTP_PROXY": proxy_url,
+        "no_proxy": "controller,localhost,127.0.0.1",
+        "NO_PROXY": "controller,localhost,127.0.0.1",
+    }
     assert "env_file" not in runner
     assert "secrets" not in runner
     assert "ports" not in runner
@@ -106,12 +114,15 @@ def test_runner_service_is_hardened_and_reaches_only_the_controller_internally(
         "/tmp",  # noqa: S108 - container mount point, not a host temp file.
     }
     assert all("size=" in entry for entry in runner["tmpfs"])
-    assert runner["depends_on"]["controller"]["condition"] == "service_healthy"
+    assert runner["depends_on"] == {
+        "controller": {"condition": "service_healthy"},
+        f"{name}-proxy": {"condition": "service_healthy"},
+    }
     assert runner["healthcheck"]["test"] == ["CMD", "sdi-runner-probe", "listener"]
 
     controller_network = f"{name}-controller"
     egress_network = f"{name}-egress"
-    assert runner["networks"] == [controller_network, egress_network]
+    assert runner["networks"] == [controller_network]
     assert compose["networks"][controller_network] == {"internal": True}
     assert compose["networks"][egress_network] is None
     attached = {
@@ -123,10 +134,73 @@ def test_runner_service_is_hardened_and_reaches_only_the_controller_internally(
         for network in (controller_network, egress_network)
     }
     assert attached == {
-        controller_network: {"controller", name},
-        egress_network: {name},
+        controller_network: {"controller", name, f"{name}-proxy"},
+        egress_network: {f"{name}-proxy"},
     }
     assert f"{name}-state" in compose["volumes"]
+
+
+@pytest.mark.parametrize("name", RUNNERS)
+def test_runner_proxy_is_a_hardened_stateless_sidecar_of_its_runner(
+    name: str,
+) -> None:
+    compose = _compose()
+    proxy = compose["services"][f"{name}-proxy"]
+
+    assert proxy["profiles"] == [name]
+    assert proxy["image"] == "sdi-jenkins-runner-proxy:6"
+    assert proxy["build"] == {"context": "runner-proxy", "dockerfile": "Dockerfile"}
+    assert proxy["platform"] == "linux/amd64"
+    assert proxy["restart"] == "no"
+    assert proxy["init"] is True
+    assert proxy["read_only"] is True
+    assert proxy["cap_drop"] == ["ALL"]
+    assert proxy["security_opt"] == ["no-new-privileges:true"]
+    assert proxy["networks"] == [f"{name}-controller", f"{name}-egress"]
+    for absent in ("volumes", "ports", "secrets", "environment", "env_file"):
+        assert absent not in proxy
+    assert "depends_on" not in proxy
+    assert [entry.split(":", maxsplit=1)[0] for entry in proxy["tmpfs"]] == [
+        "/run/squid"
+    ]
+    assert proxy["healthcheck"]["test"][0] == "CMD"
+
+    dockerfile = (JENKINS_ROOT / "runner-proxy" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
+    assert "FROM ${RUNTIME_IMAGE}\nLABEL org.sdi.project=ci-cv-cd_framework\n" in (
+        dockerfile
+    )
+    assert dockerfile.rstrip().splitlines()[-2:] == [
+        "USER proxy",
+        'ENTRYPOINT ["squid", "-N", "-f", "/etc/squid/squid.conf"]',
+    ]
+
+
+def test_runner_proxy_admits_only_https_tunnels_to_github_actions_hosts() -> None:
+    lines = [
+        line.split()
+        for line in (JENKINS_ROOT / "runner-proxy" / "squid.conf")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    allowlist = next(line for line in lines if line[:2] == ["acl", "allowlisted"])
+    access = [" ".join(line[1:]) for line in lines if line[0] == "http_access"]
+
+    assert allowlist[2:4] == ["dstdomain", "-n"]
+    assert set(allowlist[4:]) == {
+        "github.com",
+        "api.github.com",
+        "codeload.github.com",
+        ".actions.githubusercontent.com",
+        ".blob.core.windows.net",
+    }
+    assert access.index("allow CONNECT allowlisted") > access.index(
+        "deny CONNECT ip_literal"
+    )
+    assert access[-1] == "deny all"
+    assert not any(line[0] == "cache_dir" for line in lines)
 
 
 def test_runner_registers_once_without_updates_or_default_labels() -> None:

@@ -331,6 +331,7 @@ PINNED_SOURCES = (
     "deployment/jenkins/controller/plugins.txt",
     "deployment/jenkins/runner/Dockerfile",
     "deployment/jenkins/runner/sdi-runner-entrypoint",
+    "deployment/jenkins/runner-proxy/Dockerfile",
     "integration/.python-version",
 )
 
@@ -643,6 +644,42 @@ def test_restore_verifies_before_writing_an_empty_volume(tmp_path: Path) -> None
             "--labels sdi-jenkins-handoff",
             "--labels self-hosted",
             "runner label pin does not match",
+        ),
+        (
+            "deployment/jenkins/runner-proxy/Dockerfile",
+            "ARG RUNTIME_IMAGE=docker.io/library/python@sha256:2",
+            "ARG RUNTIME_IMAGE=docker.io/library/python@sha256:3",
+            "runner proxy runtime pin does not match",
+        ),
+        (
+            "deployment/jenkins/runner-proxy/Dockerfile",
+            "FROM ${RUNTIME_IMAGE}",
+            "FROM docker.io/library/debian:trixie",
+            "runner proxy build does not consume the reviewed runtime pin",
+        ),
+        (
+            "deployment/jenkins/compose.yaml",
+            "image: sdi-jenkins-runner-proxy:6",
+            "image: sdi-jenkins-runner-proxy:7",
+            "runner proxy image tag does not match its Squid major version",
+        ),
+        (
+            "deployment/jenkins/runner-proxy/Dockerfile",
+            "ARG SQUID_MAJOR=6",
+            "ARG SQUID_MAJOR=7",
+            "runner proxy image tag does not match its Squid major version",
+        ),
+        (
+            "deployment/jenkins/runner-proxy/Dockerfile",
+            "ARG SQUID_MAJOR=6",
+            "ARG SQUID=6",
+            "runner proxy Dockerfile must declare ARG SQUID_MAJOR exactly once",
+        ),
+        (
+            "deployment/jenkins/runner-proxy/Dockerfile",
+            "ARG SQUID_MAJOR=6",
+            "ARG SQUID_MAJOR=6\nARG SQUID_MAJOR=6",
+            "runner proxy Dockerfile must declare ARG SQUID_MAJOR exactly once",
         ),
     ],
 )

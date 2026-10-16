@@ -19,7 +19,12 @@ if TYPE_CHECKING:
 REPOSITORY_ROOT = Path(__file__).parents[2]
 JENKINS_ROOT = REPOSITORY_ROOT / "deployment" / "jenkins"
 AGENT_NAMES = {"integration", "ci", "image-build", "cv", "cd"}
-RUNNER_SERVICES = {"runner-upstream", "runner-fork"}
+RUNNER_STACK_SERVICES = {
+    "runner-upstream",
+    "runner-fork",
+    "runner-upstream-proxy",
+    "runner-fork-proxy",
+}
 AGENT_LABELS = {
     "integration": "integration",
     "ci": "composition",
@@ -86,7 +91,7 @@ def test_compose_defines_five_isolated_websocket_agents() -> None:
     compose = _load_yaml(JENKINS_ROOT / "compose.yaml")
     services = compose["services"]
 
-    assert set(services) == {"controller", *AGENT_NAMES, *RUNNER_SERVICES}
+    assert set(services) == {"controller", *AGENT_NAMES, *RUNNER_STACK_SERVICES}
     assert "50000" not in (JENKINS_ROOT / "compose.yaml").read_text()
 
     controller_networks = set(services["controller"]["networks"])
