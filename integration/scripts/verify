@@ -7,7 +7,6 @@ usage() {
 }
 
 hold_host_lock_reusing_an_inherited_descriptor() {
-    host_lock=${SDI_HOST_LOCK:-/tmp/sdi-host.lock}
     host_lock_fd=
     for fd in /proc/$$/fd/*; do
         if [ "$(readlink "$fd" 2>/dev/null)" = "$host_lock" ]; then
@@ -31,6 +30,14 @@ case $# in
     1) [ "$1" = --fast ] || usage; fast=1 ;;
     *) usage ;;
 esac
+
+if [ -z "$fast" ]; then
+    if ! command -v flock >/dev/null; then
+        printf '%s\n' 'verify: flock(1) is required for the host lock' >&2
+        exit 2
+    fi
+    host_lock=$(realpath -m -- "${SDI_HOST_LOCK:-/tmp/sdi-host.lock}")
+fi
 
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$project_dir"
@@ -79,13 +86,23 @@ while IFS= read -r line; do
 done < ../deployment/jenkins/controller/plugins.txt
 
 smoke_inputs='^(deployment/jenkins/|integration/src/|integration/fixtures/)|^(deployment/installation\.env|Jenkinsfile|integration/pyproject\.toml|integration/uv\.lock|integration/README\.md|integration/\.python-version)$'
-if merge_base=$(git -C .. merge-base origin/main HEAD 2>/dev/null) &&
-    changed=$(git -C .. diff --name-only "$merge_base" &&
-        git -C .. ls-files --others --exclude-standard --full-name) &&
-    ! printf '%s\n' "$changed" | grep -Eq "$smoke_inputs"; then
-    printf '%s\n' 'stack smoke skipped: no smoke inputs changed since the merge base with origin/main'
+if ! merge_base=$(git -C .. merge-base origin/main HEAD 2>/dev/null); then
+    smoke_reason='no merge base with origin/main'
+elif [ "$merge_base" = "$(git -C .. rev-parse HEAD)" ]; then
+    smoke_reason='HEAD is the merge base with origin/main'
+elif {
+    git -C .. diff --no-renames --name-only -z "$merge_base"
+    git -C .. ls-files -z --others --exclude-standard --full-name
+} | grep -Ezq "$smoke_inputs"; then
+    smoke_reason='a smoke input changed since the merge base with origin/main'
 else
+    smoke_reason=
+fi
+if [ -n "$smoke_reason" ]; then
+    printf 'stack smoke runs: %s\n' "$smoke_reason"
     ../deployment/jenkins/bin/stack smoke
+else
+    printf '%s\n' 'stack smoke skipped: no smoke inputs changed since the merge base with origin/main'
 fi
 
 printf '%s\n' \
