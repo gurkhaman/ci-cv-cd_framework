@@ -512,8 +512,14 @@ def test_root_pipeline_is_a_thin_scheduler_over_public_cli_operations() -> None:
     composition_definition = pipeline[
         pipeline.index("name: 'Composition'") : pipeline.index("name: 'Image build'")
     ]
-    assert pipeline.count("--service-repository") == 1
+    image_build_definition = pipeline[
+        pipeline.index("name: 'Image build'") : pipeline.index(
+            "name: 'Continuous Validation'"
+        )
+    ]
+    assert pipeline.count("--service-repository") == 2
     assert "--service-repository service-repository" in composition_definition
+    assert "--service-repository service-repository" in image_build_definition
     assert "${definition.suppliedArguments}" in pipeline
     assert "--composition-config" not in pipeline
     assert "--generator" not in pipeline

@@ -195,10 +195,11 @@ the available receipt retrievable when GitHub still permits post-cancellation
 steps to complete.
 
 The composition Stage is implemented and calls the default generator of the
-committed composition config over the checked-out service repository, which no
-other Stage is given. Image build, CV, and CD use deterministic
-Fixtures, which never consume real composition output, so a successful
-composition leaves them skipped. Fixture files prove only the pipeline interface
-and evidence handling. They are not proof of a real Domain capability, CV
-verdict, deployment outcome, supported-combination KPI, or any aggregate Domain
-result. The summary therefore always states `KPI evaluation: not evaluated`.
+committed composition config over the checked-out service repository, which
+image build is also given for its recipes. Image build, CV, and CD use
+deterministic Fixtures, which never consume real composition output, so a
+successful composition leaves them skipped. Fixture files prove only the
+pipeline interface and evidence handling. They are not proof of a real Domain
+capability, CV verdict, deployment outcome, supported-combination KPI, or any
+aggregate Domain result. The summary therefore always states `KPI evaluation:
+not evaluated`.

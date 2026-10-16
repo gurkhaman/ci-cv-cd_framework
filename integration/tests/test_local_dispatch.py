@@ -37,7 +37,6 @@ S04_COMBINATION_EXPECTATIONS: dict[str, dict[str, str]] = {
     "C-05": {
         "run_request_path": "runs/s-04/s-04-tc-03-c-05-fixture.yaml",
         "profile_id": "waffle-jetson-arm64",
-        "architecture": "arm64",
         "host": "orin",
     },
 }
@@ -276,9 +275,7 @@ def test_dispatches_a_contract_valid_deterministic_four_stage_fixture(
     image_build = json.loads(
         (first_root / image_artifact["path"]).read_text(encoding="utf-8")
     )
-    assert {image["architecture"] for image in image_build["images"]} == {
-        expected["architecture"]
-    }
+    assert {image["status"] for image in image_build["images"]} == {"not_evaluated"}
     for artifact in first_result["artifacts"]:
         first_bytes = (first_root / artifact["path"]).read_bytes()
         second_bytes = (second_root / artifact["path"]).read_bytes()

@@ -29,10 +29,12 @@ from ._contracts import (
     TargetExecutionProfile,
 )
 from ._domain_contracts import (
+    BuiltImageRecord,
     CompositionBlueprint,
     CompositionEvidence,
     DeploymentResult,
     DeploymentSchema,
+    FailedImageRecord,
     ImageBuildResult,
     ValidationEvidence,
 )
@@ -502,6 +504,35 @@ def _capture_candidate(  # noqa: C901, PLR0912, PLR0913, PLR0915, PLR0917
     return response, captured
 
 
+def _check_image_records(
+    image_build: ImageBuildResult,
+    deployment: DeploymentSchema,
+    architectures: Mapping[str, str],
+) -> None:
+    """Check each image record against its placement and host architecture."""
+    placements = {item.service_id: item for item in deployment.placements}
+    for item in image_build.images:
+        unresolved = placements[item.service_id].status == "unresolved"
+        if isinstance(item, BuiltImageRecord) and unresolved:
+            msg = "image-build result records a built image for an unresolved placement"
+            raise InputError(msg)
+        if isinstance(item, FailedImageRecord) and unresolved != (
+            item.reason == "unresolved-placement"
+        ):
+            msg = (
+                "image-build result must fail exactly the unresolved placements as such"
+            )
+            raise InputError(msg)
+        if (
+            isinstance(item, BuiltImageRecord)
+            and item.service_id in architectures
+            and architectures[item.service_id]
+            not in {platform.architecture for platform in item.platforms}
+        ):
+            msg = "image-build result does not match the accepted target architecture"
+            raise InputError(msg)
+
+
 def validate_stage_documents(  # noqa: C901, PLR0912, PLR0913, PLR0915
     stage: StageName,
     outputs: Mapping[str, BaseModel],
@@ -604,13 +635,11 @@ def validate_stage_documents(  # noqa: C901, PLR0912, PLR0913, PLR0915
     }:
         msg = "image-build result does not cover the accepted services"
         raise InputError(msg)
-    if any(
-        item.service_id in hosts
-        and item.architecture != hosts[item.service_id].architecture
-        for item in image_build.images
-    ):
-        msg = "image-build result does not match the accepted target architecture"
-        raise InputError(msg)
+    _check_image_records(
+        image_build,
+        deployment,
+        {service_id: host.architecture for service_id, host in hosts.items()},
+    )
     if stage == "image_build":
         if set(outputs) != {"image_build_result"}:
             msg = "image-build candidate must contain its result"

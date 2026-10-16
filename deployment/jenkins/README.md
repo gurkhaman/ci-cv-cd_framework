@@ -200,9 +200,11 @@ the key while no build runs: rewrite the file, keep it mode `0600`, then run
 HTTPS egress to `api.openai.com`, which serves both luna and the embeddings.
 Without a valid key or that egress, composition fails with
 `sdi.composition.dense-discovery-unavailable` and the build is red.
-The pipeline passes the checked-out `service-repository/` only to the
-composition Stage command. The image build, CV, and CD Stage commands reject it,
-and preflight and finalization take no service repository.
+The pipeline passes the checked-out `service-repository/` to the composition
+and image-build Stage commands; each agent captures it from its own checkout of
+the same commit, and the image-build command refuses to run unless its capture
+matches the one composition accepted. The CV and CD Stage commands reject it, and
+preflight and finalization take no service repository.
 
 Each image contains an immutable role and label identity under `/etc/sdi` on its
 read-only root filesystem. The supported Stage execution commands refuse every

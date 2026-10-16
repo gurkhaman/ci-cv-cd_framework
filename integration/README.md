@@ -57,17 +57,18 @@ uv run --project integration sdi-integration execute-stage \
   --attempt-root artifacts/composition-attempt
 ```
 
-Only the composition Stage is granted the run-supplied composition inputs.
-`execute-stage` and `execute-jenkins-stage` require `--service-repository` for
-composition and reject `--service-repository`, `--composition-config`, and
-`--generator` for any other Stage. `dispatch-local` runs composition, so it
-always requires `--service-repository`. The Jenkins preflight takes only
-`--composition-config` and `--generator`, to check the config's key names, and
-`finalize-jenkins-run` takes none of them.
+Composition is granted every run-supplied input, and image-build only the
+service repository, where the recipes live. `execute-stage` and
+`execute-jenkins-stage` require `--service-repository` for composition and
+image-build, reject `--composition-config` and `--generator` for any Stage but
+composition, and reject all three for CV and CD. `dispatch-local` runs both
+Stages, so it always requires `--service-repository`. The Jenkins preflight
+takes only `--composition-config` and `--generator`, to check the config's key
+names, and `finalize-jenkins-run` takes none of them.
 `--service-repository` names a directory of service folders, each holding its
 `<service_id>/SDI.md` description and any recipes; the runtime copies every
-regular file in the service folders into the composition Stage's inputs and
-gives the adapter a manifest of their paths, sizes, and digests. It skips files
+regular file in the service folders into the Stage's inputs and gives the
+adapter a manifest of their paths, sizes, and digests. It skips files
 at the directory's root and refuses a folder without `SDI.md`, dotfiles and other
 unsupported names, symbolic links, non-regular files, and more than 256 files or
 1 MiB. Only each folder's `SDI.md` is a description.

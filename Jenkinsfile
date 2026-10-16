@@ -29,7 +29,7 @@ def stages = [
          'JENKINS_COMPOSITION_WORK_LIMIT_SECONDS', env.JENKINS_COMPOSITION_WORK_LIMIT_SECONDS)],
     [name: 'Image build', stage: 'image_build', label: 'image-build',
      descriptor: 'deployment/jenkins/adapters/image-build-fixture-v1.yaml',
-     suppliedArguments: '',
+     suppliedArguments: '--service-repository service-repository',
      workLimitSeconds: readPositiveSeconds(
          'JENKINS_IMAGE_BUILD_WORK_LIMIT_SECONDS', env.JENKINS_IMAGE_BUILD_WORK_LIMIT_SECONDS)],
     [name: 'Continuous Validation', stage: 'cv', label: 'cv',
@@ -105,7 +105,8 @@ git update-ref refs/heads/main "$RESOLVED_COMMIT_SHA"
     }
 }
 
-// Only composition is given the checked-out service repository. The Domain
+// Composition and image-build are given the checked-out service repository,
+// each capturing it from its own checkout of the same commit. The Domain
 // agents reach only the OpenAI endpoint, so Jenkins composes with the committed
 // composition config's default luna generator and names neither; its key comes
 // from the sdi-openai-api-key credential bound around the composition Stage only.
