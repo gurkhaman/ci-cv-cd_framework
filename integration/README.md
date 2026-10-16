@@ -331,7 +331,9 @@ After publication, `github-summary` independently validates the receipt and any
 returned bundle, incorporates GitHub's handoff and publication outcomes, renders
 the status-first summary, and returns the final machinery conclusion. It never
 derives an aggregate Domain verdict. A result-less failed or cancelled handoff
-is summarized from its receipt without promising Stage evidence.
+is summarized from its receipt without promising Stage evidence. The Image build
+section joins each image-build record with its deployment-schema placement, or
+gives Image-build's conclusion and reason in one line when it recorded no result.
 
 Authenticated operators can submit the reviewed six S-04 request paths
 sequentially through the same workflow with:
