@@ -1,6 +1,37 @@
 #!/bin/sh
 set -eu
 
+usage() {
+    printf '%s\n' 'usage: verify [--fast]' >&2
+    exit 2
+}
+
+hold_host_lock_reusing_an_inherited_descriptor() {
+    host_lock=${SDI_HOST_LOCK:-/tmp/sdi-host.lock}
+    host_lock_fd=
+    for fd in /proc/$$/fd/*; do
+        if [ "$(readlink "$fd" 2>/dev/null)" = "$host_lock" ]; then
+            host_lock_fd=${fd##*/}
+            break
+        fi
+    done
+    if [ -z "$host_lock_fd" ]; then
+        exec 9>>"$host_lock"
+        host_lock_fd=9
+    fi
+    if ! flock -n "$host_lock_fd"; then
+        printf 'verify: waiting for %s\n' "$host_lock"
+        flock "$host_lock_fd"
+    fi
+}
+
+fast=
+case $# in
+    0) ;;
+    1) [ "$1" = --fast ] || usage; fast=1 ;;
+    *) usage ;;
+esac
+
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$project_dir"
 
@@ -26,6 +57,14 @@ uv run --frozen ruff check .
 uv run --frozen basedpyright
 # Slow tests wait out real limits, so parallel load must not stretch them.
 uv run --frozen pytest -m 'not slow' -n auto --dist worksteal
+
+if [ -n "$fast" ]; then
+    printf '%s\n' 'fast tier passed; run integration/scripts/verify before opening a PR'
+    exit 0
+fi
+
+hold_host_lock_reusing_an_inherited_descriptor
+
 uv run --frozen pytest -m slow
 
 printf '%s\n' 'Locked Python dependency closure:'
@@ -39,7 +78,15 @@ while IFS= read -r line; do
     printf '%s\n' "$line"
 done < ../deployment/jenkins/controller/plugins.txt
 
-../deployment/jenkins/bin/stack smoke
+smoke_inputs='^(deployment/jenkins/|integration/src/|integration/fixtures/)|^(deployment/installation\.env|Jenkinsfile|integration/pyproject\.toml|integration/uv\.lock|integration/README\.md|integration/\.python-version)$'
+if merge_base=$(git -C .. merge-base origin/main HEAD 2>/dev/null) &&
+    changed=$(git -C .. diff --name-only "$merge_base" &&
+        git -C .. ls-files --others --exclude-standard --full-name) &&
+    ! printf '%s\n' "$changed" | grep -Eq "$smoke_inputs"; then
+    printf '%s\n' 'stack smoke skipped: no smoke inputs changed since the merge base with origin/main'
+else
+    ../deployment/jenkins/bin/stack smoke
+fi
 
 printf '%s\n' \
     'Repository acceptance passed.' \

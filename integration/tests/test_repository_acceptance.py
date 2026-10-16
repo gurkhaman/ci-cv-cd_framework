@@ -7,6 +7,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPOSITORY_ROOT = Path(__file__).parents[2]
 VERIFY = REPOSITORY_ROOT / "integration" / "scripts" / "verify"
 
@@ -36,9 +38,15 @@ def _acceptance_checkout(tmp_path: Path) -> tuple[Path, Path]:
     return checkout, scripts / "verify"
 
 
-def _fake_uv(tmp_path: Path) -> Path:
+def _fake_tools(tmp_path: Path) -> Path:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
+    docker = fake_bin / "docker"
+    docker.write_text(
+        '#!/bin/sh\nprintf \'docker %s\\n\' "$*" >> "$ACCEPTANCE_LOG"\n',
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
     uv = fake_bin / "uv"
     uv.write_text(
         "#!/bin/sh\n"
@@ -54,14 +62,27 @@ def _fake_uv(tmp_path: Path) -> Path:
     return fake_bin
 
 
+def _environment(tmp_path: Path) -> dict[str, str]:
+    return os.environ | {
+        "ACCEPTANCE_LOG": str(tmp_path / "acceptance.log"),
+        "PATH": f"{_fake_tools(tmp_path)}:{os.environ['PATH']}",
+        "SDI_HOST_LOCK": str(tmp_path / "host.lock"),
+    }
+
+
+def _git(checkout: Path, *arguments: str) -> None:
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *arguments],
+        check=True,
+        capture_output=True,
+        cwd=checkout,
+    )
+
+
 def test_verification_is_the_complete_fail_fast_acceptance_gate(tmp_path: Path) -> None:
     checkout, verify = _acceptance_checkout(tmp_path)
-    fake_bin = _fake_uv(tmp_path)
     log = tmp_path / "acceptance.log"
-    environment = os.environ | {
-        "ACCEPTANCE_LOG": str(log),
-        "PATH": f"{fake_bin}:{os.environ['PATH']}",
-    }
+    environment = _environment(tmp_path)
 
     completed = subprocess.run(
         [verify],
@@ -128,3 +149,83 @@ def test_verification_is_the_complete_fail_fast_acceptance_gate(tmp_path: Path) 
         for line in log.read_text(encoding="utf-8").splitlines()[len(passed_commands) :]
     )
     assert "Repository acceptance passed." not in failed.stdout
+
+
+def test_fast_tier_skips_the_slow_tests_and_the_stack_smoke(tmp_path: Path) -> None:
+    checkout, verify = _acceptance_checkout(tmp_path)
+
+    completed = subprocess.run(
+        [verify, "--fast"],
+        check=False,
+        capture_output=True,
+        cwd=checkout,
+        env=_environment(tmp_path),
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    commands = (tmp_path / "acceptance.log").read_text(encoding="utf-8").splitlines()
+    assert commands[-1] == "uv run --frozen pytest -m not slow -n auto --dist worksteal"
+    assert "uv run --frozen pytest -m slow" not in commands
+    assert not any(line.startswith(("stack", "docker")) for line in commands)
+    assert completed.stdout.endswith(
+        "fast tier passed; run integration/scripts/verify before opening a PR\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("changed_path", "smoke_runs"),
+    [
+        ("integration/src/sdi_pipeline_integration/changed.py", True),
+        ("integration/tests/test_changed.py", False),
+    ],
+)
+def test_stack_smoke_runs_only_when_a_smoke_input_changed(
+    tmp_path: Path, *, changed_path: str, smoke_runs: bool
+) -> None:
+    checkout, verify = _acceptance_checkout(tmp_path)
+    _git(checkout, "init", "--quiet")
+    _git(checkout, "add", ".")
+    _git(checkout, "commit", "--quiet", "--message", "base")
+    _git(checkout, "update-ref", "refs/remotes/origin/main", "HEAD")
+    changed = checkout / changed_path
+    changed.parent.mkdir(parents=True)
+    changed.write_text("change = 1\n", encoding="utf-8")
+    _git(checkout, "add", changed_path)
+
+    completed = subprocess.run(
+        [verify],
+        check=False,
+        capture_output=True,
+        cwd=checkout,
+        env=_environment(tmp_path),
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    commands = (tmp_path / "acceptance.log").read_text(encoding="utf-8").splitlines()
+    assert ("stack smoke" in commands) is smoke_runs
+    assert (
+        "stack smoke skipped: no smoke inputs changed" in completed.stdout
+    ) is not smoke_runs
+
+
+def test_a_caller_holding_the_host_lock_does_not_deadlock_verification(
+    tmp_path: Path,
+) -> None:
+    checkout, verify = _acceptance_checkout(tmp_path)
+    environment = _environment(tmp_path)
+
+    completed = subprocess.run(
+        ["flock", environment["SDI_HOST_LOCK"], verify],
+        check=False,
+        capture_output=True,
+        cwd=checkout,
+        env=environment,
+        text=True,
+        timeout=10,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "waiting for" not in completed.stdout
+    assert "stack smoke" in (tmp_path / "acceptance.log").read_text(encoding="utf-8")
