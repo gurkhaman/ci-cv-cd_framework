@@ -14,7 +14,12 @@ from ._integration_code import integration_code_digest, require_fresh_agent_imag
 from ._jenkins_agent_boundary import enforce_integration_execution_boundary
 from ._local_dispatch import assemble_bundle, validate_bundle
 from ._run_input import identify_committed_run
-from ._stage_contracts import SUPPLIED_INPUT_SLOTS
+from ._stage_registry import (
+    INTEGRATION_AGENT,
+    STAGE_ORDER,
+    STAGES,
+    SUPPLIED_INPUT_SLOTS,
+)
 from ._stage_runtime import (
     StageExecution,
     check_key_bindings,
@@ -34,33 +39,14 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from ._result_contracts import PipelineIntegrationResult
-    from ._stage_contracts import StageName
+    from ._stage_registry import StageName
     from ._stage_runtime import StageInputSource, SuppliedInputs
 
-EXPECTED_AGENT_LABELS = {
-    "composition": "composition",
-    "image_build": "image-build",
-    "cv": "cv",
-    "cd": "cd",
-}
-EXPECTED_RESOURCE_NODES = {
-    "integration": "integration",
-    "composition": "ci",
-    "image_build": "image-build",
-    "cv": "cv",
-    "cd": "cd",
-}
 POSITIVE_DECIMAL = re.compile(r"^[1-9][0-9]{0,19}$")
 MAX_WORK_LIMIT_SECONDS = 24 * 60 * 60
-# The Jenkinsfile's descriptor table. Unlike dispatch-local, it runs the
-# implemented image-build adapter, whose builder exists only inside the stack.
-DESCRIPTORS: tuple[tuple[StageName, str], ...] = (
-    ("composition", "deployment/jenkins/adapters/composition-v1.yaml"),
-    ("image_build", "deployment/jenkins/adapters/image-build-v1.yaml"),
-    ("cv", "deployment/jenkins/adapters/cv-fixture-v1.yaml"),
-    ("cd", "deployment/jenkins/adapters/cd-fixture-v1.yaml"),
-)
-DESCRIPTOR_STAGES: dict[str, StageName] = {path: stage for stage, path in DESCRIPTORS}
+DESCRIPTOR_STAGES: dict[str, StageName] = {
+    stage.jenkins_descriptor: name for name, stage in STAGES.items()
+}
 
 
 class RunDeadlineExpiredError(Exception):
@@ -144,7 +130,9 @@ def preflight_jenkins_run(  # noqa: PLR0913
     is checked before anything else the agents' code judges.
     """
     enforce_integration_execution_boundary()
-    if dict(resource_nodes) != EXPECTED_RESOURCE_NODES:
+    if dict(resource_nodes) != {"integration": INTEGRATION_AGENT.node} | {
+        name: stage.agent.node for name, stage in STAGES.items()
+    }:
         msg = "Jenkins resource mapping does not match the reviewed topology"
         raise InputError(msg)
     require_fresh_agent_images(
@@ -169,11 +157,11 @@ def preflight_jenkins_run(  # noqa: PLR0913
         execution_id=execution_id,
     )
     key_names = composition_key_names(repository, supplied)
-    for expected_stage, descriptor_path in DESCRIPTORS:
-        descriptor, _ = load_stage_adapter(repository, descriptor_path)
+    for expected_stage, stage in STAGES.items():
+        descriptor, _ = load_stage_adapter(repository, stage.jenkins_descriptor)
         if (
             descriptor.stage != expected_stage
-            or descriptor.agent_label != EXPECTED_AGENT_LABELS[expected_stage]
+            or descriptor.agent_label != stage.agent.label
         ):
             msg = f"{expected_stage} does not match its reviewed Jenkins Stage"
             raise InputError(msg)
@@ -201,14 +189,14 @@ def _load_execution_prefix(
     A supplied input this process was not granted is history: the Stage that
     accepted it compared it, and it is not captured again here.
     """
-    if len(roots) > len(DESCRIPTORS):
+    if len(roots) > len(STAGE_ORDER):
         msg = "accepted attempt transfer contains too many Stages"
         raise InputError(msg)
     executions: list[StageExecution] = []
     available_inputs = dict(initial_inputs)
     outputs: dict[str, StageInputSource] = {}
     for index, root in enumerate(roots):
-        expected_stage = DESCRIPTORS[index][0]
+        expected_stage = STAGE_ORDER[index]
         if executions and _blocks_downstream(executions[-1]):
             msg = "accepted attempt transfer contains work after a blocker"
             raise InputError(msg)
@@ -265,7 +253,7 @@ def execute_jenkins_stage(  # noqa: PLR0913
     code; that is checked first, so stale code judges nothing else.
     """
     stage = DESCRIPTOR_STAGES.get(descriptor_path)
-    node = EXPECTED_RESOURCE_NODES[stage] if stage is not None else "executing"
+    node = STAGES[stage].agent.node if stage is not None else "executing"
     require_fresh_agent_images(
         integration_code_digest(repository_path / "integration"),
         {node: baked_code_digest},
@@ -290,12 +278,12 @@ def execute_jenkins_stage(  # noqa: PLR0913
         msg = "a blocking accepted attempt prevents further Stage execution"
         raise InputError(msg)
     next_stage_index = len(executions)
-    if next_stage_index >= len(DESCRIPTORS):
+    if next_stage_index >= len(STAGE_ORDER):
         msg = "all reviewed Stages already have accepted attempts"
         raise InputError(msg)
-    expected_stage, expected_descriptor = DESCRIPTORS[next_stage_index]
-    if descriptor_path != expected_descriptor:
-        msg = f"next accepted attempt must execute the {expected_stage} descriptor"
+    expected = STAGES[STAGE_ORDER[next_stage_index]]
+    if descriptor_path != expected.jenkins_descriptor:
+        msg = f"next accepted attempt must execute the {expected.name} descriptor"
         raise InputError(msg)
     if work_limit_seconds <= 0 or work_limit_seconds > MAX_WORK_LIMIT_SECONDS:
         msg = "Stage work limit must be between 1 and 86400 seconds"
@@ -364,27 +352,30 @@ def finalize_jenkins_run(  # noqa: PLR0913
         committed,
     )
     blocker = next((item for item in executions if _blocks_downstream(item)), None)
-    if len(executions) < len(DESCRIPTORS) and blocker is None:
+    if len(executions) < len(STAGE_ORDER) and blocker is None:
+        pending = STAGES[STAGE_ORDER[len(executions)]]
         if not run_deadline_expired:
-            stage = DESCRIPTORS[len(executions)][0]
-            msg = f"Jenkins finalization is missing the {stage} accepted attempt"
+            msg = f"Jenkins finalization is missing the {pending.name} accepted attempt"
             raise InputError(msg)
-        stage, descriptor_path = DESCRIPTORS[len(executions)]
-        descriptor, _profile = load_stage_adapter(repository, descriptor_path)
+        descriptor, _profile = load_stage_adapter(
+            repository, pending.jenkins_descriptor
+        )
         blocker = skipped_stage_execution(
             execution_id=execution_id,
-            stage=stage,
+            stage=pending.name,
             implementation_mode=descriptor.implementation_mode,
             code="sdi.run.deadline-exceeded",
             summary="The Pipeline integration run deadline expired before Stage work.",
         )
         executions.append(blocker)
 
-    for stage, descriptor_path in DESCRIPTORS[len(executions) :]:
+    for stage in STAGE_ORDER[len(executions) :]:
         if blocker is None:
             msg = "Jenkins finalization has no blocking attempt"
             raise InputError(msg)
-        descriptor, _profile = load_stage_adapter(repository, descriptor_path)
+        descriptor, _profile = load_stage_adapter(
+            repository, STAGES[stage].jenkins_descriptor
+        )
         blocked_stage = blocker.envelope.correlation.stage
         executions.append(
             skipped_stage_execution(

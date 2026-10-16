@@ -8,7 +8,7 @@ import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Literal, Self, cast
+from typing import Annotated, Literal, Self, assert_never, cast
 from urllib.parse import urlsplit
 
 from pydantic import (
@@ -21,6 +21,7 @@ from pydantic import (
 )
 
 from ._contracts import ContractModel
+from ._stage_registry import STAGES, StageName
 from ._yaml_input import parse_yaml
 
 RECOVERY_MANIFEST_SCHEMA_VERSION = "sdi.scaffold-recovery-manifest/v1"
@@ -58,6 +59,20 @@ class InstallationPins(ContractModel):
     github_runner_sha256: Sha256
     checkout_action_commit: GitCommit
     upload_artifact_action_commit: GitCommit
+
+    def adapter_image(self, stage: StageName) -> str:
+        """Return the runtime image every descriptor of one Stage must name."""
+        match stage:
+            case "composition":
+                return self.composition_adapter_image
+            case "image_build":
+                return self.image_build_adapter_image
+            case "cv":
+                return self.cv_adapter_image
+            case "cd":
+                return self.cd_adapter_image
+            case _:
+                assert_never(stage)
 
 
 class ArchiveFacts(ContractModel):
@@ -298,20 +313,12 @@ def _validate_agent_pins(repository: Path, pins: InstallationPins) -> None:
         msg = "agent build stages do not consume the reviewed image pins"
         raise ValueError(msg)
 
-    adapters = repository / "deployment/jenkins/adapters"
-    for filename, image in (
-        ("composition-v1.yaml", pins.composition_adapter_image),
-        ("image-build-v1.yaml", pins.image_build_adapter_image),
-        ("cv-fixture-v1.yaml", pins.cv_adapter_image),
-        ("cd-fixture-v1.yaml", pins.cd_adapter_image),
-    ):
-        descriptor = parse_yaml(
-            (adapters / filename).read_bytes(),
-            f"deployment/jenkins/adapters/{filename}",
-        )
-        if descriptor.get("image") != image:
-            msg = f"{filename} image pin does not match the installation authority"
-            raise ValueError(msg)
+    for name, stage in STAGES.items():
+        for path in dict.fromkeys((stage.jenkins_descriptor, stage.local_descriptor)):
+            descriptor = parse_yaml((repository / path).read_bytes(), path)
+            if descriptor.get("image") != pins.adapter_image(name):
+                msg = f"{path} image pin does not match the installation authority"
+                raise ValueError(msg)
 
     compose = repository / "deployment/jenkins/compose.yaml"
     compose_document = parse_yaml(

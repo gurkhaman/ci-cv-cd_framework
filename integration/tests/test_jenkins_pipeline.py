@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from sdi_pipeline_integration._integration_code import integration_code_digest
+from sdi_pipeline_integration._stage_registry import INTEGRATION_AGENT, STAGES
 from tests._fixture_inputs import (
     FIXTURE_COMPOSITION_CONFIG,
     FIXTURE_SERVICE_REPOSITORY,
@@ -25,25 +26,12 @@ from tests._fixture_inputs import (
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
 EXECUTION_ID = "12345678-1234-4234-9234-123456789abc"
 SUCCESS_REQUEST = "runs/s-04/s-04-tc-03-c-05-fixture.yaml"
-# The Jenkinsfile's descriptor table.
-DESCRIPTORS = (
-    ("composition", "deployment/jenkins/adapters/composition-v1.yaml"),
-    ("image_build", "deployment/jenkins/adapters/image-build-v1.yaml"),
-    ("cv", "deployment/jenkins/adapters/cv-fixture-v1.yaml"),
-    ("cd", "deployment/jenkins/adapters/cd-fixture-v1.yaml"),
-)
+DESCRIPTORS = tuple((name, stage.jenkins_descriptor) for name, stage in STAGES.items())
 WORK_LIMITS = {
-    "composition": "600",
-    "image_build": "1800",
-    "cv": "2700",
-    "cd": "900",
+    name: str(stage.grant.work_limit_seconds) for name, stage in STAGES.items()
 }
-RESOURCE_NODES = {
-    "integration": "integration",
-    "ci": "composition",
-    "image-build": "image-build",
-    "cv": "cv",
-    "cd": "cd",
+DIGEST_OPTION_BY_NODE = {INTEGRATION_AGENT.node: "integration"} | {
+    stage.agent.node: name.replace("_", "-") for name, stage in STAGES.items()
 }
 COMMITTED_FILES = (
     SUCCESS_REQUEST,
@@ -149,7 +137,7 @@ def _preflight(
     baked: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     fresh = _baked_code_digest(repository)
-    recorded = dict.fromkeys(RESOURCE_NODES, fresh) | (baked or {})
+    recorded = dict.fromkeys(DIGEST_OPTION_BY_NODE, fresh) | (baked or {})
     return subprocess.run(
         [
             "sdi-integration",
@@ -177,7 +165,7 @@ def _preflight(
             "cd",
             *(
                 argument
-                for node, option in RESOURCE_NODES.items()
+                for node, option in DIGEST_OPTION_BY_NODE.items()
                 for argument in (f"--{option}-baked-code-digest", recorded[node])
             ),
         ],

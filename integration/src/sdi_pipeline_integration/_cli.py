@@ -44,6 +44,7 @@ from ._schemas import check_schemas, write_schemas
 from ._service_descriptions import read_service_repository
 from ._stage_contracts import AdapterDescriptor
 from ._stage_profiles import check_stage_profiles, write_stage_profiles
+from ._stage_registry import STAGE_ORDER
 from ._stage_runtime import ExternalCancellation, SuppliedInputs, execute_stage
 from ._yaml_input import InputError, parse_yaml
 
@@ -208,9 +209,7 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     )
     attempt_status.add_argument("--attempt-root", type=Path, required=True)
     attempt_status.add_argument("--execution-id", required=True)
-    attempt_status.add_argument(
-        "--stage", choices=("composition", "image_build", "cv", "cd"), required=True
-    )
+    attempt_status.add_argument("--stage", choices=STAGE_ORDER, required=True)
     finalize = commands.add_parser(
         "finalize-jenkins-run",
         help="materialize skips and assemble a complete Jenkins result bundle",

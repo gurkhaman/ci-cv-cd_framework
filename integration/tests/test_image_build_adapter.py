@@ -28,12 +28,12 @@ from sdi_pipeline_integration._service_descriptions import (
     capture_service_repository,
 )
 from sdi_pipeline_integration._stage_contracts import (
-    STAGE_GRANTS,
     AdapterResponse,
     StageProfile,
     contains_sensitive_contract_material,
     contains_sensitive_material,
 )
+from sdi_pipeline_integration._stage_registry import STAGES
 from sdi_pipeline_integration._yaml_input import parse_yaml
 
 if TYPE_CHECKING:
@@ -178,7 +178,7 @@ class Stage:
         diagnostic = (self.output_root / "diagnostic.txt").read_text()
         assert not contains_sensitive_material(diagnostic)
         assert (
-            len(diagnostic.encode()) <= STAGE_GRANTS["image_build"].diagnostic_max_bytes
+            len(diagnostic.encode()) <= STAGES["image_build"].grant.diagnostic_max_bytes
         )
         return response, result, diagnostic
 
