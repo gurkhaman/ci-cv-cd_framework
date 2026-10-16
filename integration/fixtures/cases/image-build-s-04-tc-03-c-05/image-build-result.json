@@ -6,31 +6,30 @@
   "image_build_result_id": "s-04-tc-03-c-05-image-build",
   "images": [
     {
-      "architecture": "arm64",
-      "build_status": "not_evaluated",
-      "image": "example.invalid/sdi/fixture-localization@sha256:1111111111111111111111111111111111111111111111111111111111111111",
-      "service_id": "fixture-localization"
+      "service_id": "fixture-localization",
+      "status": "not_evaluated"
     },
     {
-      "architecture": "arm64",
-      "build_status": "not_evaluated",
-      "image": "example.invalid/sdi/fixture-navigation@sha256:2222222222222222222222222222222222222222222222222222222222222222",
-      "service_id": "fixture-navigation"
+      "service_id": "fixture-navigation",
+      "status": "not_evaluated"
     },
     {
-      "architecture": "arm64",
-      "build_status": "not_evaluated",
-      "image": "example.invalid/sdi/fixture-mission-control@sha256:3333333333333333333333333333333333333333333333333333333333333333",
-      "service_id": "fixture-mission-control"
+      "service_id": "fixture-mission-control",
+      "status": "not_evaluated"
     }
   ],
   "profile_id": "waffle-jetson-arm64",
+  "registry": "registry:5000",
   "scenario_id": "S-04",
   "schema_version": "sdi.image-build-result/v1",
   "source_inputs": [
     {
       "sha256": "10927c0d576d7d949c827549ca0b39c2fdfd0e727eda016861553defebf3eac1",
       "slot": "target_profile"
+    },
+    {
+      "sha256": "98498e09e10e7a9be2c356ff5cfcdcafb26767d698ea677fff2d95c038e3b49c",
+      "slot": "service_repository"
     },
     {
       "sha256": "58da1149dc48d4701b817697186f440cbd75cd3f015c5a7e9541142b84962a39",

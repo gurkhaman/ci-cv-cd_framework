@@ -246,10 +246,15 @@ STAGE_GRANTS: dict[StageName, StageGrant] = {
     ),
     "image_build": StageGrant(
         IMAGE_BUILD_PROFILE_VERSION,
-        ("target_profile", "composition_blueprint", "deployment_schema"),
+        (
+            "target_profile",
+            "service_repository",
+            "composition_blueprint",
+            "deployment_schema",
+        ),
         work_limit_seconds=30 * 60,
         domain_output_max_bytes=32768,
-        diagnostic_max_bytes=4096,
+        diagnostic_max_bytes=16384,
     ),
     "cv": StageGrant(
         CV_PROFILE_VERSION,

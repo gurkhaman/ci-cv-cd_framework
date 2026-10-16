@@ -283,7 +283,7 @@ def _add_supplied_input_arguments(
         "--service-repository",
         type=Path,
         required=require_service_repository,
-        help="directory of service folders given to composition",
+        help="directory of service folders given to composition and image-build",
     )
     _add_composition_selection_arguments(parser)
 

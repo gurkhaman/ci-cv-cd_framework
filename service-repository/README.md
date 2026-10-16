@@ -14,13 +14,13 @@ comes from and does not describe what a recipe builds. The recipe's `CMD` is the
 service's default process.
 
 CI reads this directory as a supplied read-only path and never writes it.
-Composition Stage commands take it as `--service-repository`; the runtime copies
-every regular file in the service folders into the Stage's inputs with a
-manifest of their paths, sizes, and digests. Files at this directory's root,
-such as this README, are not copied. Composition reads only each folder's
-`SDI.md`; a nested `SDI.md` is a plain file. `basis: placeholder` descriptions
-stand in for services whose facts are not yet declared upstream; their labels
-are carried, not checked.
+Composition and Image-build Stage commands take it as `--service-repository`;
+the runtime copies every regular file in the service folders into the Stage's
+inputs with a manifest of their paths, sizes, and digests. Files at this
+directory's root, such as this README, are not copied. Composition reads only
+each folder's `SDI.md`; a nested `SDI.md` is a plain file. `basis: placeholder`
+descriptions stand in for services whose facts are not yet declared upstream;
+their labels are carried, not checked.
 
 The copy keeps file bytes, not file modes, so a recipe sets modes itself, for
 example with `COPY --chmod=0755`. Every file and folder name starts with a

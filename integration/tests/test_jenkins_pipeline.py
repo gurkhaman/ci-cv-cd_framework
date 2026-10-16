@@ -132,8 +132,12 @@ def _fresh_image(repository: Path) -> tuple[str, str]:
 
 
 def _supplied(stage: str) -> tuple[str, ...]:
-    """Give the run-supplied inputs to composition, the only Stage granted them."""
-    return SUPPLIED_INPUT_ARGUMENTS if stage == "composition" else ()
+    """Give each Stage the supplied inputs it is granted, as the Jenkinsfile does."""
+    if stage == "composition":
+        return SUPPLIED_INPUT_ARGUMENTS
+    if stage == "image_build":
+        return ("--service-repository", str(FIXTURE_SERVICE_REPOSITORY))
+    return ()
 
 
 def _preflight(
@@ -191,7 +195,7 @@ def _execute_chain(  # noqa: PLR0913, PLR0917
     run_deadline_millis: int | None = None,
     work_limits: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
-    """Run every Stage; only composition is given the supplied inputs."""
+    """Run every Stage, each given the supplied inputs it is granted."""
     preflight = _preflight(repository, commit_sha, request_path, started_millis)
     assert preflight.returncode == 0, preflight.stderr
     assert json.loads(preflight.stdout)["execution_id"] == EXECUTION_ID
@@ -356,18 +360,22 @@ def test_composition_without_a_service_repository_claims_no_attempt(
     assert not attempt.exists()
 
 
+SUPPLIED_INPUTS = (
+    (("--service-repository", str(FIXTURE_SERVICE_REPOSITORY)), "service repository"),
+    (("--composition-config", FIXTURE_COMPOSITION_CONFIG), "composition config"),
+    (("--generator", "fixture"), "generator"),
+)
+
+
 @pytest.mark.parametrize(
-    ("supplied", "label"),
+    ("stage", "descriptor", "supplied", "label"),
     [
-        (
-            ("--service-repository", str(FIXTURE_SERVICE_REPOSITORY)),
-            "service repository",
-        ),
-        (("--composition-config", FIXTURE_COMPOSITION_CONFIG), "composition config"),
-        (("--generator", "fixture"), "generator"),
+        (stage, descriptor, supplied, label)
+        for stage, descriptor in DESCRIPTORS[1:]
+        for supplied, label in SUPPLIED_INPUTS
+        if not (stage == "image_build" and label == "service repository")
     ],
 )
-@pytest.mark.parametrize(("stage", "descriptor"), DESCRIPTORS[1:])
 def test_stages_not_granted_supplied_inputs_reject_them(
     tmp_path: Path,
     stage: str,
@@ -436,6 +444,181 @@ response = {{
         "sdi.dependency.prerequisite-blocked",
         "sdi.dependency.prerequisite-blocked",
     ]
+
+
+# Both profile hosts are arm64; mission control stays unresolved yet keeps a host.
+PLACEMENTS = [
+    {
+        "service_id": "fixture-localization",
+        "status": "resolved",
+        "artifact_id": "debs",
+        "host": "orin",
+    },
+    {
+        "service_id": "fixture-navigation",
+        "status": "resolved",
+        "artifact_id": "debs",
+        "host": "waffle",
+    },
+    {"service_id": "fixture-mission-control", "status": "unresolved", "host": "orin"},
+]
+DIGEST = f"sha256:{'a' * 64}"
+IMAGES = {
+    "fixture-localization": {
+        "service_id": "fixture-localization",
+        "status": "built",
+        "repository": "sdi/fixture-localization",
+        "digest": DIGEST,
+        "platforms": [{"architecture": "arm64", "digest": DIGEST}],
+    },
+    "fixture-navigation": {
+        "service_id": "fixture-navigation",
+        "status": "failed",
+        "reason": "no-recipe",
+        "detail": "the artifact names no recipe in the service folder",
+    },
+    "fixture-mission-control": {
+        "service_id": "fixture-mission-control",
+        "status": "failed",
+        "reason": "unresolved-placement",
+        "detail": "composition left the placement unresolved",
+    },
+}
+
+
+def _write_response_adapter(
+    path: Path, documents: dict[str, str], domain_outcome: str
+) -> None:
+    """Write an adapter that publishes fixed documents, naming its inputs."""
+    write_scripted_adapter(
+        path,
+        f"""(output / "outputs").mkdir()
+sources = [
+    {{"slot": item["slot"], "sha256": item["sha256"]}} for item in request["inputs"]
+]
+for name, document in {documents!r}.items():
+    payload = json.loads(document)
+    if payload["schema_version"] == "sdi.image-build-result/v1":
+        payload["source_inputs"] = sources
+    (output / "outputs" / name).write_text(json.dumps(payload))
+response = {{
+    "schema_version": "sdi.stage-adapter-response/v1",
+    "correlation": request["correlation"],
+    "execution_conclusion": "succeeded",
+    "domain_outcome": {domain_outcome!r},
+    "consumed_inputs": [item["slot"] for item in request["inputs"]],
+    "produced_outputs": [item["slot"] for item in request["outputs"]
+        if item["role"] == "domain_output"],
+    "diagnostic": {{"present": False, "truncated": False}},
+}}
+(output / "response.json").write_text(json.dumps(response))
+""",
+    )
+
+
+def _implemented_image_build(
+    tmp_path: Path, images: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    """Run implemented composition, then image-build publishing these records."""
+    repository, _commit_sha = _repository(tmp_path)
+    case = SOURCE_ROOT / "integration/fixtures/cases/composition-s-04-tc-03-c-05"
+    blueprint = json.loads((case / "composition-blueprint.json").read_text())
+    deployment = json.loads((case / "deployment-schema.json").read_text())
+    composition = tmp_path / "implemented-composition-adapter"
+    _write_response_adapter(
+        composition,
+        {
+            "composition-blueprint.json": json.dumps(
+                blueprint | {"evidence_basis": "implemented"}
+            ),
+            "deployment-schema.json": json.dumps(
+                deployment | {"evidence_basis": "implemented", "placements": PLACEMENTS}
+            ),
+        },
+        "succeeded",
+    )
+    write_fixture_composition_descriptor(
+        repository, entrypoint=composition, mode="implemented"
+    )
+    image_build = tmp_path / "implemented-image-build-adapter"
+    result = {
+        "schema_version": "sdi.image-build-result/v1",
+        "evidence_basis": "implemented",
+        "image_build_result_id": "s-04-tc-03-c-05-image-build",
+        "blueprint_id": blueprint["blueprint_id"],
+        "deployment_schema_id": deployment["deployment_schema_id"],
+        "scenario_id": "S-04",
+        "testcase_id": "TC-03",
+        "combination_id": "C-05",
+        "profile_id": "waffle-jetson-arm64",
+        "source_inputs": [],
+        "registry": "registry:5000",
+        "images": list(images.values()),
+    }
+    _write_response_adapter(
+        image_build, {"image-build-result.json": json.dumps(result)}, "succeeded"
+    )
+    descriptor = repository / DESCRIPTORS[1][1]
+    descriptor.write_text(
+        descriptor.read_text()
+        .replace("implementation_mode: fixture", "implementation_mode: implemented")
+        .replace("entrypoint: sdi-fixture-adapter", f"entrypoint: {image_build}")
+    )
+    _git(repository, "add", ".")
+    _git(repository, "commit", "-m", "Select implemented composition and image-build")
+    commit_sha = _git(repository, "rev-parse", "HEAD")
+
+    composed = tmp_path / "transfers" / "composition"
+    executed = _execute_stage(
+        repository, commit_sha, DESCRIPTORS[0][1], composed, _supplied("composition")
+    )
+    assert executed.returncode == 0, executed.stderr
+    built = tmp_path / "transfers" / "image_build"
+    executed = _execute_stage(
+        repository,
+        commit_sha,
+        DESCRIPTORS[1][1],
+        built,
+        (*_supplied("image_build"), "--prior-attempt-root", str(composed)),
+    )
+    assert executed.returncode == 0, executed.stderr
+    return json.loads((built / "accepted-attempt.json").read_text())
+
+
+def test_implemented_image_build_records_each_placement(tmp_path: Path) -> None:
+    attempt = _implemented_image_build(tmp_path, IMAGES)
+
+    assert attempt["adapter_response_accepted"] is True, attempt["reason"]
+    assert attempt["domain_outcome"] == "succeeded"
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        IMAGES["fixture-localization"]
+        | {"platforms": [{"architecture": "amd64", "digest": DIGEST}]},
+        IMAGES["fixture-localization"]
+        | {"service_id": "fixture-mission-control"}
+        | {"repository": "sdi/fixture-mission-control"},
+        IMAGES["fixture-navigation"] | {"service_id": "fixture-mission-control"},
+        IMAGES["fixture-mission-control"] | {"service_id": "fixture-navigation"},
+    ],
+    ids=[
+        "built-without-the-host-architecture",
+        "built-for-an-unresolved-placement",
+        "unresolved-placement-with-another-reason",
+        "resolved-placement-failed-as-unresolved",
+    ],
+)
+def test_implemented_image_build_records_must_match_their_placements(
+    tmp_path: Path, record: dict[str, Any]
+) -> None:
+    attempt = _implemented_image_build(
+        tmp_path, IMAGES | {record["service_id"]: record}
+    )
+
+    assert attempt["adapter_response_accepted"] is False
+    assert attempt["reason"]["code"] == "sdi.adapter.candidate-rejected"
 
 
 def test_preflight_rejects_a_key_the_composition_descriptor_does_not_bind(

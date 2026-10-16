@@ -27,7 +27,7 @@
       "slot": "deployment_schema"
     },
     {
-      "sha256": "26e7040248e47a45e1dc6b087a4bc8c3f2ccceae5f286247499e85cba618eff7",
+      "sha256": "e6731178d4bdc37bc734d630fa38da02aa96f243bccf593c1d3726cc129d31cc",
       "slot": "image_build_result"
     }
   ],
