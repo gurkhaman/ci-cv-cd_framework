@@ -6,7 +6,9 @@ and is started only on demand. One dedicated `integration` agent performs only
 integration work; four independently replaceable agents provide the
 `composition`, `image-build`, `cv`, and `cd` scheduling labels. The root pipeline
 executes one submitted run across those five agents: implemented composition,
-then the image-build, CV, and CD Fixtures. Optional GitHub self-hosted runner
+then the image-build, CV, and CD Fixtures. A BuildKit builder and a pipeline
+registry, reachable only from the `image-build` agent, are ready for the real
+image-build adapter. Optional GitHub self-hosted runner
 services, one per repository, pick up the protected handoff job, reach the
 controller over an internal network, and reach GitHub only through their own
 allowlisting proxy.
@@ -19,7 +21,10 @@ The tracked authority is:
   transitive dependency at an exact version.
 - `agents/Dockerfile`: the exact Jenkins Remoting, Python 3.12.13, `uv`, and
   locked production integration package used to construct each minimal agent
-  image without inherited volume metadata.
+  image without inherited volume metadata. Its `image-build` target adds the
+  `buildctl` client copied from the pinned BuildKit image.
+- `buildkit/buildkitd.toml`: the read-only builder configuration, see
+  [Builder And Pipeline Registry](#builder-and-pipeline-registry).
 - `runner/Dockerfile`: the GitHub Actions runner `2.337.0` image for the
   handoff runners, with the same Python runtime and locked production
   integration package as the agents.
@@ -33,6 +38,7 @@ The tracked authority is:
   the fork.
 - `compose.yaml`: loopback-only controller publication, named controller state,
   five agent services, a separate egress-capable network for each agent, the
+  `buildkitd` builder and `registry` services with their named volumes, the
   two optional runner services `runner-upstream` and `runner-fork`, and each
   runner's proxy service `runner-upstream-proxy` or `runner-fork-proxy`.
 - `Jenkinsfile`: the thin repository-owned scheduler over public integration CLI
@@ -219,21 +225,51 @@ deployment/jenkins/bin/stack exercise-live
 deployment/jenkins/bin/stack stop
 ```
 
-`start` builds the exact controller and five agent images and the runner and
-proxy images of every runner configured in `GITHUB_RUNNERS`, starts the
-controller, all five agents, and those runners with their proxies, rejects an
+`start` pulls the pinned builder and registry images when they are missing,
+builds the exact
+controller and five agent images and the runner and proxy images of every
+runner configured in `GITHUB_RUNNERS`, starts the controller, all five agents,
+the builder, the registry, and those runners with their proxies, rejects an
 agent image that declares any volume, and waits for process health. It refuses
 a configured runner that is not registered and refuses while a runner executes
 a job. Jenkins is published on the host only
 at
 `http://127.0.0.1:<configured-port>`. No inbound-agent TCP port is published;
 all agents connect over WebSocket. `stop` removes all containers and networks
-but retains only the `jenkins-home` named volume. Agent workspaces are separate
-tmpfs mounts, have no shared or persistent filesystem, and disappear whenever
-their container is replaced. Their five separate networks allow GitHub checkout
-without making peer agents reachable. `stop`, `status`, `logs`, and `destroy`
+but retains every named volume: `jenkins-home`, the runner state volumes, and
+the builder's `buildkit-state` and `pipeline-registry`. Agent workspaces are
+separate tmpfs mounts, have no shared or persistent filesystem, and disappear
+whenever their container is replaced. Their five separate networks allow GitHub
+checkout without making peer agents reachable. `stop`, `status`, `logs`, and `destroy`
 include the runner and proxy containers. Every image the stack builds carries
 the label `org.sdi.project=ci-cv-cd_framework`.
+
+### Builder And Pipeline Registry
+
+The always-on stack has eight containers: the controller, the five agents,
+`buildkitd`, and `registry`. Both images are pinned by digest in
+`deployment/installation.env` as `SDI_BUILDKIT_IMAGE` and `SDI_REGISTRY_IMAGE`.
+
+- `buildkitd` runs privileged, listens on `tcp://buildkitd:1234` without TLS,
+  and reads `buildkit/buildkitd.toml`. It grants no insecure entitlements. Its
+  cache is cleaned by one space-only rule, with no time-based expiry.
+- `registry` serves plain HTTP on `registry:5000`. It has a read-only root
+  filesystem, no capabilities, and no published port, so nothing outside the
+  stack pulls from it.
+- The internal `image-build-builder` network joins only the `image-build`
+  agent, `buildkitd`, and `registry`; network membership is the access
+  boundary. Only `buildkitd` also joins `builder-egress`, which is unrestricted
+  so recipes can fetch packages. The `image-build` agent keeps the same
+  checkout egress as every agent and is the only image with `buildctl`.
+- Builder cache and registry storage live in the `buildkit-state` and
+  `pipeline-registry` named volumes. They survive `stop` and `start`;
+  `destroy` removes them and is the reset. Recovery snapshots do not include
+  them.
+
+Building for `linux/arm64` relies on QEMU emulation registered with the host
+kernel's binfmt_misc. Docker Desktop registers it; on a plain Docker Engine
+host, register the arm64 emulator before `start`, or the smoke check fails
+because `buildkitd` lists no `linux/arm64` platform.
 
 ### GitHub Handoff Runners
 
@@ -383,8 +419,9 @@ identity and scheduling label remain unchanged. Only the selected agent's
 registration secret is validated or mounted during reconciliation.
 
 `bin/stack destroy` is the explicit destructive operation for reconstruction. It
-removes the controller, its named volume, and the runner state volumes with
-their registrations. Back up operational state first if it must be retained.
+removes the controller, its named volume, the runner state volumes with their
+registrations, and the builder cache and pipeline registry volumes. Back up
+operational state first if it must be retained.
 
 ## Safe Shutdown
 
@@ -426,7 +463,8 @@ storage encryption or GitHub-side quiescence. The command then runs
 `stack quiesce`, which stops the runners and quiesces Jenkins, refuses queued
 or building runs, cleanly stops every container, and archives the complete
 `jenkins-home` named volume with numeric ownership. The runner state volumes,
-and so the runner registrations, are not part of the snapshot. It creates an
+and so the runner registrations, and the builder cache and pipeline registry
+volumes are not part of the snapshot. It creates an
 owner-only archive and a path-free recovery manifest containing the approved
 commit, UTC timestamp, byte size, SHA-256, and every exact installation pin.
 Both outputs must remain encrypted and outside the repository. There is no
@@ -596,7 +634,12 @@ labels and identities; WebSocket connectivity; both fixed jobs; and the handoff
 authorization boundary. Temporary jobs clean before and after each allocation
 and execute twice on every label to prove correct node allocation, clean
 workspaces, the integration/Domain role boundary, one-secret visibility, missing
-Docker access, and runtime network isolation. The checker also distinguishes
+Docker access, and runtime network isolation. Only the `image-build` agent
+resolves `buildkitd` and `registry` and has `buildctl`, at the pinned BuildKit
+version. On its first allocation it confirms that `buildkitd` lists
+`linux/arm64`, builds a `FROM scratch` image for `linux/amd64` and
+`linux/arm64`, pushes it to the registry, and reads back the index and both
+platform manifests by digest. The checker also distinguishes
 missing labels, invalid mappings, incorrect executor counts, unavailable agents,
 and admissible busy agents. The smoke builds the runner and proxy images and,
 without contacting GitHub, proves that registration runs the runner network
@@ -609,16 +652,18 @@ the internet-dependent `egress` check.
 The smoke then mutates controller and node configuration, deletes one managed
 node and both fixed jobs, restarts the controller and all five agents while
 preserving the controller volume, and proves JCasC and Job DSL restore
-repository state. Agent tmpfs workspaces are recreated empty. Cleanup removes the isolated smoke volume
-and prunes dangling images labelled `org.sdi.project=ci-cv-cd_framework`, such
-as superseded builds of the fixed image tags. Unlabelled images, base images,
+repository state. Agent tmpfs workspaces are recreated empty. Cleanup removes
+the isolated smoke volumes and prunes dangling images labelled
+`org.sdi.project=ci-cv-cd_framework`, such as superseded builds of the fixed
+image tags. Unlabelled images, base images,
 and the build cache are untouched.
 
 `integration/scripts/verify` includes this smoke check after the Python package
 checks. The smoke also replaces the controller passwords and Jenkins inbound
 agent HMAC key, proves all five newly issued registration secrets differ, and
-reconnects every agent. It therefore requires the supported Docker host and
-network access when the controller image is not already cached.
+reconnects every agent. It therefore requires the supported Docker host,
+arm64 emulation, and network access when the controller, builder, and registry
+images are not already cached.
 
 ## Pin Maintenance
 
@@ -673,6 +718,16 @@ The Debian `squid` package is installed with `apt-get` during the build and is
 not version-pinned; the build asserts that the installed Squid has the
 `SQUID_MAJOR` major version. Change `SQUID_MAJOR` and both proxy image tags as
 one review unit; a runtime pin change rebuilds the proxy with the runner.
+
+`SDI_BUILDKIT_IMAGE` must match the `BUILDKIT_IMAGE` argument in
+`agents/Dockerfile` and the `buildkitd` image in `compose.yaml`, and
+`SDI_REGISTRY_IMAGE` must match the `registry` image there;
+`validate-installation` checks them. The `image-build` agent's `buildctl` is
+copied from that BuildKit image, so client and daemon match by construction.
+The smoke check asserts the client version through `EXPECTED_BUILDCTL_VERSION`
+in `bin/smoke-check`. Change the BuildKit pin in all of those places as one
+review unit, after reviewing the BuildKit and distribution release notes and
+security advisories.
 
 Controller health and Fixture execution prove pipeline machinery only. They are
 not Domain success, Validation evidence, deployment evidence, or KPI evidence.

@@ -741,8 +741,9 @@ $plugin
 
     docker build --check --file "$root/controller/Dockerfile" "$root" \
         >/dev/null 2>&1 || fail 'the controller Dockerfile is not buildable'
-    docker build --check --file "$root/agents/Dockerfile" "$repository_root" \
-        >/dev/null 2>&1 || fail 'the agent Dockerfile is not buildable'
+    docker build --check --target image-build --file "$root/agents/Dockerfile" \
+        "$repository_root" >/dev/null 2>&1 || \
+        fail 'the agent Dockerfile is not buildable'
     docker build --check --file "$root/runner/Dockerfile" "$repository_root" \
         >/dev/null 2>&1 || fail 'the runner Dockerfile is not buildable'
     docker build --check --file "$root/runner-proxy/Dockerfile" \
@@ -832,6 +833,7 @@ case "$action" in
     start)
         validate
         build_controller
+        compose pull --quiet --policy missing buildkitd registry
         compose build integration ci image-build cv cd $runner_services \
             $proxy_services
         for agent in integration ci image-build cv cd; do
