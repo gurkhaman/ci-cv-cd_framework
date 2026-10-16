@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from sdi_pipeline_integration._integration_code import integration_code_digest
 from tests._fixture_inputs import (
     FIXTURE_COMPOSITION_CONFIG,
     FIXTURE_SERVICE_REPOSITORY,
@@ -124,18 +125,7 @@ def _common(repository: Path, commit_sha: str, request_path: str) -> list[str]:
 
 def _baked_code_digest(repository: Path) -> str:
     """Record the checkout's integration code as a freshly built image would."""
-    completed = subprocess.run(
-        [
-            "sdi-integration",
-            "integration-code-digest",
-            "--root",
-            str(repository / "integration"),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return completed.stdout.strip()
+    return integration_code_digest(repository / "integration")
 
 
 def _fresh_image(repository: Path) -> tuple[str, str]:
