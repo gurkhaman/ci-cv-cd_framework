@@ -49,7 +49,7 @@ from ._stage_runtime import (
 from ._yaml_input import InputError
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
 MAX_RESULT_BYTES = 1024 * 1024
 RUN_DEADLINE_SECONDS = 90 * 60
@@ -158,10 +158,19 @@ def parse_pipeline_result(content: bytes) -> PipelineIntegrationResult:
         raise InputError(msg) from error
 
 
-def validate_bundle(  # noqa: C901, PLR0912, PLR0915
-    bundle_root: Path,
-) -> PipelineIntegrationResult:
+def validate_bundle(bundle_root: Path) -> PipelineIntegrationResult:
     """Validate the complete archive candidate against its authoritative result."""
+    result, _ = validate_bundle_documents(bundle_root)
+    return result
+
+
+def validate_bundle_documents(  # noqa: C901, PLR0912, PLR0915
+    bundle_root: Path,
+) -> tuple[PipelineIntegrationResult, Mapping[str, BaseModel]]:
+    """Validate an archive candidate and return its cross-checked Domain outputs.
+
+    Only outputs of succeeded Stages are returned, keyed by slot.
+    """
     if not bundle_root.is_dir() or bundle_root.is_symlink():
         msg = "archive candidate root must be a directory"
         raise InputError(msg)
@@ -272,7 +281,7 @@ def validate_bundle(  # noqa: C901, PLR0912, PLR0915
     if second_paths != paths or second_capture != captured:
         msg = "archive candidate changed after validation"
         raise InputError(msg)
-    return result
+    return result, available_documents
 
 
 def _assemble_bundle_staging(

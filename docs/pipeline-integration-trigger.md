@@ -175,6 +175,15 @@ returned bundle validates and GitHub reports successful artifact publication.
 The Stage table keeps lifecycle, execution conclusion, implementation mode, and
 Domain outcome separate and includes typed explanations and evidence paths.
 
+The Image build section has one row per placement: service, artifact, host,
+built architectures, placement status, short digest, and the reason a placement
+failed. Artifact and host come from the deployment schema and show `-` for an
+unresolved placement. Digests refer to the stack-local pipeline registry, which
+nothing outside the Jenkins stack pulls from. A Fixture result shows every
+placement `not_evaluated`. When Image-build was skipped, blocked, failed
+preflight, or timed out, it has no result, and the section gives its conclusion
+and reason in one line instead.
+
 A valid negative Domain outcome can remain green because the integration
 machinery completed correctly. Jenkins machinery failure, retrieval failure,
 contract rejection, identity mismatch, or artifact-publication failure is red.
