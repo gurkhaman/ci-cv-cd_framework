@@ -186,7 +186,48 @@ its diagnostic says so.
 Fixture cases match exact input digests and cannot recognize real output, so a
 Fixture Stage whose inputs include implemented output is skipped with
 `sdi.dependency.implemented-evidence`. A successful composition therefore ends
-the run with image build skipped and CV and CD blocked; the run still exits 0.
+a `dispatch-local` run with image build skipped and CV and CD blocked; the run
+still exits 0.
+
+## Image-build Adapter
+
+`sdi-image-build-adapter` runs only in Jenkins, on the image-build agent,
+because the builder exists only inside the stack; `dispatch-local` keeps the
+Fixture. For each placement it builds the placed artifact's `dockerfile:`
+recipe, with the service folder as build context, for every architecture the
+artifact declares (`noarch` means amd64 and arm64), one `buildctl` client per
+placement against `tcp://buildkitd:1234`, and pushes
+`registry:5000/sdi/<service_id>:<artifact_id>-<execution id>`. Both addresses are
+constants, since the adapter's environment holds only `PATH` and `LC_ALL`;
+`buildctl` itself gets a fixed environment with an empty home and Docker config.
+An unresolved placement fails `unresolved-placement`; an artifact without a
+recipe, or whose recipe is not a captured file, fails `no-recipe`. A build fails
+`build-failed` when any architecture fails, when it reports no digest, or when
+the index read back from the registry does not match the digest or the requested
+platforms. Builds still running at the work limit minus 60 seconds are sent
+SIGTERM, then SIGKILL after 15 seconds, and fail `work-limit`. Each failure
+`detail` is the build log's last line once URLs, machine paths and private
+addresses are masked, and the diagnostic adds a fair share of each failed log's
+redacted tail.
+
+| Outcome code | Execution | Domain outcome | Published |
+| --- | --- | --- | --- |
+| `sdi.image-build.recorded` | succeeded | succeeded | image-build result |
+| `sdi.image-build.input-mismatch` | failed | not evaluated | diagnostic |
+| `sdi.image-build.too-many-placements` | failed | not evaluated | diagnostic |
+| `sdi.image-build.builder-unreachable` | failed | not evaluated | diagnostic |
+| `sdi.image-build.registry-unreachable` | failed | not evaluated | diagnostic |
+| `sdi.image-build.arm64-unavailable` | failed | not evaluated | diagnostic |
+
+`recorded` means every placement was judged, even when nothing built; it does
+not mean any image is available. The input mismatch is a service repository
+whose digest differs from the deployment schema's, and the placement limit is
+48. The builder, registry and arm64 checks run only when some placement is
+buildable, so a run with nothing to build never touches the builder. In Jenkins,
+a successful composition is followed by a real image build, after which the
+Fixture CV skips with `sdi.dependency.implemented-evidence` and CD is blocked.
+A runtime hard timeout kills the adapter and its clients together and leaves
+its scratch directory on the agent's `/tmp` tmpfs until the agent restarts.
 
 ## Dispatch A Local Run
 

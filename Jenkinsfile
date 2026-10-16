@@ -28,7 +28,7 @@ def stages = [
      workLimitSeconds: readPositiveSeconds(
          'JENKINS_COMPOSITION_WORK_LIMIT_SECONDS', env.JENKINS_COMPOSITION_WORK_LIMIT_SECONDS)],
     [name: 'Image build', stage: 'image_build', label: 'image-build',
-     descriptor: 'deployment/jenkins/adapters/image-build-fixture-v1.yaml',
+     descriptor: 'deployment/jenkins/adapters/image-build-v1.yaml',
      suppliedArguments: '--service-repository service-repository',
      workLimitSeconds: readPositiveSeconds(
          'JENKINS_IMAGE_BUILD_WORK_LIMIT_SECONDS', env.JENKINS_IMAGE_BUILD_WORK_LIMIT_SECONDS)],

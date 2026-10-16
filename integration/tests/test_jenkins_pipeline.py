@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import signal
 import subprocess
 import time
@@ -23,9 +24,10 @@ from tests._fixture_inputs import (
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
 EXECUTION_ID = "12345678-1234-4234-9234-123456789abc"
 SUCCESS_REQUEST = "runs/s-04/s-04-tc-03-c-05-fixture.yaml"
+# The Jenkinsfile's descriptor table.
 DESCRIPTORS = (
     ("composition", "deployment/jenkins/adapters/composition-v1.yaml"),
-    ("image_build", "deployment/jenkins/adapters/image-build-fixture-v1.yaml"),
+    ("image_build", "deployment/jenkins/adapters/image-build-v1.yaml"),
     ("cv", "deployment/jenkins/adapters/cv-fixture-v1.yaml"),
     ("cd", "deployment/jenkins/adapters/cd-fixture-v1.yaml"),
 )
@@ -52,6 +54,7 @@ COMMITTED_FILES = (
     "integration/stage-profiles/cv-v1.yaml",
     "integration/stage-profiles/cd-v1.yaml",
     "deployment/jenkins/adapters/image-build-fixture-v1.yaml",
+    "deployment/jenkins/adapters/image-build-v1.yaml",
     "deployment/jenkins/adapters/cv-fixture-v1.yaml",
     "deployment/jenkins/adapters/cd-fixture-v1.yaml",
     "runs/conformance/composition-negative-domain.yaml",
@@ -72,7 +75,10 @@ def _git(repository: Path, *arguments: str) -> str:
     return completed.stdout.strip()
 
 
-def _repository(tmp_path: Path) -> tuple[Path, str]:
+def _repository(
+    tmp_path: Path, *, fixture_image_build: bool = False
+) -> tuple[Path, str]:
+    """Commit the Stage inputs; a Fixture image-build completes the chain."""
     repository = tmp_path / "repository"
     repository.mkdir()
     _git(repository, "init", "--initial-branch=main")
@@ -91,6 +97,11 @@ def _repository(tmp_path: Path) -> tuple[Path, str]:
         destination.write_bytes((SOURCE_ROOT / relative_path).read_bytes())
     copy_baked_integration_code(repository)
     write_fixture_composition_descriptor(repository)
+    if fixture_image_build:
+        adapters = repository / "deployment/jenkins/adapters"
+        (adapters / "image-build-v1.yaml").write_bytes(
+            (adapters / "image-build-fixture-v1.yaml").read_bytes()
+        )
     _git(repository, "add", ".")
     _git(repository, "commit", "-m", "Add distributed Fixture inputs")
     return repository, _git(repository, "rev-parse", "HEAD")
@@ -288,7 +299,7 @@ def _execute_chain(  # noqa: PLR0913, PLR0917
 def test_distributed_fixture_chain_preserves_identity_and_exact_archive(
     tmp_path: Path,
 ) -> None:
-    repository, commit_sha = _repository(tmp_path)
+    repository, commit_sha = _repository(tmp_path, fixture_image_build=True)
     started_millis = str(int((time.time() - 1) * 1000))
 
     conclusion, result = _execute_chain(
@@ -308,6 +319,21 @@ def test_distributed_fixture_chain_preserves_identity_and_exact_archive(
     assert all(
         attempt["execution_conclusion"] == "succeeded" for attempt in result["attempts"]
     )
+
+
+def test_implemented_image_build_skips_fixture_composition(tmp_path: Path) -> None:
+    repository, commit_sha = _repository(tmp_path)
+
+    conclusion, result = _execute_chain(
+        repository,
+        commit_sha,
+        SUCCESS_REQUEST,
+        tmp_path / "run",
+        str(int((time.time() - 1) * 1000)),
+    )
+
+    assert conclusion.returncode == 1
+    assert result["attempts"][1]["reason"]["code"] == "sdi.dependency.fixture-evidence"
 
 
 def _execute_stage(
@@ -393,9 +419,10 @@ def test_stages_not_granted_supplied_inputs_reject_them(
     assert not attempt.exists()
 
 
-def test_distributed_implemented_composition_skips_fixture_stages(
+def test_implemented_composition_runs_the_image_build_adapter(
     tmp_path: Path,
 ) -> None:
+    # Every Fixture placement is unresolved, so nothing reaches the builder.
     repository, _commit_sha = _repository(tmp_path)
     case = SOURCE_ROOT / "integration/fixtures/cases/composition-s-04-tc-03-c-05"
     blueprint, deployment = (
@@ -438,12 +465,23 @@ response = {{
     )
 
     assert conclusion.returncode == 0, conclusion.stderr
-    assert result["attempts"][0]["domain_outcome"] == "succeeded"
+    assert [attempt["domain_outcome"] for attempt in result["attempts"][:2]] == [
+        "succeeded",
+        "succeeded",
+    ]
     assert [attempt["reason"]["code"] for attempt in result["attempts"][1:]] == [
+        "sdi.image-build.recorded",
         "sdi.dependency.implemented-evidence",
         "sdi.dependency.prerequisite-blocked",
-        "sdi.dependency.prerequisite-blocked",
     ]
+    images = json.loads(
+        (
+            tmp_path / "run/transfers/image_build/outputs/image-build-result.json"
+        ).read_text()
+    )["images"]
+    assert {(item["status"], item["reason"]) for item in images} == {
+        ("failed", "unresolved-placement")
+    }
 
 
 # Both profile hosts are arm64; mission control stays unresolved yet keeps a host.
@@ -498,8 +536,7 @@ sources = [
 ]
 for name, document in {documents!r}.items():
     payload = json.loads(document)
-    if payload["schema_version"] == "sdi.image-build-result/v1":
-        payload["source_inputs"] = sources
+    payload["source_inputs"] = sources
     (output / "outputs" / name).write_text(json.dumps(payload))
 response = {{
     "schema_version": "sdi.stage-adapter-response/v1",
@@ -517,9 +554,14 @@ response = {{
 
 
 def _implemented_image_build(
-    tmp_path: Path, images: dict[str, dict[str, Any]]
+    tmp_path: Path,
+    images: dict[str, dict[str, Any]],
+    service_repository: Path = FIXTURE_SERVICE_REPOSITORY,
 ) -> dict[str, Any]:
-    """Run implemented composition, then image-build publishing these records."""
+    """Run implemented composition, then image-build publishing these records.
+
+    With no records, the committed image-build adapter runs instead.
+    """
     repository, _commit_sha = _repository(tmp_path)
     case = SOURCE_ROOT / "integration/fixtures/cases/composition-s-04-tc-03-c-05"
     blueprint = json.loads((case / "composition-blueprint.json").read_text())
@@ -559,18 +601,29 @@ def _implemented_image_build(
         image_build, {"image-build-result.json": json.dumps(result)}, "succeeded"
     )
     descriptor = repository / DESCRIPTORS[1][1]
-    descriptor.write_text(
-        descriptor.read_text()
-        .replace("implementation_mode: fixture", "implementation_mode: implemented")
-        .replace("entrypoint: sdi-fixture-adapter", f"entrypoint: {image_build}")
+    committed = descriptor.read_text()
+    scripted = committed.replace(
+        "entrypoint: sdi-image-build-adapter", f"entrypoint: {image_build}"
     )
+    assert scripted != committed
+    if images:
+        descriptor.write_text(scripted)
     _git(repository, "add", ".")
     _git(repository, "commit", "-m", "Select implemented composition and image-build")
     commit_sha = _git(repository, "rev-parse", "HEAD")
 
     composed = tmp_path / "transfers" / "composition"
     executed = _execute_stage(
-        repository, commit_sha, DESCRIPTORS[0][1], composed, _supplied("composition")
+        repository,
+        commit_sha,
+        DESCRIPTORS[0][1],
+        composed,
+        (
+            "--service-repository",
+            str(service_repository),
+            "--composition-config",
+            FIXTURE_COMPOSITION_CONFIG,
+        ),
     )
     assert executed.returncode == 0, executed.stderr
     built = tmp_path / "transfers" / "image_build"
@@ -579,10 +632,52 @@ def _implemented_image_build(
         commit_sha,
         DESCRIPTORS[1][1],
         built,
-        (*_supplied("image_build"), "--prior-attempt-root", str(composed)),
+        (
+            "--service-repository",
+            str(service_repository),
+            "--prior-attempt-root",
+            str(composed),
+        ),
     )
     assert executed.returncode == 0, executed.stderr
     return json.loads((built / "accepted-attempt.json").read_text())
+
+
+def test_a_buildable_placement_needs_an_answering_builder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service_repository = tmp_path / "service-repository"
+    folder = service_repository / "fixture-localization"
+    folder.mkdir(parents=True)
+    front_matter = {
+        "schema_version": "sdi.service-description/v1",
+        "service_id": "fixture-localization",
+        "title": "Fixture localization",
+        "provenance": {"basis": "placeholder", "note": "An image-build test."},
+        "artifacts": {
+            "debs": {
+                "architectures": ["arm64"],
+                "route": {"kind": "image", "reference": "example/test"},
+                "dockerfile": "Dockerfile",
+            }
+        },
+    }
+    (folder / "SDI.md").write_text(
+        f"---\n{json.dumps(front_matter)}\n---\n\n# Fixture localization\n"
+    )
+    (folder / "Dockerfile").write_text("FROM scratch\n")
+    # The adapter's builder address is fixed; a stand-in buildctl refuses it.
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "buildctl").write_text("#!/bin/sh\nexit 1\n")
+    (fake_bin / "buildctl").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
+
+    attempt = _implemented_image_build(tmp_path, {}, service_repository)
+
+    assert attempt["execution_conclusion"] == "failed"
+    assert attempt["domain_outcome"] == "not_evaluated"
+    assert attempt["reason"]["code"] == "sdi.image-build.builder-unreachable"
 
 
 def test_implemented_image_build_records_each_placement(tmp_path: Path) -> None:
@@ -731,7 +826,7 @@ def test_stale_stage_agent_refuses_its_stage_without_an_attempt(
 
 
 def test_malformed_final_bundle_is_rejected_by_public_cli(tmp_path: Path) -> None:
-    repository, commit_sha = _repository(tmp_path)
+    repository, commit_sha = _repository(tmp_path, fixture_image_build=True)
     root = tmp_path / "run"
 
     conclusion, _result = _execute_chain(

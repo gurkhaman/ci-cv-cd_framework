@@ -12,7 +12,7 @@ from ._git_input import GitRepository
 from ._handoff_contracts import HANDOFF_CONTRACT_VERSION
 from ._integration_code import integration_code_digest, require_fresh_agent_images
 from ._jenkins_agent_boundary import enforce_integration_execution_boundary
-from ._local_dispatch import DESCRIPTORS, assemble_bundle, validate_bundle
+from ._local_dispatch import assemble_bundle, validate_bundle
 from ._run_input import identify_committed_run
 from ._stage_contracts import SUPPLIED_INPUT_SLOTS
 from ._stage_runtime import (
@@ -52,6 +52,14 @@ EXPECTED_RESOURCE_NODES = {
 }
 POSITIVE_DECIMAL = re.compile(r"^[1-9][0-9]{0,19}$")
 MAX_WORK_LIMIT_SECONDS = 24 * 60 * 60
+# The Jenkinsfile's descriptor table. Unlike dispatch-local, it runs the
+# implemented image-build adapter, whose builder exists only inside the stack.
+DESCRIPTORS: tuple[tuple[StageName, str], ...] = (
+    ("composition", "deployment/jenkins/adapters/composition-v1.yaml"),
+    ("image_build", "deployment/jenkins/adapters/image-build-v1.yaml"),
+    ("cv", "deployment/jenkins/adapters/cv-fixture-v1.yaml"),
+    ("cd", "deployment/jenkins/adapters/cd-fixture-v1.yaml"),
+)
 DESCRIPTOR_STAGES: dict[str, StageName] = {path: stage for stage, path in DESCRIPTORS}
 
 

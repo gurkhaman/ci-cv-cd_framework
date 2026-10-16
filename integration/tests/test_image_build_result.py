@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from sdi_pipeline_integration._domain_contracts import ImageBuildResult
-from sdi_pipeline_integration._json_input import canonical_json
+from sdi_pipeline_integration._image_build_adapter import encode_document
 from sdi_pipeline_integration._stage_contracts import (
     EXPECTED_STAGE_INPUT_SLOTS,
     STAGE_GRANTS,
@@ -162,8 +162,8 @@ def _worst_case(index: int, status: str) -> dict[str, Any]:
 def test_forty_eight_worst_case_placements_fit_the_domain_output_limit(
     status: str,
 ) -> None:
-    # The adapter writes its result as compact canonical JSON, as the Composition
-    # adapter does; indented output would not fit this many placements.
+    # Written with the adapter's own compact writer; indented output would not
+    # fit this many placements.
     slug = "s" * 63
     payload = _result([_worst_case(index, status) for index in range(48)]) | {
         "image_build_result_id": slug,
@@ -172,8 +172,6 @@ def test_forty_eight_worst_case_placements_fit_the_domain_output_limit(
         "profile_id": slug,
     }
 
-    written = canonical_json(
-        _validate(payload).model_dump(mode="json", exclude_none=True)
-    )
+    written = encode_document(_validate(payload))
 
     assert len(written) <= STAGE_GRANTS["image_build"].domain_output_max_bytes
