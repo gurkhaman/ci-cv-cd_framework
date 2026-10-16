@@ -33,9 +33,6 @@ artifacts:
         - ros-jazzy-turtlebot3-description=2.3.6-1*
         - ros-jazzy-hls-lfcd-lds-driver=2.1.1-1*
         - ros-jazzy-ld08-driver=1.1.4-1*
-    invocation: >-
-      TURTLEBOT3_MODEL=waffle_pi LDS_MODEL=LDS-01
-      ros2 launch turtlebot3_bringup robot.launch.py usb_port:=/dev/ttyACM0
 
 subscribes:
   /cmd_vel: {type: geometry_msgs/msg/TwistStamped, reliability: reliable, durability: volatile}

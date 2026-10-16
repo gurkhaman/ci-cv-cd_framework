@@ -28,9 +28,6 @@ artifacts:
       kind: apt
       packages:
         - ros-jazzy-v4l2-camera=0.7.3-1*
-    invocation: >-
-      ros2 run v4l2_camera v4l2_camera_node --ros-args
-      -p video_device:=/dev/video0 -r image_raw:=image
 
 publishes:
   /image: {type: sensor_msgs/msg/Image, reliability: reliable, durability: volatile}
@@ -50,7 +47,7 @@ Publishes raw images from a USB webcam (any V4L2 device) as a ROS image stream.
 
 - A V4L2 camera is attached, by default `/dev/video0`, supporting the requested
   pixel format (`YUYV` by default).
-- The upstream node publishes `image_raw`; this service's fixed invocation
+- The upstream node publishes `image_raw`; the `CMD` of this service's recipe
   remaps it to `/image` (`-r image_raw:=image`), so camera info is published on
   `/camera_info`.
 

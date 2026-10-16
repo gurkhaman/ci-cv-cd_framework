@@ -347,7 +347,7 @@ def _compose(run: _Run, input_root: Path) -> Outcome:
     )
     snapshot = capture_service_repository(input_root / SERVICE_REPOSITORY_ROOT)
     if snapshot.manifest != manifest:
-        msg = "copied descriptions do not match the service-repository manifest"
+        msg = "copied service folders do not match the service-repository manifest"
         raise InputError(msg)
     run_request = validate_contract(
         RunRequest,
@@ -420,9 +420,7 @@ def _compose(run: _Run, input_root: Path) -> Outcome:
         return GENERATION_FAILURES[generation.outcome], {}
     evidence: dict[str, object] = identity | {
         "schema_version": "sdi.composition-evidence/v1",
-        "descriptions": [
-            {"path": item.path, "sha256": item.sha256} for item in manifest.files
-        ],
+        "descriptions": [{"path": item.path, "sha256": item.sha256} for item in files],
         "generation": {
             **settings,
             "outcome": generation.outcome,
