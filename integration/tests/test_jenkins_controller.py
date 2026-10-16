@@ -17,7 +17,7 @@ from ruamel.yaml import YAML
 
 from sdi_pipeline_integration._handoff_contracts import HANDOFF_PARAMETERS
 from sdi_pipeline_integration._integration_code import STALE_IMAGE_REASON
-from sdi_pipeline_integration._stage_registry import STAGES
+from sdi_pipeline_integration._stage_registry import RUN_LIMITS, STAGES
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -492,10 +492,14 @@ def test_root_pipeline_is_a_thin_scheduler_over_public_cli_operations() -> None:
     assert "env.JENKINS_PIPELINE_RUN_LIMIT_SECONDS" in pipeline
     assert "timeout(time: runLimitSeconds, unit: 'SECONDS')" in pipeline
     assert "timeout(time: schedulingLimitSeconds, unit: 'SECONDS')" in pipeline
-    assert "timeout(time: 120, unit: 'SECONDS')" in pipeline
     assert (
-        "timeout(time: definition.workLimitSeconds + 60, unit: 'SECONDS')" in pipeline
+        f"timeout(time: {RUN_LIMITS.finalization_reserve_seconds}, unit: 'SECONDS')"
+        in pipeline
     )
+    assert (
+        "timeout(time: definition.workLimitSeconds + "
+        f"{RUN_LIMITS.stage_safety_margin_seconds}, unit: 'SECONDS')"
+    ) in pipeline
     assert "--work-limit-seconds '${definition.workLimitSeconds}'" in pipeline
     assert "stageExecutionStatus == 3" in pipeline
     assert "System.currentTimeMillis() < schedulingDeadlineEpochMillis" in pipeline
@@ -509,9 +513,21 @@ def test_root_pipeline_is_a_thin_scheduler_over_public_cli_operations() -> None:
     )
     assert pipeline.count("execute-jenkins-stage") == 1
     # The runtime refuses any Stage whose descriptor is not its own table's.
-    assert re.findall(r"descriptor: '([^']+)'", pipeline) == [
-        stage.jenkins_descriptor for stage in STAGES.values()
+    assert re.findall(
+        r"\[name: '([^']+)', stage: '([^']+)', label: '([^']+)',\s+"
+        r"descriptor: '([^']+)'",
+        pipeline,
+    ) == [
+        (stage.display_name, stage.name, stage.agent.label, stage.jenkins_descriptor)
+        for stage in STAGES.values()
     ]
+    credentials = [
+        credential for stage in STAGES.values() for credential in stage.credentials
+    ]
+    assert pipeline.count("credentialsId:") == len(credentials)
+    for credential in credentials:
+        assert f"credentialsId: '{credential.jenkins_id}'" in pipeline
+        assert f"variable: '{credential.variable}'" in pipeline
     composition_definition = pipeline[
         pipeline.index("name: 'Composition'") : pipeline.index("name: 'Image build'")
     ]
