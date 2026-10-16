@@ -551,8 +551,19 @@ def test_start_builds_and_starts_only_the_configured_runners(
     assert stack.profiles("up --no-build --detach --wait --wait-timeout 240") == [
         profiles
     ]
+    assert stack.profiles("pull --quiet --policy missing buildkitd registry") == [
+        profiles
+    ]
+    log = stack.log()
+    pull = next(i for i, line in enumerate(log) if "pull --quiet" in line)
+    build = next(i for i, line in enumerate(log) if "build integration" in line)
+    assert pull < build
     proxy_check = f"build --check --file {JENKINS_ROOT}/runner-proxy/Dockerfile"
-    assert any(line.startswith(proxy_check) for line in stack.log())
+    assert any(line.startswith(proxy_check) for line in log)
+    agent_check = (
+        f"build --check --target image-build --file {JENKINS_ROOT}/agents/Dockerfile"
+    )
+    assert any(line.startswith(agent_check) for line in log)
 
 
 @pytest.mark.parametrize("action", ["stop", "status", "logs", "destroy"])

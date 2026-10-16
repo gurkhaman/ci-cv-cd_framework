@@ -327,6 +327,8 @@ def test_compose_exposes_only_loopback_http_and_persists_only_named_state() -> N
         "jenkins-home",
         "runner-upstream-state",
         "runner-fork-state",
+        "buildkit-state",
+        "pipeline-registry",
     }
     assert "50000" not in (JENKINS_ROOT / "compose.yaml").read_text()
 
