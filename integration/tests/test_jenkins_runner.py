@@ -54,7 +54,7 @@ esac
 """
 FAKE_UV = r"""#!/bin/sh
 case "$*" in
-  *adapter-image*) printf 'docker.io/example/agent@sha256:%064d\n' 1 ;;
+  *adapter-image*) printf 'docker.io/example/agent@sha256:%064d\n' 1 2 3 4 ;;
   *sdi-integration*validate-installation*) exit 0 ;;
   *) exit 2 ;;
 esac
