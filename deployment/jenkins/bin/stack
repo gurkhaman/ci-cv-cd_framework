@@ -98,6 +98,13 @@ elif [ "$#" -ne 0 ]; then
     fail "$action accepts no arguments"
 fi
 
+if [ -n "$prebuilt" ]; then
+    case "$action" in
+        start-controller|start|verify-live|exercise-live) ;;
+        *) fail "--prebuilt does not apply to $action" ;;
+    esac
+fi
+
 if [ "$action" = smoke ]; then
     exec "$root/bin/smoke"
 fi
@@ -789,6 +796,23 @@ build_controller() {
         "$root"
 }
 
+build_stamp=$(dirname "$config")/build-stamp
+
+checkout_and_images_fingerprint() {
+    snapshot=$(git -C "$repository_root" stash create 2>/dev/null) || return 1
+    git -C "$repository_root" rev-parse --verify --quiet \
+        "${snapshot:-HEAD}^{tree}" || return 1
+    docker image inspect --format '{{.Id}}' sdi-jenkins-controller:2.568.3 \
+        $(for agent in integration ci image-build cv cd; do agent_image "$agent"; done) \
+        2>/dev/null
+}
+
+require_build_stamp() {
+    fingerprint=$(checkout_and_images_fingerprint) && [ -f "$build_stamp" ] && \
+        [ "$fingerprint" = "$(cat "$build_stamp")" ] || \
+        fail "the prebuilt images were not built from this checkout; run: deployment/jenkins/bin/stack --config $config build"
+}
+
 admin_check() {
     "$root/bin/smoke-check" "$1" \
         --url "http://127.0.0.1:$JENKINS_HTTP_PORT" \
@@ -826,6 +850,8 @@ refuse_active_runner_job() {
         fail 'a GitHub runner is executing a handoff job; retry after it finishes'
 }
 
+[ -z "$prebuilt" ] || require_build_stamp
+
 case "$action" in
     preflight)
         host_preflight
@@ -841,6 +867,8 @@ case "$action" in
         for agent in integration ci image-build cv cd; do
             validate_agent_image "$agent"
         done
+        fingerprint=$(checkout_and_images_fingerprint) || fail 'cannot fingerprint the built images'
+        printf '%s\n' "$fingerprint" > "$build_stamp"
         ;;
     start-controller)
         if [ -z "$prebuilt" ]; then

@@ -516,7 +516,10 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
             try:
                 document = parse_yaml(path.read_bytes(), str(path))
                 images.append(AdapterDescriptor.model_validate(document).image)
-            except (InputError, OSError, ValidationError) as error:
+            except (InputError, OSError) as error:
+                sys.stderr.write(f"sdi-integration: {error}\n")
+                return 2
+            except ValidationError as error:
                 sys.stderr.write(f"sdi-integration: {path}: {error}\n")
                 return 2
         sys.stdout.write("".join(f"{image}\n" for image in images))
