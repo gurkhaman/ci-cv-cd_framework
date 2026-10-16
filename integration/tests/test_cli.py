@@ -75,16 +75,20 @@ def test_cli_prints_one_agent_image_per_descriptor_in_order(tmp_path: Path) -> N
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout == "".join(f"{image}\n" for image in images)
 
-    missing = tmp_path / "missing.yaml"
-    completed = subprocess.run(
-        [*arguments, "--descriptor", str(missing)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert completed.returncode == 2
-    assert completed.stdout == ""
-    assert str(missing) in completed.stderr
+    invalid_yaml = tmp_path / "invalid.yaml"
+    invalid_yaml.write_text("image: [\n")
+    invalid_contract = tmp_path / "invalid-contract.yaml"
+    invalid_contract.write_text("image: not-an-image\n")
+    for broken in (tmp_path / "missing.yaml", invalid_yaml, invalid_contract):
+        completed = subprocess.run(
+            [*arguments, "--descriptor", str(broken)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert completed.returncode == 2
+        assert completed.stdout == ""
+        assert completed.stderr.count(str(broken)) == 1, completed.stderr
 
 
 def test_fixture_adapter_exposes_only_the_one_shot_run_operation() -> None:

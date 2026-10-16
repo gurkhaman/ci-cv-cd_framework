@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+import pytest
 from ruamel.yaml import YAML
 
 from sdi_pipeline_integration._integration_code import STALE_IMAGE_REASON
@@ -92,7 +93,11 @@ def _write_fake_deployment_tools(fake_bin: Path) -> None:
         "  'inspect --format {{.State.ExitCode}} forced-container') "
         "printf '137\\n' ;;\n"
         "  'image inspect --format {{json .Config.Volumes}}'*) "
-        "printf 'null\\n' ;;\n"
+        "printf '%s\\n' \"${FAKE_AGENT_VOLUMES:-null}\" ;;\n"
+        "  'image inspect --format {{.Id}} '*) "
+        '[ -z "${FAKE_NO_IMAGES:-}" ] || exit 1; shift 4; '
+        'for image do printf \'sha256:%s-%s\\n\' "${FAKE_IMAGE_ID:-1}" "$image"; '
+        "done ;;\n"
         "  *' -T runner-'*' show') exit 3 ;;\n"
         "  *' -T runner-'*' register '*) "
         "printf 'the registration token is empty or invalid\\n' >&2; exit 2 ;;\n"
@@ -126,6 +131,9 @@ def _write_fake_deployment_tools(fake_bin: Path) -> None:
         'case "$*" in\n'
         "  --version) printf '%s\\n' 'git version 2.53.0' ;;\n"
         "  *'status --porcelain=v1 --untracked-files=all') exit 0 ;;\n"
+        "  *'stash create') exit 0 ;;\n"
+        "  *'rev-parse --verify --quiet HEAD^{tree}') "
+        "printf '%s\\n' \"${FAKE_TREE:-1}\" ;;\n"
         "  *) exit 2 ;;\n"
         "esac\n"
     )
@@ -1143,3 +1151,128 @@ def test_smoke_validates_and_builds_each_image_once(tmp_path: Path) -> None:
     adapter_image_calls = [line for line in log.splitlines() if "adapter-image" in line]
     assert adapter_image_calls
     assert all(line.count("--descriptor") == 4 for line in adapter_image_calls)
+
+
+class _BuiltStack:
+    def __init__(self, root: Path) -> None:
+        fake_bin = root / "bin"
+        fake_bin.mkdir()
+        _write_fake_deployment_tools(fake_bin)
+        self.docker_log = root / "docker.log"
+        secrets: dict[str, Path] = {}
+        for index, name in enumerate(
+            (
+                "admin",
+                "handoff",
+                "openai",
+                "integration",
+                "ci",
+                "image-build",
+                "cv",
+                "cd",
+            ),
+            start=1,
+        ):
+            secrets[name] = root / f"{name}-secret"
+            secrets[name].write_text(f"{index:x}" * 64)
+            secrets[name].chmod(0o600)
+        self.config = root / "controller.env"
+        self.config.write_text(
+            "JENKINS_HTTP_PORT=8080\n"
+            "JENKINS_ADMIN_ID=administrator\n"
+            "JENKINS_HANDOFF_ID=github-handoff\n"
+            "JENKINS_REPOSITORY_URL=https://github.com/example/repository.git\n"
+            "JENKINS_FORK_REPOSITORY_URL=https://github.com/example-fork/repository.git\n"
+            "JENKINS_AGENT_CONTROLLER_URL=http://controller:8080\n"
+            "JENKINS_PIPELINE_RUN_LIMIT_SECONDS=5400\n"
+            "JENKINS_COMPOSITION_WORK_LIMIT_SECONDS=600\n"
+            "JENKINS_IMAGE_BUILD_WORK_LIMIT_SECONDS=1800\n"
+            "JENKINS_CV_WORK_LIMIT_SECONDS=2700\n"
+            "JENKINS_CD_WORK_LIMIT_SECONDS=900\n"
+            f"JENKINS_ADMIN_PASSWORD_FILE={secrets['admin']}\n"
+            f"JENKINS_HANDOFF_PASSWORD_FILE={secrets['handoff']}\n"
+            f"JENKINS_OPENAI_API_KEY_FILE={secrets['openai']}\n"
+            f"JENKINS_INTEGRATION_AGENT_SECRET_FILE={secrets['integration']}\n"
+            f"JENKINS_CI_AGENT_SECRET_FILE={secrets['ci']}\n"
+            f"JENKINS_IMAGE_BUILD_AGENT_SECRET_FILE={secrets['image-build']}\n"
+            f"JENKINS_CV_AGENT_SECRET_FILE={secrets['cv']}\n"
+            f"JENKINS_CD_AGENT_SECRET_FILE={secrets['cd']}\n"
+        )
+        self.path = f"{fake_bin}:{os.environ['PATH']}"
+
+    def run(self, *arguments: str, **state: str) -> subprocess.CompletedProcess[str]:
+        self.docker_log.write_text("")
+        return subprocess.run(
+            [JENKINS_ROOT / "bin" / "stack", "--config", self.config, *arguments],
+            check=False,
+            capture_output=True,
+            env={"DOCKER_LOG": str(self.docker_log), "PATH": self.path} | state,
+            text=True,
+        )
+
+    def refuses_prebuilt(self, action: str, **state: str) -> bool:
+        completed = self.run("--prebuilt", action, **state)
+        return (
+            completed.returncode == 2
+            and f"run: deployment/jenkins/bin/stack --config {self.config} build"
+            in completed.stderr
+            and " up " not in self.docker_log.read_text()
+        )
+
+
+@pytest.mark.parametrize(
+    "action", ["start-controller", "start", "verify-live", "exercise-live"]
+)
+def test_prebuilt_actions_require_a_build_of_this_checkout(
+    tmp_path: Path, action: str
+) -> None:
+    stack = _BuiltStack(tmp_path)
+
+    assert stack.refuses_prebuilt(action)
+
+    built = stack.run("build")
+    assert built.returncode == 0, built.stderr
+    assert stack.refuses_prebuilt(action, FAKE_TREE="2")
+    assert stack.refuses_prebuilt(action, FAKE_IMAGE_ID="2")
+    assert stack.refuses_prebuilt(action, FAKE_NO_IMAGES="1")
+
+
+@pytest.mark.parametrize("action", ["start-controller", "start"])
+def test_prebuilt_start_reuses_a_build_of_this_checkout(
+    tmp_path: Path, action: str
+) -> None:
+    stack = _BuiltStack(tmp_path)
+    built = stack.run("build")
+    assert built.returncode == 0, built.stderr
+
+    completed = stack.run("--prebuilt", action)
+
+    assert completed.returncode == 0, completed.stderr
+    log = stack.docker_log.read_text()
+    assert "validate-installation" not in log
+    assert "build --check" not in log
+    assert "--tag sdi-jenkins-controller" not in log
+    assert " up --no-build --detach --wait" in log
+
+
+def test_build_refuses_an_agent_image_that_declares_a_volume(tmp_path: Path) -> None:
+    stack = _BuiltStack(tmp_path)
+
+    completed = stack.run("build", FAKE_AGENT_VOLUMES='{"/var/lib/data":{}}')
+
+    assert completed.returncode == 2
+    assert (
+        "integration agent image declares an unexpected persistent volume"
+        in completed.stderr
+    )
+    assert stack.refuses_prebuilt("start")
+
+
+@pytest.mark.parametrize("action", ["build", "validate", "destroy"])
+def test_prebuilt_applies_only_to_start_and_live_checks(
+    tmp_path: Path, action: str
+) -> None:
+    completed = _BuiltStack(tmp_path).run("--prebuilt", action)
+
+    assert completed.returncode == 2
+    assert f"--prebuilt does not apply to {action}" in completed.stderr
