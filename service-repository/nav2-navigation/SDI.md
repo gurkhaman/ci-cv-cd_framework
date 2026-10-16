@@ -25,6 +25,7 @@ artifacts:
     host_requirement:
       os: ubuntu-24.04
       ros_distro: jazzy
+    dockerfile: Dockerfile.jazzy-debs
     route:
       kind: apt
       packages:
@@ -79,9 +80,13 @@ obstacles seen by a planar lidar. Tuned for a TurtleBot3 Waffle Pi.
 
 ## Configuration notes
 
-Uses the TurtleBot3 parameter file installed by `ros-jazzy-turtlebot3-navigation2`
-unchanged. It sets `enable_stamped_cmd_vel: true` on every velocity node, a 0.15 m
-robot radius, and the DWB controller.
+Uses the TurtleBot3 Waffle Pi parameter file unchanged. The recipe copies it
+from TurtleBot3 2.3.6 (da785b7) and Nav2's `navigation_launch.py` from Nav2
+1.3.13 (f4108e5), with only the `nav2_bringup` lookup replaced, and installs
+only the Nav2 servers and plugins they use. The image lists its installed
+packages in `/usr/share/sdi/installed-packages.txt`. The parameter file sets
+`enable_stamped_cmd_vel: true` on every velocity node, a 0.15 m robot radius,
+and the DWB controller.
 
 ## Evaluation
 
