@@ -325,6 +325,7 @@ PINNED_SOURCES = (
     "deployment/jenkins/adapters/composition-v1.yaml",
     "deployment/jenkins/adapters/cv-fixture-v1.yaml",
     "deployment/jenkins/adapters/image-build-fixture-v1.yaml",
+    "deployment/jenkins/adapters/image-build-v1.yaml",
     "deployment/jenkins/agents/Dockerfile",
     "deployment/jenkins/compose.yaml",
     "deployment/jenkins/controller/Dockerfile",

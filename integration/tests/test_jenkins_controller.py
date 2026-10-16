@@ -15,6 +15,9 @@ from typing import TYPE_CHECKING, Any, cast
 from ruamel.yaml import YAML
 
 from sdi_pipeline_integration._integration_code import STALE_IMAGE_REASON
+from sdi_pipeline_integration._jenkins_pipeline import (
+    DESCRIPTORS as JENKINS_DESCRIPTORS,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -100,7 +103,7 @@ def _write_fake_deployment_tools(fake_bin: Path) -> None:
         'case "$*" in\n'
         "  *composition-v1.yaml) "
         f"printf '{FAKE_AGENT_IMAGES[0]}\\n' ;;\n"
-        "  *image-build-fixture-v1.yaml) "
+        "  *image-build-v1.yaml) "
         f"printf '{FAKE_AGENT_IMAGES[1]}\\n' ;;\n"
         f"  *cv-fixture-v1.yaml) printf '{FAKE_AGENT_IMAGES[2]}\\n' ;;\n"
         f"  *cd-fixture-v1.yaml) printf '{FAKE_AGENT_IMAGES[3]}\\n' ;;\n"
@@ -509,6 +512,10 @@ def test_root_pipeline_is_a_thin_scheduler_over_public_cli_operations() -> None:
         ("cd", 1),
     ]
     assert pipeline.count("execute-jenkins-stage") == 1
+    # The runtime refuses any Stage whose descriptor is not its own table's.
+    assert re.findall(r"descriptor: '([^']+)'", pipeline) == [
+        path for _stage, path in JENKINS_DESCRIPTORS
+    ]
     composition_definition = pipeline[
         pipeline.index("name: 'Composition'") : pipeline.index("name: 'Image build'")
     ]

@@ -168,7 +168,7 @@ def test_domain_agents_use_their_descriptor_selected_runtime_image() -> None:
             "${JENKINS_COMPOSITION_AGENT_IMAGE}",
         ),
         "image-build": (
-            "image-build-fixture-v1.yaml",
+            "image-build-v1.yaml",
             "${JENKINS_IMAGE_BUILD_AGENT_IMAGE}",
         ),
         "cv": ("cv-fixture-v1.yaml", "${JENKINS_CV_AGENT_IMAGE}"),
