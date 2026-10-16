@@ -7,8 +7,9 @@ integration work; four independently replaceable agents provide the
 `composition`, `image-build`, `cv`, and `cd` scheduling labels. The root pipeline
 executes one submitted run across those five agents: implemented composition,
 then the image-build, CV, and CD Fixtures. Optional GitHub self-hosted runner
-services, one per repository, pick up the protected handoff job and reach the
-controller over an internal network.
+services, one per repository, pick up the protected handoff job, reach the
+controller over an internal network, and reach GitHub only through their own
+allowlisting proxy.
 
 The tracked authority is:
 
@@ -22,14 +23,18 @@ The tracked authority is:
 - `runner/Dockerfile`: the GitHub Actions runner `2.337.0` image for the
   handoff runners, with the same Python runtime and locked production
   integration package as the agents.
+- `runner-proxy/Dockerfile` and `runner-proxy/squid.conf`: the Squid 6 egress
+  proxy for each handoff runner, built on the same pinned Python runtime image
+  from Debian's `squid` package, and its GitHub Actions endpoint allowlist.
 - `casc/jenkins.yaml`: global security, zero-executor, five-node, retention, and
   Job DSL configuration.
 - `jobs/pipeline-integration.groovy`: the two fixed parameterized Pipeline SCM
   jobs, `pipeline-integration` for upstream and `pipeline-integration-fork` for
   the fork.
 - `compose.yaml`: loopback-only controller publication, named controller state,
-  five agent services, a separate egress-capable network for each agent, and
-  the two optional runner services `runner-upstream` and `runner-fork`.
+  five agent services, a separate egress-capable network for each agent, the
+  two optional runner services `runner-upstream` and `runner-fork`, and each
+  runner's proxy service `runner-upstream-proxy` or `runner-fork-proxy`.
 - `Jenkinsfile`: the thin repository-owned scheduler over public integration CLI
   operations.
 - `bin/stack`: the supported validation and lifecycle interface.
@@ -214,11 +219,12 @@ deployment/jenkins/bin/stack exercise-live
 deployment/jenkins/bin/stack stop
 ```
 
-`start` builds the exact controller and five agent images and the runner image
-of every runner configured in `GITHUB_RUNNERS`, starts the controller, all five
-agents, and those runners, rejects an agent image that declares any volume, and
-waits for process health. It refuses a configured runner that is not registered
-and refuses while a runner executes a job. Jenkins is published on the host only
+`start` builds the exact controller and five agent images and the runner and
+proxy images of every runner configured in `GITHUB_RUNNERS`, starts the
+controller, all five agents, and those runners with their proxies, rejects an
+agent image that declares any volume, and waits for process health. It refuses
+a configured runner that is not registered and refuses while a runner executes
+a job. Jenkins is published on the host only
 at
 `http://127.0.0.1:<configured-port>`. No inbound-agent TCP port is published;
 all agents connect over WebSocket. `stop` removes all containers and networks
@@ -226,8 +232,8 @@ but retains only the `jenkins-home` named volume. Agent workspaces are separate
 tmpfs mounts, have no shared or persistent filesystem, and disappear whenever
 their container is replaced. Their five separate networks allow GitHub checkout
 without making peer agents reachable. `stop`, `status`, `logs`, and `destroy`
-include the runner containers. Every image the stack builds carries the label
-`org.sdi.project=ci-cv-cd_framework`.
+include the runner and proxy containers. Every image the stack builds carries
+the label `org.sdi.project=ci-cv-cd_framework`.
 
 ### GitHub Handoff Runners
 
@@ -253,14 +259,17 @@ For the fork, request the token from
 `repos/gurkhaman/ci-cv-cd_framework/actions/runners/registration-token` and run
 `register-runner fork`. The command requires the runner in `GITHUB_RUNNERS`,
 refuses a token typed at a terminal, refuses while that runner's container
-runs, builds the image, and checks that the runner network reaches the
-controller. It registers against the configured repository URL without `.git`
-and prints the repository URL and runner name, never the token. The default
-names are `jenkins-handoff-stack` and `jenkins-handoff-stack-fork`; another
-installation passes its own with `--name NAME`. An existing registration is
-refused unless `--replace` is given, which discards the local registration and
-replaces a same-named runner in GitHub. `start` refuses a configured runner that
-is not registered and prints the exact registration command.
+runs, builds the runner and proxy images, starts the runner's proxy, and runs
+the runner network check described below. After it accepts the token's form,
+the runner confirms that its proxy opens tunnels to the GitHub endpoints it
+uses, then registers. A failed registration leaves the proxy running; `stop` or
+`destroy` removes it. It registers against the configured repository URL
+without `.git` and prints the repository URL and runner name, never the token.
+The default names are `jenkins-handoff-stack` and `jenkins-handoff-stack-fork`;
+another installation passes its own with `--name NAME`. An existing registration
+is refused unless `--replace` is given, which discards the local registration
+and replaces a same-named runner in GitHub. `start` refuses a configured runner
+that is not registered and prints the exact registration command.
 
 GitHub assigns a queued job to any online runner with the label, so only one
 installation may have an online upstream runner at a time. When another
@@ -275,16 +284,42 @@ nothing. The protected workflow fails a job whose checkout's integration digest
 differs from the runner's; rebuild with `stack start` from a clean checkout of
 that revision. The container runs as the non-root `runner` user without sudo,
 with a read-only root, all capabilities dropped, `no-new-privileges`, no
-environment, secrets, Docker socket, or published ports, and no automatic
-restart. Its job workspace and `/tmp` are tmpfs mounts, so every checkout,
-including its sparse-checkout patterns, is discarded whenever the container
-restarts. The named volume `runner-<repo>-state` holds the runner binaries,
-which the entrypoint replaces from the image on every start, and the
+environment except its proxy settings, no secrets, Docker socket, or published
+ports, and no automatic restart. Its job workspace and `/tmp` are tmpfs mounts,
+so every checkout, including its sparse-checkout patterns, is discarded whenever
+the container restarts. The named volume `runner-<repo>-state` holds the runner
+binaries, which the entrypoint replaces from the image on every start, and the
 registration. The registration files `.runner`, `.credentials`, and
-`.credentials_rsaparams` are long-lived credentials of that runner. The runner
-reaches Jenkins as `http://controller:8080` over the internal network
-`runner-<repo>-controller`, shared only with the controller, and the internet
-over its own `runner-<repo>-egress` network.
+`.credentials_rsaparams` are long-lived credentials of that runner.
+
+The runner joins only the internal network `runner-<repo>-controller`, shared
+with the controller and its proxy, so it has no default route and resolves no
+external name. The missing external DNS relies on Docker Engine 27 or newer,
+which the stack preflight requires, not forwarding external lookups for
+containers on internal-only networks. It reaches Jenkins directly as
+`http://controller:8080`. Its `HTTPS_PROXY` and `HTTP_PROXY` name
+`http://runner-<repo>-proxy:3128`, and `NO_PROXY` exempts only `controller`,
+`localhost`, and `127.0.0.1`. The proxy alone joins `runner-<repo>-egress`. It
+admits only HTTPS `CONNECT` tunnels on port 443 to `github.com`,
+`api.github.com`, `codeload.github.com`, any `*.actions.githubusercontent.com`
+host, and any `*.blob.core.windows.net` host, which serves Actions artifacts and
+logs. It refuses IP-literal targets, plain HTTP, and every other host with a
+Squid `403`. It caches nothing, runs as the non-root `proxy` user with the same
+container hardening as the runner, keeps its runtime files on tmpfs, and logs
+each request to the container log. `objects.githubusercontent.com` is not
+admitted because it serves only runner self-updates, which the runner disables.
+When GitHub changes its Actions endpoints, update the allowlist in
+`runner-proxy/squid.conf` and the hosts the runner's `egress` check probes in
+`runner/sdi-runner-entrypoint` together.
+
+`sdi-runner-entrypoint check` proves, from inside the runner, that the
+controller answers directly; that the proxy refuses `example.com`, IPv4 and
+IPv6 literal tunnels, and plain HTTP with a Squid `403`; that the container has
+no default route; and that `example.com` does not resolve while `controller`
+and the proxy do. It needs no internet access. `sdi-runner-entrypoint egress`
+proves the proxy opens a tunnel to each concrete GitHub endpoint the runner
+uses and therefore needs internet access. `verify-live` runs both in every
+running configured runner.
 
 To remove a runner, stop the stack, remove it from `GITHUB_RUNNERS`, delete the
 runner in the repository's Actions runner settings, and delete its registration
@@ -507,17 +542,20 @@ containers, Stage-scoped secret bindings, and sanitized evidence. Use
 `docs/installation-readiness-checklist.md`; do not paste Jenkins console output
 as evidence.
 
-Each runner reaches the controller only over its own internal network and the
-internet only over its own egress network. It has no Docker socket, no Jenkins
-state or secret files, and no Jenkins credential except the API token GitHub
-releases to the protected handoff job. Its outbound traffic is not limited to
-GitHub, matching the retired native runner: Docker cannot filter by domain, and
-GitHub's endpoints change. The residual risk is that code from any workflow that
-targets `sdi-jenkins-handoff` in that repository can reach arbitrary hosts and
-the Jenkins HTTP API, though it still needs credentials it does not otherwise
-have. The label remains an operational selector, not an authorization control.
-A follow-up issue will restrict runner egress to GitHub Actions endpoints
-through an allowlisting proxy.
+Each runner reaches the controller directly over its own internal network and
+the internet only through its own proxy, which admits HTTPS tunnels to the
+GitHub Actions endpoints alone. It has no Docker socket, no Jenkins state or
+secret files, and no Jenkins credential except the API token GitHub releases to
+the protected handoff job. The proxy stops job code from reaching arbitrary
+hosts, the host's LAN, and cloud metadata services; it does not prevent data
+exfiltration. The residual risk is that code from any workflow that targets
+`sdi-jenkins-handoff` in that repository can still send data to any Azure
+storage account under `*.blob.core.windows.net`, or to `github.com` and
+`api.github.com` with credentials an attacker supplies, and can reach the
+Jenkins HTTP API by design, though it still needs credentials it does not
+otherwise have. The proxy does not inspect TLS or filter paths, and it does not
+chain to an upstream corporate proxy. The label remains an operational
+selector, not an authorization control.
 
 ## Troubleshooting
 
@@ -560,10 +598,13 @@ and execute twice on every label to prove correct node allocation, clean
 workspaces, the integration/Domain role boundary, one-secret visibility, missing
 Docker access, and runtime network isolation. The checker also distinguishes
 missing labels, invalid mappings, incorrect executor counts, unavailable agents,
-and admissible busy agents. The smoke builds the runner image and, without
-contacting GitHub, proves that registration reaches the controller over the
-runner network and rejects an invalid token, and that `start` refuses the
-unregistered runner. It never registers a runner.
+and admissible busy agents. The smoke builds the runner and proxy images and,
+without contacting GitHub, proves that registration runs the runner network
+check, so the runner reaches the controller directly, the proxy refuses
+non-allowlisted, IP-literal, and plain HTTP requests, and the runner has no
+default route or external DNS, then rejects an invalid token; and that `start`
+refuses the unregistered runner. It never registers a runner and does not run
+the internet-dependent `egress` check.
 
 The smoke then mutates controller and node configuration, deletes one managed
 node and both fixed jobs, restarts the controller and all five agents while
@@ -623,6 +664,15 @@ its current release, so repin the runner promptly after each Actions runner
 release rather than treating the bump as optional. The Debian `git` and
 `libicu76` packages are installed with `apt-get` during the build and are not
 version-pinned.
+
+The runner proxy image builds on the same pinned CPython runtime image, so it
+has no `installation.env` key of its own; `validate-installation` checks that
+`runner-proxy/Dockerfile` consumes `SDI_PYTHON_RUNTIME_IMAGE` and that both
+proxy services in `compose.yaml` are tagged with its `SQUID_MAJOR` argument.
+The Debian `squid` package is installed with `apt-get` during the build and is
+not version-pinned; the build asserts that the installed Squid has the
+`SQUID_MAJOR` major version. Change `SQUID_MAJOR` and both proxy image tags as
+one review unit; a runtime pin change rebuilds the proxy with the runner.
 
 Controller health and Fixture execution prove pipeline machinery only. They are
 not Domain success, Validation evidence, deployment evidence, or KPI evidence.

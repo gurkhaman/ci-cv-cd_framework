@@ -55,16 +55,17 @@ Never approve untrusted external-fork workflow code for this runner. An
 organization workflow-restricted runner group requires a separately reviewed
 extension to the runner service before it can replace this configuration.
 
-Each runner reaches the controller only over its own internal network and the
-internet only over its own egress network. It has no Docker socket, no Jenkins
-state or secret files, and no Jenkins credential except the API token GitHub
-releases to the protected handoff job. Its outbound traffic is not limited to
-GitHub, matching the retired native runner: Docker cannot filter by domain, and
-GitHub's endpoints change. Code from any workflow that targets
-`sdi-jenkins-handoff` in the repository can therefore reach arbitrary hosts and
-the Jenkins HTTP API, though it still needs credentials it does not otherwise
-have. A follow-up issue will restrict runner egress to GitHub Actions endpoints
-through an allowlisting proxy.
+Each runner reaches the controller directly over its own internal network and
+the internet only through its own Squid proxy, which admits HTTPS tunnels to
+`github.com`, `api.github.com`, `codeload.github.com`,
+`*.actions.githubusercontent.com`, and `*.blob.core.windows.net` alone. It has
+no Docker socket, no Jenkins state or secret files, and no Jenkins credential
+except the API token GitHub releases to the protected handoff job. The proxy
+stops arbitrary-host, LAN, and cloud metadata access, not data exfiltration:
+code from any workflow that targets `sdi-jenkins-handoff` in the repository can
+still send data to any Azure storage account or, with credentials it supplies,
+to GitHub, and can reach the Jenkins HTTP API by design, though it still needs
+credentials it does not otherwise have.
 
 ## Dispatch One Request
 
