@@ -26,10 +26,7 @@ from ._contracts import (
     reject_explicit_nulls,
 )
 from ._stage_contracts import Sha256, SlotName  # noqa: TC001
-from ._stage_registry import (
-    EXPECTED_STAGE_INPUT_SLOTS,
-    StageName,
-)
+from ._stage_registry import EXPECTED_STAGE_INPUT_SLOTS, StageName
 
 if TYPE_CHECKING:
     from pydantic import GetCoreSchemaHandler, GetJsonSchemaHandler
