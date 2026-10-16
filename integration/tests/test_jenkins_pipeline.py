@@ -203,7 +203,7 @@ def _execute_chain(  # noqa: PLR0913, PLR0917
     request_path: str,
     root: Path,
     started_millis: str,
-    run_deadline_millis: int | None = None,
+    run_limit_seconds: int = 60,
     work_limits: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
     """Run every Stage, each given the supplied inputs it is granted."""
@@ -212,8 +212,8 @@ def _execute_chain(  # noqa: PLR0913, PLR0917
     assert json.loads(preflight.stdout)["execution_id"] == EXECUTION_ID
 
     attempts: list[Path] = []
-    deadline = str(run_deadline_millis or int(time.time() * 1000) + 60_000)
     configured_work_limits = WORK_LIMITS | (work_limits or {})
+    deadline = str(int((time.time() + run_limit_seconds) * 1000))
     for stage, descriptor in DESCRIPTORS:
         attempt_root = root / "transfers" / stage
         command = [
@@ -899,7 +899,7 @@ def test_distributed_timeout_records_one_attempt_and_skips(tmp_path: Path) -> No
         "runs/conformance/composition-timeout.yaml",
         tmp_path / "run",
         str(int((time.time() - 1) * 1000)),
-        int(time.time() * 1000) + 2_000,
+        run_limit_seconds=2,
     )
 
     assert conclusion.returncode == 1, conclusion.stderr
