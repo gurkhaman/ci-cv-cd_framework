@@ -115,7 +115,7 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     installation.add_argument("--installation", type=Path, required=True)
     services = commands.add_parser(
         "validate-service-repository",
-        help="validate every SDI.md service description under a directory",
+        help="validate the SDI.md of every service folder under a directory",
     )
     services.add_argument("--service-repository", type=Path, required=True)
     assess = commands.add_parser(
@@ -283,7 +283,7 @@ def _add_supplied_input_arguments(
         "--service-repository",
         type=Path,
         required=require_service_repository,
-        help="directory of SDI.md service descriptions given to composition",
+        help="directory of service folders given to composition",
     )
     _add_composition_selection_arguments(parser)
 

@@ -31,9 +31,6 @@ artifacts:
         - ros-jazzy-nav2-bringup=1.3.13-1*
         - ros-jazzy-navigation2=1.3.13-1*
         - ros-jazzy-turtlebot3-navigation2=2.3.6-1*
-    invocation: >-
-      ros2 launch nav2_bringup navigation_launch.py use_sim_time:=false
-      params_file:=/opt/ros/jazzy/share/turtlebot3_navigation2/param/waffle_pi.yaml
 
 subscribes:
   /map:       {type: nav_msgs/msg/OccupancyGrid, reliability: reliable, durability: transient_local}

@@ -64,10 +64,13 @@ composition and reject `--service-repository`, `--composition-config`, and
 always requires `--service-repository`. The Jenkins preflight takes only
 `--composition-config` and `--generator`, to check the config's key names, and
 `finalize-jenkins-run` takes none of them.
-`--service-repository` names a directory of `SDI.md` descriptions; the runtime
-copies every description into the composition Stage's inputs and gives the
-adapter a manifest of their paths, sizes, and digests. It refuses symbolic
-links, non-regular descriptions, and more than 256 files or 1 MiB.
+`--service-repository` names a directory of service folders, each holding its
+`<service_id>/SDI.md` description and any recipes; the runtime copies every
+regular file in the service folders into the composition Stage's inputs and
+gives the adapter a manifest of their paths, sizes, and digests. It skips files
+at the directory's root and refuses a folder without `SDI.md`, dotfiles and other
+unsupported names, symbolic links, non-regular files, and more than 256 files or
+1 MiB. Only each folder's `SDI.md` is a description.
 `--composition-config` is a repository path read at the resolved commit and
 defaults to `integration/composition-config.yaml`
 (`sdi.composition-config/v1`), so a run can only pair a reviewed model endpoint
@@ -166,9 +169,10 @@ with its reason and size, every omitted one with its reason (`not retrieved` or
 proposal is preferred and discovery omitted descriptions, the assessment reason
 says the result holds within the bounded supplied context. It is never an input
 to a later Stage. Each assessed service carries its chosen artifact's `route` as
-declared. A `mutable-artifact` finding marks a route that may install different
-content later: any apt route, an image without a digest, or a source revision
-that is not a full commit. It is read from the declared route only, never
+declared. A route is provenance only and does not describe what the artifact's
+`dockerfile:` recipe builds. A `mutable-artifact` finding marks a route that may
+install different content later: any apt route, an image without a digest, or a
+source revision that is not a full commit. It is read from the declared route only, never
 resolved against a registry, and never counts as a gap. Reading the repository
 fails rather than truncates at its limits, so the digests omit no description.
 Reason summaries and the diagnostic come from fixed templates

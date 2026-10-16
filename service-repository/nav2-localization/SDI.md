@@ -33,10 +33,6 @@ artifacts:
         - ros-jazzy-nav2-amcl=1.3.13-1*
         - ros-jazzy-nav2-map-server=1.3.13-1*
         - ros-jazzy-turtlebot3-navigation2=2.3.6-1*
-    invocation: >-
-      ros2 launch nav2_bringup localization_launch.py use_sim_time:=false
-      map:=/opt/ros/jazzy/share/turtlebot3_navigation2/map/map.yaml
-      params_file:=/opt/ros/jazzy/share/turtlebot3_navigation2/param/waffle_pi.yaml
 
 subscribes:
   /scan:        {type: sensor_msgs/msg/LaserScan, reliability: best_effort, durability: volatile}

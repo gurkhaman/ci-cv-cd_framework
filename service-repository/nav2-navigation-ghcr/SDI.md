@@ -25,10 +25,6 @@ artifacts:
     route:
       kind: image
       reference: ghcr.io/ros-navigation/navigation2:jazzy@sha256:42461897f0b0fc2ce2d023ea4a5304d60af68a615d284020a1e221785b18b6e7
-    invocation: >-
-      docker run --rm --network host
-      ghcr.io/ros-navigation/navigation2:jazzy@sha256:42461897f0b0fc2ce2d023ea4a5304d60af68a615d284020a1e221785b18b6e7
-      ros2 launch nav2_bringup navigation_launch.py use_sim_time:=false
 ---
 
 ## Purpose
