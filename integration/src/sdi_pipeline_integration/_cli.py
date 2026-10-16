@@ -145,9 +145,12 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     generate.add_argument("--evidence", type=Path, required=True)
     adapter_image = commands.add_parser(
         "adapter-image",
-        help="print the immutable runtime image selected by an adapter descriptor",
+        help="print the immutable runtime image selected by each adapter "
+        "descriptor, one per line in argument order",
     )
-    adapter_image.add_argument("--descriptor", type=Path, required=True)
+    adapter_image.add_argument(
+        "--descriptor", type=Path, action="append", required=True
+    )
     execute = commands.add_parser(
         "execute-stage",
         help="execute and transactionally accept one trusted Stage adapter",
@@ -508,15 +511,15 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
     if arguments.command == "generate-proposals":
         return _generate_proposals(arguments)
     if arguments.command == "adapter-image":
-        try:
-            document = parse_yaml(
-                arguments.descriptor.read_bytes(), str(arguments.descriptor)
-            )
-            descriptor = AdapterDescriptor.model_validate(document)
-        except (InputError, OSError, ValidationError) as error:
-            sys.stderr.write(f"sdi-integration: {error}\n")
-            return 2
-        sys.stdout.write(f"{descriptor.image}\n")
+        images: list[str] = []
+        for path in cast("list[Path]", arguments.descriptor):
+            try:
+                document = parse_yaml(path.read_bytes(), str(path))
+                images.append(AdapterDescriptor.model_validate(document).image)
+            except (InputError, OSError, ValidationError) as error:
+                sys.stderr.write(f"sdi-integration: {path}: {error}\n")
+                return 2
+        sys.stdout.write("".join(f"{image}\n" for image in images))
         return 0
     if arguments.command == "execute-stage":
         attempt_existed = arguments.attempt_root.exists() or (

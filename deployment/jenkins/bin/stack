@@ -6,6 +6,7 @@ repository_root=$(CDPATH= cd -- "$root/../.." && pwd)
 installation=$repository_root/deployment/installation.env
 config=$root/config/local/controller.env
 project_name=${COMPOSE_PROJECT_NAME:-sdi-jenkins}
+prebuilt=
 
 fail() {
     printf 'stack: %s\n' "$1" >&2
@@ -14,7 +15,7 @@ fail() {
 
 usage() {
     printf '%s\n' \
-        'usage: stack [--config PATH] [--project-name NAME] setup|preflight|validate|start-controller|start|stop|status|logs|destroy|smoke|quiesce|resume|verify-live|exercise-live|reconcile-agent AGENT|register-runner upstream|fork [--name NAME] [--replace]'
+        'usage: stack [--config PATH] [--project-name NAME] [--prebuilt] setup|preflight|validate|build|start-controller|start|stop|status|logs|destroy|smoke|quiesce|resume|verify-live|exercise-live|reconcile-agent AGENT|register-runner upstream|fork [--name NAME] [--replace]'
 }
 
 while [ "$#" -gt 0 ]; do
@@ -28,6 +29,10 @@ while [ "$#" -gt 0 ]; do
             [ "$#" -ge 2 ] || fail '--project-name requires a value'
             project_name=$2
             shift 2
+            ;;
+        --prebuilt)
+            prebuilt=true
+            shift
             ;;
         -h|--help)
             usage
@@ -608,7 +613,7 @@ validate_registration_target() {
 }
 
 case "$action" in
-    start-controller)
+    start-controller|build)
         validate_secret_file "$JENKINS_ADMIN_PASSWORD_FILE"
         validate_secret_file "$JENKINS_HANDOFF_PASSWORD_FILE"
         validate_secret_file "$JENKINS_OPENAI_API_KEY_FILE"
@@ -675,18 +680,21 @@ platform=$(docker version --format '{{.Server.Os}}/{{.Server.Arch}}' 2>/dev/null
     fail 'Docker Engine is not reachable'
 [ "$platform" = linux/amd64 ] || fail "Docker Engine must be linux/amd64, found $platform"
 
-descriptor_image() {
-    descriptor=$1
-    uv run --project "$repository_root/integration" --frozen \
-        sdi-integration adapter-image --descriptor "$root/adapters/$descriptor" \
-        2>/dev/null || \
-        fail "invalid adapter descriptor: $descriptor"
-}
-
-JENKINS_COMPOSITION_AGENT_IMAGE=$(descriptor_image composition-v1.yaml)
-JENKINS_IMAGE_BUILD_AGENT_IMAGE=$(descriptor_image image-build-v1.yaml)
-JENKINS_CV_AGENT_IMAGE=$(descriptor_image cv-fixture-v1.yaml)
-JENKINS_CD_AGENT_IMAGE=$(descriptor_image cd-fixture-v1.yaml)
+adapter_images=$(uv run --project "$repository_root/integration" --frozen \
+    --quiet sdi-integration adapter-image \
+    --descriptor "$root/adapters/composition-v1.yaml" \
+    --descriptor "$root/adapters/image-build-v1.yaml" \
+    --descriptor "$root/adapters/cv-fixture-v1.yaml" \
+    --descriptor "$root/adapters/cd-fixture-v1.yaml") || \
+    fail 'invalid adapter descriptor'
+{
+    read -r JENKINS_COMPOSITION_AGENT_IMAGE
+    read -r JENKINS_IMAGE_BUILD_AGENT_IMAGE
+    read -r JENKINS_CV_AGENT_IMAGE
+    read -r JENKINS_CD_AGENT_IMAGE
+} <<EOF
+$adapter_images
+EOF
 
 export JENKINS_HTTP_PORT JENKINS_ADMIN_ID JENKINS_HANDOFF_ID
 export JENKINS_REPOSITORY_URL JENKINS_FORK_REPOSITORY_URL
@@ -751,6 +759,7 @@ $plugin
         fail 'the runner proxy Dockerfile is not buildable'
     compose config --quiet >/dev/null 2>&1 || \
         fail 'the Compose configuration is invalid'
+    printf '%s\n' 'stack: tracked sources match the reviewed installation authority'
 }
 
 agent_image() {
@@ -825,18 +834,32 @@ case "$action" in
     validate)
         validate
         ;;
-    start-controller)
+    build)
         validate
         build_controller
+        compose build integration ci image-build cv cd
+        for agent in integration ci image-build cv cd; do
+            validate_agent_image "$agent"
+        done
+        ;;
+    start-controller)
+        if [ -z "$prebuilt" ]; then
+            validate
+            build_controller
+        fi
         compose up --no-build --detach --wait --wait-timeout 240 controller
         ;;
     start)
-        validate
-        build_controller
+        agent_services=
+        if [ -z "$prebuilt" ]; then
+            validate
+            build_controller
+            agent_services='integration ci image-build cv cd'
+        fi
         compose pull --quiet --policy missing buildkitd registry
-        compose build integration ci image-build cv cd $runner_services \
-            $proxy_services
-        for agent in integration ci image-build cv cd; do
+        [ -z "$agent_services$runner_services" ] || \
+            compose build $agent_services $runner_services $proxy_services
+        for agent in $agent_services; do
             validate_agent_image "$agent"
         done
         for service in $runner_services; do
@@ -915,7 +938,7 @@ case "$action" in
                 $proxy_services $runner_services
         ;;
     verify-live)
-        validate
+        [ -n "$prebuilt" ] || validate
         "$root/bin/smoke-check" check \
             --url "http://127.0.0.1:$JENKINS_HTTP_PORT" \
             --admin-id "$JENKINS_ADMIN_ID" \
@@ -940,7 +963,7 @@ case "$action" in
         done
         ;;
     exercise-live)
-        validate
+        [ -n "$prebuilt" ] || validate
         integration_code_digest=$(uv run --project "$repository_root/integration" \
             --frozen --quiet sdi-integration integration-code-digest \
             --root "$repository_root/integration")

@@ -56,6 +56,37 @@ def test_cli_reads_the_descriptor_selected_agent_image() -> None:
     )
 
 
+def test_cli_prints_one_agent_image_per_descriptor_in_order(tmp_path: Path) -> None:
+    template = (
+        Path(__file__).parents[2] / "deployment/jenkins/adapters/cd-fixture-v1.yaml"
+    ).read_text()
+    pinned = template.split("@sha256:")[1].split("\n")[0]
+    images = [f"docker.io/library/python@sha256:{digit * 64}" for digit in "21"]
+    arguments = ["sdi-integration", "adapter-image"]
+    for index, image in enumerate(images):
+        descriptor = tmp_path / f"descriptor-{index}.yaml"
+        descriptor.write_text(
+            template.replace(f"docker.io/library/python@sha256:{pinned}", image)
+        )
+        arguments += ["--descriptor", str(descriptor)]
+
+    completed = subprocess.run(arguments, check=False, capture_output=True, text=True)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == "".join(f"{image}\n" for image in images)
+
+    missing = tmp_path / "missing.yaml"
+    completed = subprocess.run(
+        [*arguments, "--descriptor", str(missing)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert str(missing) in completed.stderr
+
+
 def test_fixture_adapter_exposes_only_the_one_shot_run_operation() -> None:
     completed = subprocess.run(
         ["sdi-fixture-adapter", "--help"],
