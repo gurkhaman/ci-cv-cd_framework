@@ -182,8 +182,10 @@ as an operational selector, not an authorization boundary. Trust every write
 collaborator and reviewer who can approve protected-main or external-fork
 workflow code. An organization workflow-restricted runner group requires a
 separately reviewed extension to the runner service before it can replace this
-configuration. The runner's outbound traffic is not limited to GitHub; see the
-security review in `deployment/jenkins/README.md`.
+configuration. The runner's outbound traffic passes only through its own
+proxy, which admits only the GitHub Actions endpoints; the proxy limits where
+job code can connect but does not prevent data exfiltration. See the security
+review in `deployment/jenkins/README.md`.
 
 ## 6. Accept The Installation
 

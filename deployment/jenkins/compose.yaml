@@ -240,9 +240,18 @@ services:
       - /tmp:rw,nosuid,nodev,mode=1777,size=512m
     volumes:
       - runner-upstream-state:/var/lib/sdi-runner
-    networks: [runner-upstream-controller, runner-upstream-egress]
+    environment:
+      https_proxy: http://runner-upstream-proxy:3128
+      HTTPS_PROXY: http://runner-upstream-proxy:3128
+      http_proxy: http://runner-upstream-proxy:3128
+      HTTP_PROXY: http://runner-upstream-proxy:3128
+      no_proxy: controller,localhost,127.0.0.1
+      NO_PROXY: controller,localhost,127.0.0.1
+    networks: [runner-upstream-controller]
     depends_on:
       controller:
+        condition: service_healthy
+      runner-upstream-proxy:
         condition: service_healthy
     healthcheck:
       test: [CMD, sdi-runner-probe, listener]
@@ -269,9 +278,18 @@ services:
       - /tmp:rw,nosuid,nodev,mode=1777,size=512m
     volumes:
       - runner-fork-state:/var/lib/sdi-runner
-    networks: [runner-fork-controller, runner-fork-egress]
+    environment:
+      https_proxy: http://runner-fork-proxy:3128
+      HTTPS_PROXY: http://runner-fork-proxy:3128
+      http_proxy: http://runner-fork-proxy:3128
+      HTTP_PROXY: http://runner-fork-proxy:3128
+      no_proxy: controller,localhost,127.0.0.1
+      NO_PROXY: controller,localhost,127.0.0.1
+    networks: [runner-fork-controller]
     depends_on:
       controller:
+        condition: service_healthy
+      runner-fork-proxy:
         condition: service_healthy
     healthcheck:
       test: [CMD, sdi-runner-probe, listener]
@@ -279,6 +297,60 @@ services:
       timeout: 5s
       retries: 24
       start_period: 60s
+      start_interval: 1s
+
+  runner-upstream-proxy:
+    profiles: [runner-upstream]
+    image: sdi-jenkins-runner-proxy:6
+    platform: linux/amd64
+    build:
+      context: runner-proxy
+      dockerfile: Dockerfile
+    restart: "no"
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /run/squid:rw,nosuid,nodev,noexec,mode=0700,uid=13,gid=13,size=16m
+    networks: [runner-upstream-controller, runner-upstream-egress]
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - import socket; socket.create_connection(("127.0.0.1", 3128), timeout=3).close()
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+      start_interval: 1s
+
+  runner-fork-proxy:
+    profiles: [runner-fork]
+    image: sdi-jenkins-runner-proxy:6
+    platform: linux/amd64
+    build:
+      context: runner-proxy
+      dockerfile: Dockerfile
+    restart: "no"
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /run/squid:rw,nosuid,nodev,noexec,mode=0700,uid=13,gid=13,size=16m
+    networks: [runner-fork-controller, runner-fork-egress]
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - import socket; socket.create_connection(("127.0.0.1", 3128), timeout=3).close()
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
       start_interval: 1s
 
 volumes:

@@ -35,7 +35,7 @@ and Jenkins volume.
 - [ ] Jenkins HTTP publication is loopback-only; no inbound-agent TCP port exists
 - [ ] Administrator, handoff machine user, runner, and five agents are separate identities
 - [ ] Handoff machine user has only reviewed read/build/cancel permission
-- [ ] Runner container is non-root with no sudo, Docker socket, Jenkins state, or persistent Jenkins credential; it reaches only the controller and its own egress network
+- [ ] Runner container is non-root with no sudo, Docker socket, Jenkins state, or persistent Jenkins credential; it reaches only the controller and its own proxy, and `stack verify-live` passed its network `check` and GitHub `egress` check
 - [ ] Each agent receives only its own registration secret and declared Stage secrets
 - [ ] Security review evidence references and UTC time:
 

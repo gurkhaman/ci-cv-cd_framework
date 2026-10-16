@@ -392,6 +392,39 @@ def _validate_runner_pins(repository: Path, pins: InstallationPins) -> None:
         expected="--labels sdi-jenkins-handoff \\",
         label="runner label pin",
     )
+    _validate_runner_proxy_pins(repository, pins, services)
+
+
+def _validate_runner_proxy_pins(
+    repository: Path, pins: InstallationPins, services: dict[str, object]
+) -> None:
+    """Require the proxy to build on the runtime pin and be tagged by Squid major.
+
+    The Dockerfile asserts the installed Squid major version, so the tag names
+    what the image contains without a separate installation key.
+    """
+    proxy = repository / "deployment/jenkins/runner-proxy/Dockerfile"
+    _require_build_arguments(
+        proxy,
+        (("runner proxy runtime pin", "RUNTIME_IMAGE", pins.python_runtime_image),),
+    )
+    if _docker_instructions(proxy, "FROM") != ["${RUNTIME_IMAGE}"]:
+        msg = "runner proxy build does not consume the reviewed runtime pin"
+        raise ValueError(msg)
+    squid_majors = [
+        argument.partition("=")[2]
+        for argument in _docker_instructions(proxy, "ARG")
+        if argument.startswith("SQUID_MAJOR=")
+    ]
+    if len(squid_majors) != 1:
+        msg = "runner proxy Dockerfile must declare ARG SQUID_MAJOR exactly once"
+        raise ValueError(msg)
+    image = f"sdi-jenkins-runner-proxy:{squid_majors[0]}"
+    for name in ("runner-upstream-proxy", "runner-fork-proxy"):
+        service = _mapping(services.get(name), label=f"Compose {name} service")
+        if service.get("image") != image:
+            msg = "runner proxy image tag does not match its Squid major version"
+            raise ValueError(msg)
 
 
 def validate_repository_authority(
