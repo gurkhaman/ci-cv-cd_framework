@@ -549,13 +549,15 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "actionlint-py" },
     { name = "basedpyright" },
     { name = "check-jsonschema" },
     { name = "markdown-it-py" },
     { name = "pytest" },
     { name = "pytest-xdist" },
     { name = "ruff" },
+]
+workflow-lint = [
+    { name = "actionlint-py" },
 ]
 
 [package.metadata]
@@ -568,7 +570,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "actionlint-py", specifier = "==1.7.12.25" },
     { name = "basedpyright", specifier = "==1.40.0" },
     { name = "check-jsonschema", specifier = "==0.38.0" },
     { name = "markdown-it-py", specifier = "==4.0.0" },
@@ -576,6 +577,7 @@ dev = [
     { name = "pytest-xdist", specifier = "==3.8.0" },
     { name = "ruff", specifier = "==0.16.6" },
 ]
+workflow-lint = [{ name = "actionlint-py", specifier = "==1.7.12.25" }]
 
 [[package]]
 name = "sniffio"
