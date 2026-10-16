@@ -24,6 +24,7 @@ artifacts:
     host_requirement:
       os: ubuntu-24.04
       ros_distro: jazzy
+    dockerfile: Dockerfile.jazzy-debs
     route:
       kind: apt
       packages:
@@ -62,7 +63,9 @@ Publishes raw images from a USB webcam (any V4L2 device) as a ROS image stream.
 ## Configuration notes
 
 Defaults kept: `image_size [640, 480]`, `pixel_format YUYV`, `output_encoding rgb8`,
-`camera_frame_id camera`.
+`camera_frame_id camera`. The recipe installs only `ros-jazzy-v4l2-camera` and
+`ros-jazzy-ros2run`, and the image lists its installed packages in
+`/usr/share/sdi/installed-packages.txt`.
 
 ## Evaluation
 
