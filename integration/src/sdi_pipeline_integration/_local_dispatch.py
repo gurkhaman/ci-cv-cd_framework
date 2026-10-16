@@ -27,10 +27,10 @@ from ._stage_contracts import (
     ASCII_CONTROL_LIMIT,
     ASCII_DELETE,
     ImplementationMode,
-    StageName,
     contains_sensitive_contract_material,
     contains_sensitive_material,
 )
+from ._stage_registry import RUN_LIMITS, STAGES, StageName
 from ._stage_runtime import (
     OUTPUT_MODELS,
     StageExecution,
@@ -52,22 +52,14 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
 MAX_RESULT_BYTES = 1024 * 1024
-RUN_DEADLINE_SECONDS = 90 * 60
-FINALIZATION_RESERVE_SECONDS = 2 * 60
-DESCRIPTORS: tuple[tuple[StageName, str], ...] = (
-    ("composition", "deployment/jenkins/adapters/composition-v1.yaml"),
-    ("image_build", "deployment/jenkins/adapters/image-build-fixture-v1.yaml"),
-    ("cv", "deployment/jenkins/adapters/cv-fixture-v1.yaml"),
-    ("cd", "deployment/jenkins/adapters/cd-fixture-v1.yaml"),
-)
 
 
 def _descriptor_modes(
     repository: GitRepository, key_names: Sequence[str]
 ) -> dict[StageName, ImplementationMode]:
     modes: dict[StageName, ImplementationMode] = {}
-    for expected_stage, descriptor_path in DESCRIPTORS:
-        descriptor, _profile = load_stage_adapter(repository, descriptor_path)
+    for expected_stage, stage in STAGES.items():
+        descriptor, _profile = load_stage_adapter(repository, stage.local_descriptor)
         if descriptor.stage != expected_stage:
             msg = "reviewed descriptor order does not match its Stage"
             raise InputError(msg)
@@ -189,10 +181,10 @@ def validate_bundle_documents(  # noqa: C901, PLR0912, PLR0915
         msg = "Pipeline integration result changed before archive capture"
         raise InputError(msg)
     domain_documents: dict[StageName, dict[str, BaseModel]] = {
-        stage: {} for stage, _ in DESCRIPTORS
+        stage: {} for stage in STAGES
     }
     evidence_documents: dict[StageName, list[BaseModel]] = {
-        stage: [] for stage, _ in DESCRIPTORS
+        stage: [] for stage in STAGES
     }
     for artifact in result.artifacts:
         content = captured[artifact.path]
@@ -410,13 +402,15 @@ def dispatch_local(  # noqa: PLR0913, PLR0915
     repository.require_ref_commit(requested_ref)
     granted_inputs = {
         stage: stage_inputs(repository, identified, supplied, stage=stage)
-        for stage, _descriptor_path in DESCRIPTORS
+        for stage in STAGES
     }
     descriptor_modes = _descriptor_modes(
         repository, composition_key_names(repository, supplied)
     )
     run_deadline = (
-        run_started_monotonic + RUN_DEADLINE_SECONDS - FINALIZATION_RESERVE_SECONDS
+        run_started_monotonic
+        + RUN_LIMITS.run_seconds
+        - RUN_LIMITS.finalization_reserve_seconds
     )
 
     bundle_root.parent.mkdir(parents=True, exist_ok=True)
@@ -449,12 +443,12 @@ def dispatch_local(  # noqa: PLR0913, PLR0915
         executions: list[StageExecution] = []
         outputs: dict[str, StageInputSource] = {}
         blocker: StageExecution | None = None
-        for stage, descriptor_path in DESCRIPTORS:
+        for stage in STAGES:
             if blocker is None:
                 execution = execute_identified_stage(
                     repository=repository,
                     identified=identified,
-                    descriptor_path=descriptor_path,
+                    descriptor_path=STAGES[stage].local_descriptor,
                     attempt_root=work_root / stage,
                     available_inputs=granted_inputs[stage] | outputs,
                     deadline_monotonic=run_deadline,

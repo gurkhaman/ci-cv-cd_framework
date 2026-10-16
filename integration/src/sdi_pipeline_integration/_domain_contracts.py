@@ -25,10 +25,9 @@ from ._contracts import (
     TestcaseId,
     reject_explicit_nulls,
 )
-from ._stage_contracts import (
+from ._stage_contracts import Sha256, SlotName  # noqa: TC001
+from ._stage_registry import (
     EXPECTED_STAGE_INPUT_SLOTS,
-    Sha256,
-    SlotName,
     StageName,
 )
 

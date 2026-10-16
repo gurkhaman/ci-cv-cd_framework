@@ -717,6 +717,12 @@ def test_restore_verifies_before_writing_an_empty_volume(tmp_path: Path) -> None
             "image: docker.io/library/registry:3.1.2@sha256:e",
             "registry image pin does not match",
         ),
+        (
+            "deployment/jenkins/adapters/image-build-fixture-v1.yaml",
+            "image: docker.io/library/python@sha256:2",
+            "image: docker.io/library/python@sha256:3",
+            "image-build-fixture-v1.yaml image pin does not match",
+        ),
     ],
 )
 def test_authority_rejects_a_deployment_image_that_drifts_from_the_pins(

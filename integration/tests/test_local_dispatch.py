@@ -15,11 +15,12 @@ from typing import Any, cast
 import pytest
 
 from sdi_pipeline_integration._local_dispatch import dispatch_local
-from sdi_pipeline_integration._stage_contracts import (
-    EXPECTED_STAGE_INPUT_SLOTS,
-    STAGE_GRANTS,
-)
 from sdi_pipeline_integration._stage_profiles import stage_profile_bytes
+from sdi_pipeline_integration._stage_registry import (
+    EXPECTED_STAGE_INPUT_SLOTS,
+    STAGE_ORDER,
+    STAGES,
+)
 from sdi_pipeline_integration._stage_runtime import (
     ADAPTER_SHUTDOWN_GRACE_SECONDS,
     SuppliedInputs,
@@ -44,7 +45,6 @@ S04_RUN_REQUEST_PATHS = tuple(
     expected["run_request_path"] for expected in S04_COMBINATION_EXPECTATIONS.values()
 )
 RUN_REQUEST_PATH = S04_RUN_REQUEST_PATHS[0]
-STAGES = ["composition", "image_build", "cv", "cd"]
 COMMITTED_FILES = (
     *S04_RUN_REQUEST_PATHS,
     "requirements/s-04/deliver-book-to-joe.md",
@@ -180,10 +180,14 @@ def _dispatch_with_composition_limit(
     run_request_path: str = RUN_REQUEST_PATH,
 ) -> dict[str, Any]:
     """Run in process so the registry's one-second limit reaches the run."""
+    composition = STAGES["composition"]
     monkeypatch.setitem(
-        STAGE_GRANTS,
+        STAGES,
         "composition",
-        dataclasses.replace(STAGE_GRANTS["composition"], work_limit_seconds=1),
+        dataclasses.replace(
+            composition,
+            grant=dataclasses.replace(composition.grant, work_limit_seconds=1),
+        ),
     )
     (repository / "integration/stage-profiles/composition-v1.yaml").write_bytes(
         stage_profile_bytes("composition")
@@ -232,7 +236,7 @@ def test_dispatches_a_contract_valid_deterministic_four_stage_fixture(
     assert "overall_verdict" not in first_result
     assert [
         attempt["correlation"]["stage"] for attempt in first_result["attempts"]
-    ] == (STAGES)
+    ] == list(STAGE_ORDER)
     assert all(
         attempt["correlation"]["execution_id"] == first_result["execution_id"]
         and attempt["correlation"]["attempt_number"] == 1
