@@ -170,4 +170,4 @@ exercise
 "$stack" --config "$config" --project-name "$project_name" start
 check
 
-printf '%s\n' 'Ephemeral Jenkins controller, five-agent, and handoff-runner smoke check passed.'
+printf '%s\n' 'Ephemeral Jenkins controller, five-agent, builder, and handoff-runner smoke check passed.'
