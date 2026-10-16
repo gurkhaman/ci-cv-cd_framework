@@ -95,8 +95,9 @@ exercise() {
 check
 
 # The runner image, its controller network, and both registration guards,
-# without registering with GitHub: registration reaches the controller check
-# and then rejects the token, and start refuses the unregistered runner.
+# without registering with GitHub: registration first passes the runner
+# network check, which needs no internet, and then rejects the token, and
+# start refuses the unregistered runner.
 expect_refusal() {
     expected=$1
     shift

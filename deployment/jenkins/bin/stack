@@ -364,13 +364,20 @@ case "$GITHUB_RUNNERS" in
     ''|upstream|fork|upstream,fork|fork,upstream) ;;
     *) fail 'GITHUB_RUNNERS must be empty or list upstream, fork, or both, separated by a comma' ;;
 esac
+# Each runner's egress proxy shares its profile but stays out of
+# runner_services, whose names map to runner registrations.
 runner_services=
+proxy_services=
 for configured_runner in upstream fork; do
     case ",$GITHUB_RUNNERS," in
-        *",$configured_runner,"*) runner_services="$runner_services runner-$configured_runner" ;;
+        *",$configured_runner,"*)
+            runner_services="$runner_services runner-$configured_runner"
+            proxy_services="$proxy_services runner-$configured_runner-proxy"
+            ;;
     esac
 done
 runner_services=${runner_services# }
+proxy_services=${proxy_services# }
 COMPOSE_PROFILES=$(printf '%s' "$runner_services" | tr ' ' ',')
 export COMPOSE_PROFILES
 
@@ -738,6 +745,9 @@ $plugin
         >/dev/null 2>&1 || fail 'the agent Dockerfile is not buildable'
     docker build --check --file "$root/runner/Dockerfile" "$repository_root" \
         >/dev/null 2>&1 || fail 'the runner Dockerfile is not buildable'
+    docker build --check --file "$root/runner-proxy/Dockerfile" \
+        "$root/runner-proxy" >/dev/null 2>&1 || \
+        fail 'the runner proxy Dockerfile is not buildable'
     compose config --quiet >/dev/null 2>&1 || \
         fail 'the Compose configuration is invalid'
 }
@@ -822,7 +832,8 @@ case "$action" in
     start)
         validate
         build_controller
-        compose build integration ci image-build cv cd $runner_services
+        compose build integration ci image-build cv cd $runner_services \
+            $proxy_services
         for agent in integration ci image-build cv cd; do
             validate_agent_image "$agent"
         done
@@ -841,7 +852,7 @@ case "$action" in
         running=$(running_runner_containers "runner-$runner") || \
             fail 'cannot inspect the GitHub runner containers'
         [ -z "$running" ] || fail "stop the $runner runner before registering it"
-        compose build "runner-$runner"
+        compose build "runner-$runner" "runner-$runner-proxy"
         status=0
         runner_registration "$runner" >/dev/null 2>&1 || status=$?
         case "$status:$runner_replace" in
@@ -849,8 +860,11 @@ case "$action" in
             0:) fail "the $runner runner is already registered; pass --replace to register it again" ;;
             *) fail "cannot read the $runner runner registration" ;;
         esac
+        # The proxy stays up if registration fails; stop or destroy removes it.
+        compose up --no-build --no-deps --detach --wait --wait-timeout 240 \
+            "runner-$runner-proxy"
         compose run --rm --no-deps -T "runner-$runner" check </dev/null || \
-            fail "the $runner runner cannot reach the controller; start the stack first"
+            fail "the $runner runner failed its network check; start the stack first"
         compose run --rm --no-deps -T "runner-$runner" register \
             "$(runner_repository_url "$runner")" "$runner_name" $runner_replace
         ;;
@@ -896,7 +910,7 @@ case "$action" in
         admin_check resume
         [ -z "$runner_services" ] || \
             compose up --no-build --no-deps --detach --wait --wait-timeout 240 \
-                $runner_services
+                $proxy_services $runner_services
         ;;
     verify-live)
         validate
@@ -918,7 +932,9 @@ case "$action" in
             docker exec "$container" sdi-runner-probe listener || \
                 fail "the $service container is not listening for GitHub jobs"
             docker exec "$container" sdi-runner-entrypoint check || \
-                fail "the $service container cannot reach the controller"
+                fail "the $service container failed its network check"
+            docker exec "$container" sdi-runner-entrypoint egress || \
+                fail "the $service container cannot reach GitHub through its proxy"
         done
         ;;
     exercise-live)

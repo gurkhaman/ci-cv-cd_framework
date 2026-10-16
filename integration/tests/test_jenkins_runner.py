@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import pty
@@ -23,6 +24,9 @@ JENKINS_ROOT = REPOSITORY_ROOT / "deployment" / "jenkins"
 RUNNER_ROOT = JENKINS_ROOT / "runner"
 STACK = JENKINS_ROOT / "bin" / "stack"
 RUNNERS = ("runner-upstream", "runner-fork")
+PROXY_UP_ARGS = (
+    "--no-build --no-deps --detach --wait --wait-timeout 240 runner-fork-proxy"
+)
 TOKEN = "AREGISTRATIONTOKEN123"  # noqa: S105 - fake value for the fake runner.
 FAKE_DOCKER = r"""#!/bin/sh
 printf '%s|profiles=%s\n' "$*" "${COMPOSE_PROFILES-unset}" >> "$EVENT_LOG"
@@ -203,6 +207,26 @@ def test_runner_proxy_admits_only_https_tunnels_to_github_actions_hosts() -> Non
     assert not any(line[0] == "cache_dir" for line in lines)
 
 
+def test_runner_egress_probes_and_proxy_allowlist_cover_each_other() -> None:
+    entrypoint = (RUNNER_ROOT / "sdi-runner-entrypoint").read_text(encoding="utf-8")
+    probed = ast.literal_eval(
+        entrypoint.split("ALLOWLISTED = ", 1)[1].split("\n)\n", 1)[0] + "\n)"
+    )
+    squid = (JENKINS_ROOT / "runner-proxy" / "squid.conf").read_text(encoding="utf-8")
+    allowlist = next(
+        line.split()[4:]
+        for line in squid.splitlines()
+        if line.startswith("acl allowlisted dstdomain -n ")
+    )
+
+    def admits(entry: str, host: str) -> bool:
+        return host.endswith(entry) if entry.startswith(".") else host == entry
+
+    assert probed
+    assert all(any(admits(entry, host) for entry in allowlist) for host in probed)
+    assert all(any(admits(entry, host) for host in probed) for entry in allowlist)
+
+
 def test_runner_registers_once_without_updates_or_default_labels() -> None:
     entrypoint = (RUNNER_ROOT / "sdi-runner-entrypoint").read_text(encoding="utf-8")
 
@@ -247,6 +271,25 @@ def test_runner_image_and_check_require_the_git_options_the_cli_uses() -> None:
     assert '"--no-lazy-fetch",' in git_input
     assert "    && git --no-lazy-fetch --version\n" in dockerfile
     assert "        git --no-lazy-fetch --version >/dev/null || fail" in entrypoint
+
+
+def test_runner_network_check_rejects_an_unknown_mode() -> None:
+    entrypoint = (RUNNER_ROOT / "sdi-runner-entrypoint").read_text(encoding="utf-8")
+    functions = "\n".join(
+        entrypoint[entrypoint.index(f"\n{name}() {{\n") :].split("\n}\n", 1)[0] + "\n}"
+        for name in ("fail", "network")
+    )
+
+    completed = subprocess.run(
+        ["sh", "-c", f'{functions}\nnetwork "$1"', "sh", "probe"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ["PATH"], "HTTPS_PROXY": "http://proxy:3128"},
+    )
+
+    assert completed.returncode == 2
+    assert "unknown network mode: probe" in completed.stderr
 
 
 class _FakeJenkins(BaseHTTPRequestHandler):
@@ -408,9 +451,10 @@ def test_register_runner_pipes_the_token_to_a_one_off_runner_container(
     registrations = [line for line in log if line.endswith(registration)]
     assert len(registrations) == 1
     assert stack.profiles(registration) == ["runner-fork"]
-    assert stack.profiles("build runner-fork") == ["runner-fork"]
+    assert stack.profiles("build runner-fork runner-fork-proxy") == ["runner-fork"]
+    proxy = next(line for line in log if line.endswith(" up " + PROXY_UP_ARGS))
     check = next(line for line in log if line.endswith("-T runner-fork check"))
-    assert log.index(check) < log.index(registrations[0])
+    assert log.index(proxy) < log.index(check) < log.index(registrations[0])
     assert TOKEN not in stack.events.read_text(encoding="utf-8")
     assert TOKEN not in completed.stdout + completed.stderr
 
@@ -421,7 +465,7 @@ def test_register_runner_pipes_the_token_to_a_one_off_runner_container(
         ("upstream", {}, "add fork to GITHUB_RUNNERS"),
         ("fork", {"FAKE_RUNNING": "runner-fork"}, "stop the fork runner"),
         ("fork", {"FAKE_REGISTERED": "runner-fork"}, "pass --replace"),
-        ("fork", {"FAKE_UNREACHABLE": "yes"}, "cannot reach the controller"),
+        ("fork", {"FAKE_UNREACHABLE": "yes"}, "the fork runner failed its network"),
     ],
 )
 def test_register_runner_refuses_unsafe_or_redundant_registration(
@@ -485,10 +529,10 @@ def test_start_refuses_while_a_runner_executes_a_job(tmp_path: Path) -> None:
     ("runners", "services", "profiles"),
     [
         ("", "", ""),
-        ("fork", " runner-fork", "runner-fork"),
+        ("fork", " runner-fork runner-fork-proxy", "runner-fork"),
         (
             "fork,upstream",
-            " runner-upstream runner-fork",
+            " runner-upstream runner-fork runner-upstream-proxy runner-fork-proxy",
             "runner-upstream,runner-fork",
         ),
     ],
@@ -507,6 +551,8 @@ def test_start_builds_and_starts_only_the_configured_runners(
     assert stack.profiles("up --no-build --detach --wait --wait-timeout 240") == [
         profiles
     ]
+    proxy_check = f"build --check --file {JENKINS_ROOT}/runner-proxy/Dockerfile"
+    assert any(line.startswith(proxy_check) for line in stack.log())
 
 
 @pytest.mark.parametrize("action", ["stop", "status", "logs", "destroy"])
@@ -565,7 +611,8 @@ def test_quiesce_stops_runners_before_jenkins_and_resume_restarts_them(
     assert not any(line.startswith("start ") for line in log)
     assert log.index("jenkins /cancelQuietDown") < len(log) - 1
     assert log[-1].endswith(
-        "up --no-build --no-deps --detach --wait --wait-timeout 240 runner-fork"
+        "up --no-build --no-deps --detach --wait --wait-timeout 240 "
+        "runner-fork-proxy runner-fork"
     )
 
 
