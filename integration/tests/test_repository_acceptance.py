@@ -236,6 +236,19 @@ def test_verification_is_the_complete_fail_fast_acceptance_gate(tmp_path: Path) 
     assert "Repository acceptance passed." not in failed.stdout
 
 
+def test_verification_fails_when_stage_status_cannot_read_a_descriptor(
+    tmp_path: Path,
+) -> None:
+    checkout, verify = _acceptance_checkout(tmp_path)
+    environment = _environment(tmp_path) | {"STAGE_STATUS_PYTHON": sys.executable}
+
+    completed = _run([verify], checkout, environment)
+
+    assert completed.returncode != 0
+    assert "sdi-integration: " in completed.stderr
+    assert "Repository acceptance passed." not in completed.stdout
+
+
 def _commands(tmp_path: Path) -> list[str]:
     return (tmp_path / "acceptance.log").read_text(encoding="utf-8").splitlines()
 
