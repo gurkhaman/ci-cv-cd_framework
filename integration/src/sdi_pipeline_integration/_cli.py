@@ -187,7 +187,7 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     preflight.add_argument("--build-started-at-millis", required=True)
     preflight.add_argument("--integration-node", required=True)
     preflight.add_argument("--integration-baked-code-digest", required=True)
-    for flag in ("--stage-node", "--stage-baked-code-digest", "--stage-work-limit"):
+    for flag in ("--stage-node", "--stage-baked-code-digest"):
         preflight.add_argument(
             flag,
             type=_stage_assignment,
@@ -216,7 +216,7 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     jenkins_execute.add_argument(
         "--prior-attempt-root", type=Path, action="append", default=[]
     )
-    jenkins_execute.add_argument("--work-limit-seconds", type=int, required=True)
+    jenkins_execute.add_argument("--work-limit-seconds", type=int)
     jenkins_execute.add_argument("--run-deadline-epoch-millis", required=True)
     jenkins_execute.add_argument("--baked-code-digest", required=True)
     _add_composition_selection_arguments(jenkins_execute)
@@ -620,9 +620,6 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
                 }
                 | _one_value_per_stage(
                     arguments.stage_baked_code_digest, "--stage-baked-code-digest"
-                ),
-                work_limits=_one_value_per_stage(
-                    arguments.stage_work_limit, "--stage-work-limit"
                 ),
                 supplied=SuppliedInputs(
                     composition_config=arguments.composition_config,

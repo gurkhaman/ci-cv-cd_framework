@@ -13,7 +13,6 @@ from sdi_pipeline_integration._jenkins_pipeline import (
     STAGE_WIRING_BEGIN,
     STAGE_WIRING_END,
     WRITE_STAGE_WIRING_COMMAND,
-    work_limit_setting,
 )
 from sdi_pipeline_integration._stage_registry import AGENTS, STAGES
 
@@ -33,7 +32,6 @@ STAGE_FACTS = frozenset(
             for credential in stage.credentials
             for fact in (credential.jenkins_id, credential.variable)
         ),
-        *(work_limit_setting(name) for name in STAGES),
     }
 )
 GROOVY_LITERAL = re.compile(r"'((?:[^'\\]|\\.)*)'|\"((?:[^\"\\]|\\.)*)\"")
@@ -233,7 +231,6 @@ node('ci') {{
         }}
     }}
     if (definition.name == 'Continuous Validation') {{
-        sh "--work-limit-seconds ${{env.JENKINS_CV_WORK_LIMIT_SECONDS}}"
         sh "--descriptor-path deployment/jenkins/adapters/cv-v1.yaml"
         def limits = [cd: 900]
     }}
@@ -250,8 +247,7 @@ node('ci') {{
             (12, "OPENAI_API_KEY"),
             (14, "image_build"),
             (17, "Continuous Validation"),
-            (18, "JENKINS_CV_WORK_LIMIT_SECONDS"),
-            (19, "adapters/"),
-            (20, "cd"),
+            (18, "adapters/"),
+            (19, "cd"),
         )
     ]
