@@ -46,7 +46,6 @@ if TYPE_CHECKING:
     from ._stage_runtime import StageInputSource, SuppliedInputs
 
 POSITIVE_DECIMAL = re.compile(r"^[1-9][0-9]{0,19}$")
-MAX_WORK_LIMIT_SECONDS = 24 * 60 * 60
 STAGE_WIRING_BEGIN = "// BEGIN GENERATED STAGE WIRING"
 STAGE_WIRING_END = "// END GENERATED STAGE WIRING"
 WRITE_STAGE_WIRING_COMMAND = (
@@ -57,6 +56,20 @@ WRITE_STAGE_WIRING_COMMAND = (
 
 class RunDeadlineExpiredError(Exception):
     """Signal that Jenkins must finalize without launching another Stage."""
+
+
+def work_limit_setting(stage: StageName) -> str:
+    return f"JENKINS_{stage.upper()}_WORK_LIMIT_SECONDS"
+
+
+def _require_granted_work_limit(stage: StageName, work_limit_seconds: int) -> None:
+    granted = STAGES[stage].grant.work_limit_seconds
+    if not 1 <= work_limit_seconds <= granted:
+        msg = (
+            f"{work_limit_setting(stage)} must be between 1 and the {stage} Stage's"
+            f" granted {granted} seconds"
+        )
+        raise InputError(msg)
 
 
 def _groovy_string(value: str) -> str:
@@ -81,7 +94,6 @@ def render_stage_wiring() -> str:
         safety_timeout_seconds = (
             stage.grant.work_limit_seconds + RUN_LIMITS.stage_safety_margin_seconds
         )
-        work_limit_setting = f"JENKINS_{stage.name.upper()}_WORK_LIMIT_SECONDS"
         lines += [
             (
                 f"    [name: {_groovy_string(stage.display_name)},"
@@ -89,7 +101,7 @@ def render_stage_wiring() -> str:
                 f" label: {_groovy_string(stage.agent.label)},"
             ),
             f"     safetyTimeoutSeconds: {safety_timeout_seconds},",
-            f"     workLimitSetting: {_groovy_string(work_limit_setting)},",
+            f"     workLimitSetting: {_groovy_string(work_limit_setting(stage.name))},",
             f"     credentials: [{credentials}]],",
         ]
     lines += ["]", STAGE_WIRING_END]
@@ -202,6 +214,7 @@ def preflight_jenkins_run(  # noqa: PLR0913
     build_started_at_millis: str,
     resource_nodes: Mapping[str, str],
     baked_code_digests: Mapping[str, str],
+    work_limits: Mapping[StageName, str],
     supplied: SuppliedInputs,
 ) -> dict[str, Any]:
     """Revalidate one submitted run, every Stage, and allocated resources.
@@ -229,6 +242,11 @@ def preflight_jenkins_run(  # noqa: PLR0913
         github_run_attempt=github_run_attempt,
     )
     parse_build_started_at(build_started_at_millis)
+    for stage, work_limit in work_limits.items():
+        if POSITIVE_DECIMAL.fullmatch(work_limit) is None:
+            msg = f"{work_limit_setting(stage)} must be a positive integer"
+            raise InputError(msg)
+        _require_granted_work_limit(stage, int(work_limit))
     identified, repository, _committed = _identify_submitted_run(
         repository_path=repository_path,
         requested_ref=requested_ref,
@@ -366,9 +384,7 @@ def execute_jenkins_stage(  # noqa: PLR0913
     if stage != expected:
         msg = f"next accepted attempt must execute the {expected} Stage"
         raise InputError(msg)
-    if work_limit_seconds <= 0 or work_limit_seconds > MAX_WORK_LIMIT_SECONDS:
-        msg = "Stage work limit must be between 1 and 86400 seconds"
-        raise InputError(msg)
+    _require_granted_work_limit(stage, work_limit_seconds)
 
     if POSITIVE_DECIMAL.fullmatch(run_deadline_epoch_millis) is None:
         msg = "run deadline must be positive epoch milliseconds"

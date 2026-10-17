@@ -119,14 +119,17 @@ def _fresh_image(repository: Path) -> tuple[str, str]:
     return ("--baked-code-digest", _baked_code_digest(repository))
 
 
-def _preflight(
+def _preflight(  # noqa: PLR0913
     repository: Path,
     commit_sha: str,
     request_path: str,
     started_millis: str,
+    *,
     baked: dict[str, str] | None = None,
+    work_limits: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     fresh = _baked_code_digest(repository)
+    configured_work_limits = WORK_LIMITS | (work_limits or {})
     recorded = dict.fromkeys((agent.node for agent in AGENTS), fresh) | (baked or {})
     return subprocess.run(
         [
@@ -155,6 +158,8 @@ def _preflight(
                     f"{name}={stage.agent.node}",
                     "--stage-baked-code-digest",
                     f"{name}={recorded[stage.agent.node]}",
+                    "--stage-work-limit",
+                    f"{name}={configured_work_limits[name]}",
                 )
             ),
         ],
@@ -344,7 +349,70 @@ def test_composition_without_a_checked_out_service_repository_claims_no_attempt(
     )
 
     assert executed.returncode == 2
-    assert "service-repository" in executed.stderr
+    assert executed.stderr == (
+        f"sdi-integration: {repository / 'service-repository'}:"
+        " service repository is not a directory\n"
+    )
+    assert not attempt.exists()
+
+
+@pytest.mark.parametrize(
+    ("work_limit", "message"),
+    [
+        (
+            "2701",
+            (
+                "JENKINS_CV_WORK_LIMIT_SECONDS must be between 1 and the cv Stage's"
+                " granted 2700 seconds"
+            ),
+        ),
+        ("0", "JENKINS_CV_WORK_LIMIT_SECONDS must be a positive integer"),
+        ("45m", "JENKINS_CV_WORK_LIMIT_SECONDS must be a positive integer"),
+    ],
+)
+def test_preflight_rejects_a_work_limit_outside_its_grant(
+    tmp_path: Path, work_limit: str, message: str
+) -> None:
+    repository, commit_sha = _repository(tmp_path)
+
+    preflight = _preflight(
+        repository,
+        commit_sha,
+        SUCCESS_REQUEST,
+        str(int((time.time() - 1) * 1000)),
+        work_limits={"cv": work_limit},
+    )
+
+    assert preflight.returncode == 2
+    assert preflight.stderr == f"sdi-integration: {message}\n"
+
+
+def test_a_work_limit_above_the_grant_claims_no_attempt(tmp_path: Path) -> None:
+    repository, commit_sha = _repository(tmp_path)
+    attempt = tmp_path / "attempt"
+    command = [
+        "sdi-integration",
+        "execute-jenkins-stage",
+        *_common(repository, commit_sha, SUCCESS_REQUEST),
+        *_fresh_image(repository),
+        *COMPOSITION_CONFIG_ARGUMENTS,
+        "--stage",
+        "composition",
+        "--attempt-root",
+        str(attempt),
+        "--work-limit-seconds",
+        "601",
+        "--run-deadline-epoch-millis",
+        str(int(time.time() * 1000) + 60_000),
+    ]
+
+    executed = subprocess.run(command, check=False, capture_output=True, text=True)
+
+    assert executed.returncode == 2
+    assert executed.stderr == (
+        "sdi-integration: JENKINS_COMPOSITION_WORK_LIMIT_SECONDS must be between 1"
+        " and the composition Stage's granted 600 seconds\n"
+    )
     assert not attempt.exists()
 
 
