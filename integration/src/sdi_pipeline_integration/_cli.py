@@ -49,7 +49,7 @@ from ._stage_contracts import AdapterDescriptor
 from ._stage_profiles import check_stage_profiles, write_stage_profiles
 from ._stage_registry import STAGE_ORDER, STAGES
 from ._stage_runtime import ExternalCancellation, SuppliedInputs, execute_stage
-from ._yaml_input import InputError, parse_yaml
+from ._yaml_input import InputError, parse_yaml, validate_contract
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
@@ -166,6 +166,11 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     adapter_image.add_argument(
         "--stage", choices=STAGE_ORDER, action="append", required=True
     )
+    stage_status = commands.add_parser(
+        "stage-status",
+        help="print each Stage's Jenkins and local implementation mode",
+    )
+    stage_status.add_argument("--repository", type=Path, required=True)
     execute = commands.add_parser(
         "execute-stage",
         help="execute and transactionally accept one trusted Stage adapter",
@@ -379,6 +384,20 @@ def _has_machinery_failure(result: dict[str, object]) -> bool:
     return False
 
 
+def _stage_status(repository: Path) -> str:
+    def mode(descriptor: str) -> str:
+        document = parse_yaml((repository / descriptor).read_bytes(), descriptor)
+        return validate_contract(
+            AdapterDescriptor, document, descriptor
+        ).implementation_mode
+
+    return "".join(
+        f"{name.replace('_', '-')}: {mode(stage.jenkins_descriptor)} (jenkins), "
+        f"{mode(stage.local_descriptor)} (local)\n"
+        for name, stage in STAGES.items()
+    )
+
+
 def _write_json(path: Path, document: object) -> None:
     path.write_text(f"{json.dumps(document, indent=2, sort_keys=True)}\n")
 
@@ -572,6 +591,14 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
                 sys.stderr.write(f"sdi-integration: {path}: {error}\n")
                 return 2
         sys.stdout.write("".join(f"{image}\n" for image in images))
+        return 0
+    if arguments.command == "stage-status":
+        try:
+            status = _stage_status(arguments.repository)
+        except (InputError, OSError) as error:
+            sys.stderr.write(f"sdi-integration: {error}\n")
+            return 2
+        sys.stdout.write(status)
         return 0
     if arguments.command == "execute-stage":
         attempt_existed = arguments.attempt_root.exists() or (
