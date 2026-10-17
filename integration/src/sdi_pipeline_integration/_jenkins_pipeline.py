@@ -9,11 +9,11 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from ._bundle import assemble_bundle, validate_bundle
 from ._git_input import GitRepository
 from ._handoff_contracts import HANDOFF_CONTRACT_VERSION
 from ._integration_code import integration_code_digest, require_fresh_agent_images
 from ._jenkins_agent_boundary import enforce_integration_execution_boundary
-from ._local_dispatch import assemble_bundle, validate_bundle
 from ._run_input import identify_committed_run
 from ._service_descriptions import SERVICE_REPOSITORY_ROOT
 from ._stage_registry import (
@@ -244,16 +244,6 @@ def preflight_jenkins_run(  # noqa: PLR0913
     return identified
 
 
-def _blocks_downstream(execution: StageExecution) -> bool:
-    envelope = execution.envelope
-    return (
-        envelope.lifecycle_state == "skipped"
-        or envelope.execution_conclusion != "succeeded"
-        or envelope.domain_outcome == "failed"
-        or envelope.implementation_mode == "not_implemented"
-    )
-
-
 def _load_execution_prefix(
     roots: Sequence[Path],
     execution_id: str,
@@ -272,7 +262,7 @@ def _load_execution_prefix(
     outputs: dict[str, StageInputSource] = {}
     for index, root in enumerate(roots):
         expected_stage = STAGE_ORDER[index]
-        if executions and _blocks_downstream(executions[-1]):
+        if executions and executions[-1].blocks_downstream:
             msg = "accepted attempt transfer contains work after a blocker"
             raise InputError(msg)
         execution = load_stage_execution(
@@ -301,7 +291,7 @@ def _load_execution_prefix(
                 msg = "accepted attempt input provenance does not match its source"
                 raise InputError(msg)
         executions.append(execution)
-        if not _blocks_downstream(execution):
+        if not execution.blocks_downstream:
             available_inputs.update(execution.outputs)
             outputs.update(execution.outputs)
     return executions, outputs
@@ -350,7 +340,7 @@ def execute_jenkins_stage(  # noqa: PLR0913
         execution_id,
         committed | granted,
     )
-    if executions and _blocks_downstream(executions[-1]):
+    if executions and executions[-1].blocks_downstream:
         msg = "a blocking accepted attempt prevents further Stage execution"
         raise InputError(msg)
     next_stage_index = len(executions)
@@ -404,7 +394,7 @@ def attempt_allows_continuation(
         expected_execution_id=execution_id,
         expected_stage=stage,
     )
-    return not _blocks_downstream(execution)
+    return not execution.blocks_downstream
 
 
 def finalize_jenkins_run(  # noqa: PLR0913
@@ -433,7 +423,7 @@ def finalize_jenkins_run(  # noqa: PLR0913
         execution_id,
         committed,
     )
-    blocker = next((item for item in executions if _blocks_downstream(item)), None)
+    blocker = next((item for item in executions if item.blocks_downstream), None)
     if len(executions) < len(STAGE_ORDER) and blocker is None:
         pending = STAGES[STAGE_ORDER[len(executions)]]
         if not run_deadline_expired:
