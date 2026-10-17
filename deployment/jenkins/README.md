@@ -112,8 +112,9 @@ Compose agents and an uncredentialed HTTPS URL for a relocated agent. Persisted
 container IPs and machine names are not configuration. The host port, user IDs,
 endpoint, repository identity, and secret locations are local deployment
 settings rather than tracked topology. The run and Stage work limits are not
-settings; they come from the Stage registry, and `bin/stack` refuses a
-configuration that still sets one.
+settings; they come from the Stage registry,
+`integration/src/sdi_pipeline_integration/_stage_registry.py`, which owns all
+Stage wiring, and `bin/stack` refuses a configuration that still sets one.
 
 Create the administrator and machine-user password files and the OpenAI API key
 file outside the checkout. Each file must be nonempty, owned by the operator, and
