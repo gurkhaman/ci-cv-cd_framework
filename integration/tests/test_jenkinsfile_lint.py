@@ -13,6 +13,7 @@ from sdi_pipeline_integration._jenkins_pipeline import (
     STAGE_WIRING_BEGIN,
     STAGE_WIRING_END,
     WRITE_STAGE_WIRING_COMMAND,
+    work_limit_setting,
 )
 from sdi_pipeline_integration._stage_registry import AGENTS, STAGES
 
@@ -20,12 +21,30 @@ SOURCE_ROOT = Path(__file__).resolve().parents[2]
 JENKINSFILE = SOURCE_ROOT / "Jenkinsfile"
 SCM_TOKEN = re.compile(r"\bscm\b")
 OPERATION_CALL = re.compile(r"\bsdi-integration\s+([a-z][a-z0-9-]*)")
-STAGE_FACT = re.compile(
-    r"adapters/|(?<![\w-])(?:"
-    + "|".join(sorted({*STAGES, *(agent.label for agent in AGENTS)}))
-    + r")(?![\w-])"
+STAGE_FACTS = frozenset(
+    {
+        *STAGES,
+        *(agent.label for agent in AGENTS),
+        *(agent.node for agent in AGENTS),
+        *(stage.display_name for stage in STAGES.values()),
+        *(
+            fact
+            for stage in STAGES.values()
+            for credential in stage.credentials
+            for fact in (credential.jenkins_id, credential.variable)
+        ),
+        *(work_limit_setting(name) for name in STAGES),
+    }
 )
-PRODUCT_NAME = "Pipeline integration"
+GROOVY_LITERAL = re.compile(r"'((?:[^'\\]|\\.)*)'|\"((?:[^\"\\]|\\.)*)\"")
+_IDENTIFIER_FACTS = "|".join(
+    re.escape(fact)
+    for fact in sorted(STAGE_FACTS, key=len, reverse=True)
+    if fact.isidentifier()
+)
+FACT_REFERENCE = re.compile(
+    rf"[.$]({_IDENTIFIER_FACTS})(?!\w)|(?:^|[\[(,])\s*({_IDENTIFIER_FACTS})\s*:"
+)
 
 
 def code_lines(jenkinsfile: str) -> list[tuple[int, str]]:
@@ -74,13 +93,32 @@ def hand_written_lines(jenkinsfile: str) -> list[tuple[int, str]]:
     return [(n, line) for n, line in code_lines(jenkinsfile) if not begin < n < end]
 
 
+def stage_facts(line: str) -> list[str]:
+    found = [
+        (literal.start(), "adapters/" if "adapters/" in text else text)
+        for literal in GROOVY_LITERAL.finditer(line)
+        if (
+            text := literal.group(1)
+            if literal.group(1) is not None
+            else literal.group(2)
+        )
+        in STAGE_FACTS
+        or "adapters/" in text
+    ]
+    found += [
+        (reference.start(), reference.group(1) or reference.group(2))
+        for reference in FACT_REFERENCE.finditer(line)
+    ]
+    return [fact for _start, fact in sorted(found)]
+
+
 def stage_fact_failures(jenkinsfile: str) -> list[str]:
     return [
-        f"Jenkinsfile line {number}: hand-written Groovy names {fact.group()!r};"
+        f"Jenkinsfile line {number}: hand-written Groovy names {fact!r};"
         " Stage facts belong in _stage_registry.STAGES and reach Groovy as"
         " definition.<field> from the generated Stage wiring block"
         for number, line in hand_written_lines(jenkinsfile)
-        for fact in STAGE_FACT.finditer(line.replace(PRODUCT_NAME, ""))
+        for fact in stage_facts(line)
     ]
 
 
@@ -182,14 +220,22 @@ def test_stage_facts_outside_the_generated_block_fail_with_their_line() -> None:
 def stages = [[stage: 'cv', label: 'cv']]
 {STAGE_WIRING_END}
 // The composition Stage binds its credential.
-sh 'sdi-integration execute-jenkins-stage'
-def digest = 'cat /etc/sdi/integration-code-digest'
-def job = 'pipeline-integration'
+sh 'cd bundle'
+sh 'sdi-integration integration-code-digest --root integration'
 error('Pipeline integration bundle validation failed')
-node('integration') {{
+node('ci') {{
     if (definition.stage == 'composition') {{
-        echo resourceNodes.image_build
+        withCredentials([string(
+            credentialsId: 'sdi-openai-api-key',
+            variable: 'OPENAI_API_KEY',
+        )]) {{
+            echo resourceNodes.image_build
+        }}
+    }}
+    if (definition.name == 'Continuous Validation') {{
+        sh "--work-limit-seconds ${{env.JENKINS_CV_WORK_LIMIT_SECONDS}}"
         sh "--descriptor-path deployment/jenkins/adapters/cv-v1.yaml"
+        def limits = [cd: 900]
     }}
 }}
 """
@@ -198,9 +244,14 @@ node('integration') {{
         " belong in _stage_registry.STAGES and reach Groovy as definition.<field>"
         " from the generated Stage wiring block"
         for number, fact in (
-            (9, "integration"),
-            (10, "composition"),
-            (11, "image_build"),
-            (12, "adapters/"),
+            (8, "ci"),
+            (9, "composition"),
+            (11, "sdi-openai-api-key"),
+            (12, "OPENAI_API_KEY"),
+            (14, "image_build"),
+            (17, "Continuous Validation"),
+            (18, "JENKINS_CV_WORK_LIMIT_SECONDS"),
+            (19, "adapters/"),
+            (20, "cd"),
         )
     ]

@@ -169,6 +169,10 @@ def test_verification_is_the_complete_fail_fast_acceptance_gate(tmp_path: Path) 
             "--directory stage-profiles"
         ),
         (
+            "uv run --frozen sdi-integration jenkinsfile --check "
+            "--jenkinsfile ../Jenkinsfile"
+        ),
+        (
             "uv run --frozen python -m "
             "sdi_pipeline_integration._fixture_regeneration --check"
         ),

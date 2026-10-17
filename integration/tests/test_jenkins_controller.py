@@ -532,6 +532,68 @@ def test_root_pipeline_reports_stale_agent_images_as_their_typed_reason() -> Non
     assert pipeline.count("--stage-baked-code-digest") == 1
 
 
+def _fresh_image_step(pipeline: str, digest_file: Path) -> str:
+    command = re.search(
+        r"^def bakedCodeDigestCommand = '(.*)'$", pipeline, re.MULTILINE
+    )
+    step = re.search(
+        r'^def requireFreshAgentImage = """(.*?)"""$',
+        pipeline,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert command
+    assert step
+    return (
+        step.group(1)
+        .replace("${bakedCodeDigestCommand}", command.group(1))
+        .replace("\\$", "$")
+        .replace("\\\\", "\\")
+        .replace("/etc/sdi/integration-code-digest", str(digest_file))
+    )
+
+
+OTHER_COMMIT_PREFLIGHT = (
+    "sdi-integration preflight-jenkins-run --composition-node ci"
+    " --composition-baked-code-digest missing\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("baked", "status"),
+    [("0" * 64, 4), ("", 4), (None, 4), ("checkout", 2)],
+)
+def test_stale_image_fails_typed_before_any_flag_is_parsed(
+    tmp_path: Path, baked: str | None, status: int
+) -> None:
+    pipeline = (REPOSITORY_ROOT / "Jenkinsfile").read_text()
+    digest_file = tmp_path / "integration-code-digest"
+    if baked == "checkout":
+        baked = subprocess.run(
+            ["sdi-integration", "integration-code-digest", "--root", "integration"],
+            cwd=REPOSITORY_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    if baked is not None:
+        digest_file.write_text(baked)
+    script = f"set -eu\n{_fresh_image_step(pipeline, digest_file)}\n"
+
+    executed = subprocess.run(
+        ["sh", "-c", script + OTHER_COMMIT_PREFLIGHT],
+        cwd=REPOSITORY_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert executed.returncode == status, executed.stderr
+    if status == 4:
+        assert executed.stderr.startswith(f"{STALE_IMAGE_REASON}: "), executed.stderr
+    else:
+        assert "the following arguments are required" in executed.stderr
+
+
 def test_live_check_compiles_the_tracked_jenkinsfile_with_workflow_cps(  # noqa: C901
     tmp_path: Path,
 ) -> None:
@@ -865,21 +927,25 @@ def test_stack_validate_uses_compose_and_rejects_insecure_secret_files(  # noqa:
     openai_secret.chmod(0o600)
 
     valid_config = config.read_text()
-    for fork_url, message in (
+    fork_url = "https://github.com/example-fork/repository.git"
+    for valid, invalid, message in (
         (
+            fork_url,
             "https://github.com/example/repository.git",
             "JENKINS_REPOSITORY_URL and JENKINS_FORK_REPOSITORY_URL must differ",
         ),
         (
+            fork_url,
             "https://github.com/example-fork@token/repository.git",
             "JENKINS_FORK_REPOSITORY_URL must not contain credentials",
         ),
+        (
+            "JENKINS_CV_WORK_LIMIT_SECONDS=2700",
+            "JENKINS_CV_WORK_LIMIT_SECONDS=2701",
+            "JENKINS_CV_WORK_LIMIT_SECONDS must be between 1 and 2700 seconds",
+        ),
     ):
-        config.write_text(
-            valid_config.replace(
-                "https://github.com/example-fork/repository.git", fork_url
-            )
-        )
+        config.write_text(valid_config.replace(valid, invalid))
         completed = subprocess.run(
             [JENKINS_ROOT / "bin" / "stack", "--config", config, "validate"],
             check=False,

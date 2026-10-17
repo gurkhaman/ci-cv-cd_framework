@@ -7,30 +7,37 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import pytest
 from ruamel.yaml import YAML
 
 from sdi_pipeline_integration._handoff_contracts import HANDOFF_PARAMETERS
+from sdi_pipeline_integration._jenkins_pipeline import work_limit_setting
 from sdi_pipeline_integration._stage_registry import (
     AGENTS,
     INTEGRATION_AGENT,
     RUN_LIMITS,
+    STAGE_ORDER,
+    STAGES,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
 
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
 JENKINS_ROOT = SOURCE_ROOT / "deployment" / "jenkins"
 CASC = JENKINS_ROOT / "casc" / "jenkins.yaml"
 COMPOSE = JENKINS_ROOT / "compose.yaml"
 SMOKE_CHECK = JENKINS_ROOT / "bin" / "smoke-check"
+SMOKE = JENKINS_ROOT / "bin" / "smoke"
+STACK = JENKINS_ROOT / "bin" / "stack"
+CONTROLLER_ENV = JENKINS_ROOT / "config" / "controller.env.example"
 JOB_DSL = JENKINS_ROOT / "jobs" / "pipeline-integration.groovy"
 JENKINSFILE = SOURCE_ROOT / "Jenkinsfile"
 WORKFLOW = SOURCE_ROOT / ".github" / "workflows" / "pipeline-integration.yml"
 REGISTRY = "_stage_registry.py"
 JOB_NAME_ENTRY = re.compile(r"^\s*'([a-z][a-z0-9-]*)': [A-Za-z_.]+,$")
 
-type Entries = dict[str, tuple[int, Any]]
+type Entries = dict[Any, tuple[int, Any]]
 
 
 def drift(
@@ -141,7 +148,108 @@ def workflow_timeout(path: Path) -> Entries:
     return _matching_lines(path, re.compile(r"^\s*(timeout-minutes): ([0-9]+)$"))
 
 
+def _text_matches(
+    path: Path, pattern: re.Pattern[str]
+) -> list[tuple[int, re.Match[str]]]:
+    text = path.read_text(encoding="utf-8")
+    return [
+        (text.count("\n", 0, match.start()) + 1, match)
+        for match in pattern.finditer(text)
+    ]
+
+
+def work_limit_settings(path: Path) -> Entries:
+    entries: Entries = {}
+    for line, match in _text_matches(path, WORK_LIMIT_SETTING):
+        entries.setdefault(match.group(), (line, None))
+    return entries
+
+
+def stack_work_limit_maxima(path: Path) -> Entries:
+    return {
+        match.group(1): (line, int(match.group(2)))
+        for line, match in _text_matches(path, STACK_WORK_LIMIT_MAXIMUM)
+    }
+
+
+def casc_credentials(path: Path) -> Entries:
+    return {
+        credential["string"]["id"]: (credential["string"].lc.key("id")[0] + 1, None)
+        for domain in _yaml(path)["credentials"]["system"]["domainCredentials"]
+        for credential in domain["credentials"]
+    }
+
+
+def stack_adapter_stages(path: Path) -> Entries:
+    ((_line, command),) = _text_matches(path, STACK_ADAPTER_IMAGE)
+    text = path.read_text(encoding="utf-8")
+    return {
+        index: (text.count("\n", 0, stage.start()) + 1, stage.group(1))
+        for index, stage in enumerate(
+            STACK_STAGE.finditer(text, command.start(), command.end())
+        )
+    }
+
+
+def stack_image_variables(path: Path) -> Entries:
+    return {
+        index: (line, match.group(1))
+        for index, (line, match) in enumerate(_text_matches(path, STACK_IMAGE_READ))
+    }
+
+
+WORK_LIMIT_SETTING = re.compile(r"\bJENKINS_[A-Z_]+_WORK_LIMIT_SECONDS\b")
+STACK_WORK_LIMIT_MAXIMUM = re.compile(
+    r"^validate_limit_seconds (JENKINS_[A-Z_]+_WORK_LIMIT_SECONDS) (?:\\\n\s*)?"
+    r'"\$\1" ([0-9]+)$',
+    re.MULTILINE,
+)
+STACK_ADAPTER_IMAGE = re.compile(r"sdi-integration adapter-image [^)]*\)")
+STACK_STAGE = re.compile(r"--stage ([a-z_]+)")
+STACK_IMAGE_READ = re.compile(
+    r"^\s*read -r (JENKINS_[A-Z_]+_AGENT_IMAGE)$", re.MULTILINE
+)
 AGENT_LABELS = {agent.node: agent.label for agent in AGENTS}
+WORK_LIMIT_SETTINGS = dict.fromkeys(work_limit_setting(name) for name in STAGES)
+ORDER = "_stage_registry.STAGE_ORDER"
+
+type Parser = Callable[[Path], Entries]
+
+STAGE_COPIES: list[tuple[Path, Parser, Mapping[Any, object], str]] = [
+    *(
+        (path, work_limit_settings, WORK_LIMIT_SETTINGS, REGISTRY)
+        for path in (CASC, COMPOSE, CONTROLLER_ENV, STACK, SMOKE)
+    ),
+    (
+        STACK,
+        stack_work_limit_maxima,
+        {
+            work_limit_setting(name): stage.grant.work_limit_seconds
+            for name, stage in STAGES.items()
+        },
+        REGISTRY,
+    ),
+    (
+        CASC,
+        casc_credentials,
+        dict.fromkeys(
+            credential.jenkins_id
+            for stage in STAGES.values()
+            for credential in stage.credentials
+        ),
+        REGISTRY,
+    ),
+    (STACK, stack_adapter_stages, dict(enumerate(STAGE_ORDER)), ORDER),
+    (
+        STACK,
+        stack_image_variables,
+        {
+            index: f"JENKINS_{name.upper()}_AGENT_IMAGE"
+            for index, name in enumerate(STAGE_ORDER)
+        },
+        ORDER,
+    ),
+]
 
 
 def test_jcasc_nodes_match_the_registry_agents() -> None:
@@ -208,3 +316,52 @@ def test_drift_names_the_file_and_line_of_each_copy(tmp_path: Path) -> None:
         f"{casc}:{cv_line}: 'cv' is 'validation'; {REGISTRY} has 'cv'",
         f"{casc}: 'gazebo' from {REGISTRY} is missing; it has 'gazebo'",
     ]
+
+
+@pytest.mark.parametrize(
+    ("path", "parser", "expected", "owner"),
+    STAGE_COPIES,
+    ids=[f"{path.name}-{parser.__name__}" for path, parser, _e, _o in STAGE_COPIES],
+)
+def test_stage_wiring_copies_match_the_registry(
+    path: Path, parser: Parser, expected: Mapping[Any, object], owner: str
+) -> None:
+    failures = drift(path, parser(path), expected, owner)
+    assert not failures, "\n".join(failures)
+
+
+CV_SETTING = ("JENKINS_CV_WORK_LIMIT_SECONDS", "JENKINS_VALIDATION_WORK_LIMIT_SECONDS")
+INJECTED_DRIFT: dict[tuple[Path, Parser], tuple[str, str]] = {
+    **{
+        (path, work_limit_settings): CV_SETTING
+        for path in (CASC, COMPOSE, CONTROLLER_ENV, STACK, SMOKE)
+    },
+    (STACK, stack_work_limit_maxima): ('_SECONDS" 2700', '_SECONDS" 2760'),
+    (CASC, casc_credentials): ('id: "sdi-openai-api-key"', 'id: "sdi-openai-key"'),
+    (STACK, stack_adapter_stages): ("--stage cv --stage cd", "--stage cd --stage cv"),
+    (STACK, stack_image_variables): ("read -r JENKINS_CV_", "read -r JENKINS_GAZEBO_"),
+}
+
+
+@pytest.mark.parametrize(
+    ("path", "parser", "expected", "owner"),
+    STAGE_COPIES,
+    ids=[f"{path.name}-{parser.__name__}" for path, parser, _e, _o in STAGE_COPIES],
+)
+def test_injected_drift_names_its_file_and_line(
+    tmp_path: Path,
+    path: Path,
+    parser: Parser,
+    expected: Mapping[Any, object],
+    owner: str,
+) -> None:
+    committed, drifted = INJECTED_DRIFT[path, parser]
+    copy = tmp_path / path.name
+    text = path.read_text(encoding="utf-8")
+    assert committed in text
+    copy.write_text(text.replace(committed, drifted, 1), encoding="utf-8")
+    line = text.count("\n", 0, text.index(committed)) + 1
+
+    failures = drift(copy, parser(copy), expected, owner)
+
+    assert any(failure.startswith(f"{copy}:{line}: ") for failure in failures), failures

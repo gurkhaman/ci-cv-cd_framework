@@ -187,7 +187,7 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     preflight.add_argument("--build-started-at-millis", required=True)
     preflight.add_argument("--integration-node", required=True)
     preflight.add_argument("--integration-baked-code-digest", required=True)
-    for flag in ("--stage-node", "--stage-baked-code-digest"):
+    for flag in ("--stage-node", "--stage-baked-code-digest", "--stage-work-limit"):
         preflight.add_argument(
             flag,
             type=_stage_assignment,
@@ -620,6 +620,9 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
                 }
                 | _one_value_per_stage(
                     arguments.stage_baked_code_digest, "--stage-baked-code-digest"
+                ),
+                work_limits=_one_value_per_stage(
+                    arguments.stage_work_limit, "--stage-work-limit"
                 ),
                 supplied=SuppliedInputs(
                     composition_config=arguments.composition_config,

@@ -114,10 +114,16 @@ def commonArguments = '''\
   --execution-id "$EXECUTION_ID"'''
 
 // Each agent image records a digest of the integration code it bakes in. An
-// image built before that record existed reports `missing`. Exit status 4 means
+// image whose record is absent or empty reports `missing`. Exit status 4 means
 // an agent image bakes integration code other than the submitted commit's; the
-// build description lets the handoff report that as a typed failure.
-def bakedCodeDigestCommand = 'cat /etc/sdi/integration-code-digest 2>/dev/null || printf missing'
+// build description lets the handoff report that as a typed failure. The check
+// runs through integration-code-digest, which every image runs at build time,
+// so a stale image fails typed even when it cannot parse this file's flags.
+def bakedCodeDigestCommand = 'digest=$(cat /etc/sdi/integration-code-digest 2>/dev/null || true); printf %s "${digest:-missing}"'
+def requireFreshAgentImage = """test "\$(${bakedCodeDigestCommand})" = "\$(sdi-integration integration-code-digest --root integration)" || {
+  printf '%s\\n' 'sdi.agent.stale-image: this agent image bakes integration code other than the submitted commit' >&2
+  exit 4
+}"""
 def failStaleAgentImages = { stageName ->
     currentBuild.description = 'sdi.agent.stale-image'
     error("${stageName} found stale agent images; rebuild them from a clean checkout")
@@ -169,9 +175,11 @@ timeout(time: runLimitSeconds, unit: 'SECONDS') {
                     preflightEnvironment.add("SDI_DIGEST_${definition.stage}=${bakedCodeDigests[definition.stage]}")
                     stageArguments.add("--stage-node \"${definition.stage}=\$SDI_NODE_${definition.stage}\"")
                     stageArguments.add("--stage-baked-code-digest \"${definition.stage}=\$SDI_DIGEST_${definition.stage}\"")
+                    stageArguments.add("--stage-work-limit \"${definition.stage}=\$${definition.workLimitSetting}\"")
                 }
                 withEnv(preflightEnvironment) {
                     def preflightStatus = sh(returnStatus: true, script: """set -eu
+${requireFreshAgentImage}
 sdi-integration preflight-jenkins-run \\
 ${commonArguments} \\
   --handoff-contract-version \"\$HANDOFF_CONTRACT_VERSION\" \\
@@ -215,8 +223,12 @@ ${commonArguments} \\
                     }.join(' ')
                     priorArguments = "${priorArguments} --work-limit-seconds \"\$${definition.workLimitSetting}\""
                     def stageExecutionStatus = 0
+                    // Jenkins selects no generator. The Domain agents reach only
+                    // the OpenAI endpoint, so every Stage runs with the committed
+                    // composition config's default generator.
                     def executeStage = {
                         sh(returnStatus: true, script: """set -eu
+${requireFreshAgentImage}
 sdi-integration execute-jenkins-stage \\
 ${commonArguments} \\
   --stage '${definition.stage}' \\
@@ -231,9 +243,13 @@ ${commonArguments} \\
                     ]) {
                         try {
                             timeout(time: definition.safetyTimeoutSeconds, unit: 'SECONDS') {
-                                withCredentials(definition.credentials.collect { credential ->
-                                    string(credentialsId: credential.id, variable: credential.variable)
-                                }) {
+                                if (definition.credentials) {
+                                    withCredentials(definition.credentials.collect { credential ->
+                                        string(credentialsId: credential.id, variable: credential.variable)
+                                    }) {
+                                        stageExecutionStatus = executeStage()
+                                    }
+                                } else {
                                     stageExecutionStatus = executeStage()
                                 }
                             }
