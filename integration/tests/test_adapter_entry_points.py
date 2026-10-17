@@ -17,7 +17,6 @@ FIX = (
     "Domain adapters define main = serve(stage, body) from _adapter_kit; "
     "copy _image_build_adapter.py"
 )
-# It replays recorded bytes for any Stage, so it cannot serve one Stage.
 FIXTURE_ADAPTER = "sdi-fixture-adapter"
 SCRIPTS: dict[str, str] = tomllib.loads(
     (REPOSITORY_ROOT / "integration/pyproject.toml").read_text()

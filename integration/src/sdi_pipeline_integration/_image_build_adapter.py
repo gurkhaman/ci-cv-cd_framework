@@ -218,7 +218,6 @@ def _registry_answers() -> bool:
 def _build_services_failure(
     builds: list[Build], buildctl: str, environment: dict[str, str]
 ) -> Outcome | None:
-    """Return the outcome of the first builder or registry check that fails."""
     workers = _builder_workers(buildctl, environment)
     if workers is None:
         return BUILDER_UNREACHABLE
@@ -434,7 +433,6 @@ def _run_builds(
 def _diagnose(
     diagnostic: Diagnostic, records: list[dict[str, object]], logs: dict[str, Path]
 ) -> None:
-    """Add one line per record, then a fair share of each failed build's log tail."""
     for record in records:
         if record["status"] == "built":
             diagnostic.line(f"{record['service_id']}: built {record['digest']}")
@@ -454,7 +452,7 @@ def _diagnose(
         title = f"{service_id} build log tail"
         room = share - len(f"--- {title}\n".encode())
         if room <= 0:
-            diagnostic.truncated = True
+            diagnostic.omit_block()
             continue
         tail = log_tail(log, max_bytes=room)
         diagnostic.block(title, tail.lines, cut=tail.cut)
@@ -482,7 +480,6 @@ def _build_environment(scratch: Path) -> dict[str, str]:
 
 
 def _image_build(invocation: Invocation) -> Verdict:
-    """Build every resolved placement and record each one."""
     request = invocation.request
     declared = {item.slot: item for item in request.inputs}
     contents = invocation.inputs
@@ -551,7 +548,7 @@ def _image_build(invocation: Invocation) -> Verdict:
                 return Verdict(failure)
             built, running = _run_builds(
                 builds,
-                deadline=invocation.deadline - DEADLINE_RESERVE_SECONDS,
+                deadline=invocation.deadline_monotonic - DEADLINE_RESERVE_SECONDS,
                 builder=Builder(
                     buildctl,
                     repository_root,
