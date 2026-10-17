@@ -21,6 +21,7 @@ from sdi_pipeline_integration._local_dispatch import validate_bundle_documents
 from sdi_pipeline_integration._stage_registry import RUN_LIMITS
 from tests._fixture_inputs import (
     FIXTURE_COMPOSITION_CONFIG,
+    STAGE_DESCRIPTORS,
     SUPPLIED_INPUT_ARGUMENTS,
     write_fixture_composition_descriptor,
 )
@@ -40,9 +41,7 @@ COMMITTED_FILES = (
     "integration/stage-profiles/image-build-v1.yaml",
     "integration/stage-profiles/cv-v1.yaml",
     "integration/stage-profiles/cd-v1.yaml",
-    "deployment/jenkins/adapters/image-build-fixture-v1.yaml",
-    "deployment/jenkins/adapters/cv-fixture-v1.yaml",
-    "deployment/jenkins/adapters/cd-fixture-v1.yaml",
+    *STAGE_DESCRIPTORS,
     FIXTURE_COMPOSITION_CONFIG,
 )
 
