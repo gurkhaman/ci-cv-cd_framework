@@ -13,7 +13,7 @@ never reaches durable output.
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 from ._adapter_kit import Outcome, Verdict, serve
 from ._assessment import AssessmentInputs, assess_proposals
@@ -220,7 +220,10 @@ def _blueprint_documents(
     return {"composition_blueprint": blueprint, "deployment_schema": deployment}
 
 
-type Composed = tuple[str, dict[str, BaseModel], bool]
+class Composed(NamedTuple):
+    code: str
+    documents: dict[str, BaseModel]
+    lexical_only: bool = False
 
 
 def _composition_settings(
@@ -243,7 +246,6 @@ def _composition_settings(
 
 
 def _compose(invocation: Invocation) -> Composed:
-    """Return the outcome code, the documents and whether discovery was lexical only."""
     request = invocation.request
     diagnostic = invocation.diagnostic
     contents = invocation.inputs
@@ -308,10 +310,9 @@ def _compose(invocation: Invocation) -> Composed:
     except InputError as error:
         # Per-file errors name their description first; cross-file ones may not.
         path = str(error).split(":", 1)[0]
-        # A manifest path, already checked against the manifest's path pattern.
         if path in snapshot.files:
             diagnostic.line(f"invalid_description: {path}")
-        return "invalid-service-description", {}, False
+        return Composed("invalid-service-description", {})
     inputs = AssessmentInputs(files, profile, requirements, requirements_body)
 
     discovery = discover(
@@ -323,14 +324,13 @@ def _compose(invocation: Invocation) -> Composed:
     diagnostic.fact("discovery_selected", len(discovery.selected))
     diagnostic.fact("discovery_omitted", len(discovery.omitted))
     diagnostic.fact("dense_status", discovery.dense_status)
-    diagnostic.fact("discovery_over_budget", discovery.over_budget)
     stopped, lexical_only = discovery.stop_reason(embeddings)
     if stopped is not None:
-        return stopped, {}, lexical_only
+        return Composed(stopped, {}, lexical_only)
     generation = generate_proposals(inputs=inputs, discovery=discovery, config=config)
     diagnostic.facts(generation.provider_facts())
     if generation.outcome not in {"generated", "exhausted"}:
-        return GENERATION_FAILURES[generation.outcome], {}, lexical_only
+        return Composed(GENERATION_FAILURES[generation.outcome], {}, lexical_only)
     evidence: dict[str, object] = identity | {
         "schema_version": "sdi.composition-evidence/v1",
         "descriptions": [{"path": item.path, "sha256": item.sha256} for item in files],
@@ -344,7 +344,7 @@ def _compose(invocation: Invocation) -> Composed:
     }
     proposals = generation.proposals
     if proposals is None:
-        return (
+        return Composed(
             "bounded-no-result",
             {
                 "composition_evidence": validate_contract(
@@ -369,9 +369,11 @@ def _compose(invocation: Invocation) -> Composed:
         )
     }
     if assessment.preferred is None:
-        return ASSESSMENT_OUTCOMES[assessment.outcome], documents, lexical_only
+        return Composed(
+            ASSESSMENT_OUTCOMES[assessment.outcome], documents, lexical_only
+        )
     diagnostic.fact("preferred", assessment.preferred.proposal_id)
-    return (
+    return Composed(
         "preferred-proposal",
         _blueprint_documents(
             preferred=assessment.preferred,

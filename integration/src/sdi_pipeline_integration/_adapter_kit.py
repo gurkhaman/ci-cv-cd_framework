@@ -1,20 +1,4 @@
-"""The process shell every Domain adapter shares. Copy _image_build_adapter.py.
-
-A Domain adapter is its outcome constants and one body:
-
-    VALIDATED = Outcome("validated", "succeeded", "succeeded", "domain", "...")
-
-    def _validate(invocation: Invocation) -> Verdict:
-        invocation.diagnostic.fact("scenarios", 3)
-        return Verdict(VALIDATED, {"validation_evidence": evidence})
-
-    main = serve("cv", _validate)
-
-`serve` owns the agent-label check, the arguments, the bounded request read,
-the input digests, the deadline, canonical writes, the response and the exit
-code. The Fixture adapter replays recorded bytes for any Stage, so it uses
-only `load_request` and `atomic_write`.
-"""
+"""The process shell every Domain adapter shares. Copy _image_build_adapter.py."""
 
 from __future__ import annotations
 
@@ -56,8 +40,6 @@ DIAGNOSTIC_FACT = re.compile(r"^[A-Za-z0-9_./-]{1,128}$")
 
 @dataclass(frozen=True)
 class Outcome:
-    """One way a run ends. Its reason code is `sdi.<stage-slug>.<code>`."""
-
     code: str
     conclusion: AdapterExecutionConclusion
     domain_outcome: DomainOutcome
@@ -67,75 +49,60 @@ class Outcome:
 
 @dataclass(frozen=True)
 class Verdict:
-    """What a body returns. Each document key is a granted output slot."""
-
     outcome: Outcome
     documents: Mapping[str, BaseModel] = field(default_factory=dict[str, BaseModel])
 
 
 class Diagnostic:
-    """The bounded diagnostic text: the outcome, facts, lines, then blocks."""
-
     def __init__(self, prefix: str, max_bytes: int) -> None:
         self._prefix = prefix
         self._max_bytes = max_bytes
-        self._facts: dict[str, str | None] = {}
+        self._facts: dict[str, str] = {}
         self._lines: list[str] = []
         self._blocks: list[str] = []
-        self.truncated = False
+        self._cut = False
 
-    def fact(self, name: str, value: object) -> None:
-        """Record a text or count value alone, or `unrecorded` if it fails screening.
-
-        Other values record nothing, and a later value replaces an earlier one.
-        """
-        if isinstance(value, bool) or not isinstance(value, (str, int)):
-            self._facts[name] = None
-            return
+    def fact(self, name: str, value: str | int) -> None:
         text = str(value)
         if DIAGNOSTIC_FACT.fullmatch(text) is None or contains_sensitive_material(text):
             text = "unrecorded"
         self._facts[name] = text
 
     def facts(self, values: Mapping[str, object]) -> None:
-        """Record each value as `fact` does."""
         for name, value in values.items():
-            self.fact(name, value)
+            if isinstance(value, bool) or not isinstance(value, (str, int)):
+                self._facts.pop(name, None)
+            else:
+                self.fact(name, value)
 
     def line(self, text: str) -> None:
-        """Add a line the adapter built from fixed text and checked values."""
         self._lines.append(text)
 
     def block(self, title: str, lines: Sequence[str], *, cut: bool) -> None:
-        """Add a titled block, such as a log tail, kept only if everything fits."""
         self._blocks.append(f"--- {title}\n" + "".join(f"{line}\n" for line in lines))
-        self.truncated = self.truncated or cut
+        self._cut = self._cut or cut
+
+    def omit_block(self) -> None:
+        self._cut = True
 
     def remaining(self, outcome: Outcome) -> int:
-        """Return the bytes left for blocks once `outcome`'s lines are written."""
         return self._max_bytes - len(self._header(outcome))
 
     def render(self, outcome: Outcome) -> tuple[bytes, bool]:
-        """Return the diagnostic bytes and whether anything was cut."""
         header = self._header(outcome)
         if len(header) > self._max_bytes:
             return header[: header.rfind(b"\n", 0, self._max_bytes) + 1], True
         content = header + "".join(self._blocks).encode()
-        # Every fact was screened alone; this screens what joining them made.
         if len(content) > self._max_bytes or contains_sensitive_material(
             content.decode()
         ):
             return header, bool(self._blocks)
-        return content, self.truncated
+        return content, self._cut
 
     def _header(self, outcome: Outcome) -> bytes:
         lines = [
             f"outcome: {self._prefix}.{outcome.code}",
-            *(
-                f"{name}: {text}"
-                for name, text in self._facts.items()
-                if text is not None
-            ),
+            *(f"{name}: {text}" for name, text in self._facts.items()),
             *self._lines,
         ]
         return "".join(f"{line}\n" for line in lines).encode()
@@ -143,26 +110,19 @@ class Diagnostic:
 
 @dataclass(frozen=True)
 class Invocation:
-    """One adapter run as its body sees it."""
-
     request: AdapterRequest
     input_root: Path
-    # Every granted input, already checked against its declared size and digest.
     inputs: Mapping[str, bytes]
-    # The monotonic time at which the Stage's work limit ends.
-    deadline: float
+    deadline_monotonic: float
     diagnostic: Diagnostic
 
 
 @dataclass(frozen=True)
 class DomainAdapter:
-    """The console-script `main` that `serve` builds for one Stage."""
-
     stage: StageName
     body: Callable[[Invocation], Verdict]
 
     def __call__(self, argv: Sequence[str] | None = None) -> int:
-        """Run the one-shot Stage-adapter operation; exit 2 before publishing."""
         started = time.monotonic()
         slug = self.stage.replace("_", "-")
         try:
@@ -192,19 +152,16 @@ class DomainAdapter:
 
 
 def serve(stage: StageName, body: Callable[[Invocation], Verdict]) -> DomainAdapter:
-    """Return the console-script `main` of the Domain adapter for `stage`."""
     return DomainAdapter(stage, body)
 
 
 def encode_document(document: BaseModel) -> bytes:
-    """Return the exact bytes an adapter writes for a Domain output."""
     return canonical_json(document.model_dump(mode="json", exclude_none=True))
 
 
 def load_request(
     path: Path, *, stage: StageName | None, input_root: Path, output_root: Path
 ) -> AdapterRequest:
-    """Read the bounded request for `stage`, or any Stage, and check both roots."""
     try:
         with path.open("rb") as stream:
             raw = stream.read(MAX_REQUEST_BYTES + 1)
@@ -230,7 +187,6 @@ def load_request(
 
 
 def atomic_write(root: Path, relative_path: str, content: bytes) -> None:
-    """Write a file so the runtime never captures it partially written."""
     destination = root / relative_path
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
@@ -270,7 +226,6 @@ def _read_inputs(request: AdapterRequest, input_root: Path) -> dict[str, bytes]:
 
 
 def _publish(output_root: Path, invocation: Invocation, verdict: Verdict) -> None:
-    """Publish every Domain output, then the diagnostic, then the response."""
     request = invocation.request
     outcome = verdict.outcome
     outputs = {item.slot: item.path for item in request.outputs}
