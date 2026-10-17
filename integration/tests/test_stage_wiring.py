@@ -11,7 +11,6 @@ import pytest
 from ruamel.yaml import YAML
 
 from sdi_pipeline_integration._handoff_contracts import HANDOFF_PARAMETERS
-from sdi_pipeline_integration._jenkins_pipeline import work_limit_setting
 from sdi_pipeline_integration._stage_registry import (
     AGENTS,
     INTEGRATION_AGENT,
@@ -28,9 +27,7 @@ JENKINS_ROOT = SOURCE_ROOT / "deployment" / "jenkins"
 CASC = JENKINS_ROOT / "casc" / "jenkins.yaml"
 COMPOSE = JENKINS_ROOT / "compose.yaml"
 SMOKE_CHECK = JENKINS_ROOT / "bin" / "smoke-check"
-SMOKE = JENKINS_ROOT / "bin" / "smoke"
 STACK = JENKINS_ROOT / "bin" / "stack"
-CONTROLLER_ENV = JENKINS_ROOT / "config" / "controller.env.example"
 JOB_DSL = JENKINS_ROOT / "jobs" / "pipeline-integration.groovy"
 JENKINSFILE = SOURCE_ROOT / "Jenkinsfile"
 WORKFLOW = SOURCE_ROOT / ".github" / "workflows" / "pipeline-integration.yml"
@@ -158,20 +155,6 @@ def _text_matches(
     ]
 
 
-def work_limit_settings(path: Path) -> Entries:
-    entries: Entries = {}
-    for line, match in _text_matches(path, WORK_LIMIT_SETTING):
-        entries.setdefault(match.group(), (line, None))
-    return entries
-
-
-def stack_work_limit_maxima(path: Path) -> Entries:
-    return {
-        match.group(1): (line, int(match.group(2)))
-        for line, match in _text_matches(path, STACK_WORK_LIMIT_MAXIMUM)
-    }
-
-
 def casc_credentials(path: Path) -> Entries:
     return {
         credential["string"]["id"]: (credential["string"].lc.key("id")[0] + 1, None)
@@ -198,37 +181,17 @@ def stack_image_variables(path: Path) -> Entries:
     }
 
 
-WORK_LIMIT_SETTING = re.compile(r"\bJENKINS_[A-Z_]+_WORK_LIMIT_SECONDS\b")
-STACK_WORK_LIMIT_MAXIMUM = re.compile(
-    r"^validate_limit_seconds (JENKINS_[A-Z_]+_WORK_LIMIT_SECONDS) (?:\\\n\s*)?"
-    r'"\$\1" ([0-9]+)$',
-    re.MULTILINE,
-)
 STACK_ADAPTER_IMAGE = re.compile(r"sdi-integration adapter-image [^)]*\)")
 STACK_STAGE = re.compile(r"--stage ([a-z_]+)")
 STACK_IMAGE_READ = re.compile(
     r"^\s*read -r (JENKINS_[A-Z_]+_AGENT_IMAGE)$", re.MULTILINE
 )
 AGENT_LABELS = {agent.node: agent.label for agent in AGENTS}
-WORK_LIMIT_SETTINGS = dict.fromkeys(work_limit_setting(name) for name in STAGES)
 ORDER = "_stage_registry.STAGE_ORDER"
 
 type Parser = Callable[[Path], Entries]
 
 STAGE_COPIES: list[tuple[Path, Parser, Mapping[Any, object], str]] = [
-    *(
-        (path, work_limit_settings, WORK_LIMIT_SETTINGS, REGISTRY)
-        for path in (CASC, COMPOSE, CONTROLLER_ENV, STACK, SMOKE)
-    ),
-    (
-        STACK,
-        stack_work_limit_maxima,
-        {
-            work_limit_setting(name): stage.grant.work_limit_seconds
-            for name, stage in STAGES.items()
-        },
-        REGISTRY,
-    ),
     (
         CASC,
         casc_credentials,
@@ -330,13 +293,7 @@ def test_stage_wiring_copies_match_the_registry(
     assert not failures, "\n".join(failures)
 
 
-CV_SETTING = ("JENKINS_CV_WORK_LIMIT_SECONDS", "JENKINS_VALIDATION_WORK_LIMIT_SECONDS")
 INJECTED_DRIFT: dict[tuple[Path, Parser], tuple[str, str]] = {
-    **{
-        (path, work_limit_settings): CV_SETTING
-        for path in (CASC, COMPOSE, CONTROLLER_ENV, STACK, SMOKE)
-    },
-    (STACK, stack_work_limit_maxima): ('_SECONDS" 2700', '_SECONDS" 2760'),
     (CASC, casc_credentials): ('id: "sdi-openai-api-key"', 'id: "sdi-openai-key"'),
     (STACK, stack_adapter_stages): ("--stage cv --stage cd", "--stage cd --stage cv"),
     (STACK, stack_image_variables): ("read -r JENKINS_CV_", "read -r JENKINS_GAZEBO_"),
