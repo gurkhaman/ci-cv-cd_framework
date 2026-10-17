@@ -14,7 +14,7 @@ from sdi_pipeline_integration._jenkins_pipeline import (
     STAGE_WIRING_END,
     WRITE_STAGE_WIRING_COMMAND,
 )
-from sdi_pipeline_integration._stage_registry import AGENTS, STAGES
+from sdi_pipeline_integration._stage_registry import AGENTS, RUN_LIMITS, STAGES
 
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
 JENKINSFILE = SOURCE_ROOT / "Jenkinsfile"
@@ -251,3 +251,15 @@ node('ci') {{
             (19, "cd"),
         )
     ]
+
+
+def test_the_run_limit_outlasts_every_finalization_offset() -> None:
+    offsets = [
+        int(offset)
+        for offset in re.findall(
+            r"\brunLimitSeconds - (\d+)\b", JENKINSFILE.read_text()
+        )
+    ]
+
+    assert len(offsets) == 2
+    assert all(RUN_LIMITS.run_seconds > offset for offset in offsets)
