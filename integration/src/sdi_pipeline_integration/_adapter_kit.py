@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 MAX_REQUEST_BYTES = 128 * 1024
 # Model names may carry an organization prefix, as in Qwen/Qwen3.8-27B.
 DIAGNOSTIC_FACT = re.compile(r"^[A-Za-z0-9_./-]{1,128}$")
+UNRECORDED = "unrecorded"
 
 
 @dataclass(frozen=True)
@@ -65,7 +66,7 @@ class Diagnostic:
     def fact(self, name: str, value: str | int) -> None:
         text = str(value)
         if DIAGNOSTIC_FACT.fullmatch(text) is None or contains_sensitive_material(text):
-            text = "unrecorded"
+            text = UNRECORDED
         self._facts[name] = text
 
     def facts(self, values: Mapping[str, object]) -> None:
@@ -76,22 +77,27 @@ class Diagnostic:
                 self.fact(name, value)
 
     def line(self, text: str) -> None:
-        self._lines.append(text)
+        self._lines.append(UNRECORDED if contains_sensitive_material(text) else text)
 
     def block(self, title: str, lines: Sequence[str], *, cut: bool) -> None:
-        self._blocks.append(f"--- {title}\n" + "".join(f"{line}\n" for line in lines))
+        self._blocks.append(
+            _block_title(title) + "".join(f"{line}\n" for line in lines)
+        )
         self._cut = self._cut or cut
 
     def omit_block(self) -> None:
         self._cut = True
 
-    def remaining(self, outcome: Outcome) -> int:
-        return self._max_bytes - len(self._header(outcome))
+    def block_room(self, outcome: Outcome, title: str, *, shares: int) -> int:
+        room = (self._max_bytes - len(self._header(outcome))) // shares
+        return room - len(_block_title(title).encode())
 
     def render(self, outcome: Outcome) -> tuple[bytes, bool]:
         header = self._header(outcome)
+        if contains_sensitive_material(header.decode()):
+            return self._cut_to_budget(self._outcome_line(outcome)), True
         if len(header) > self._max_bytes:
-            return header[: header.rfind(b"\n", 0, self._max_bytes) + 1], True
+            return self._cut_to_budget(header), True
         content = header + "".join(self._blocks).encode()
         if len(content) > self._max_bytes or contains_sensitive_material(
             content.decode()
@@ -99,13 +105,26 @@ class Diagnostic:
             return header, bool(self._blocks)
         return content, self._cut
 
+    def _outcome_line(self, outcome: Outcome) -> bytes:
+        return f"outcome: {self._prefix}.{outcome.code}\n".encode()
+
     def _header(self, outcome: Outcome) -> bytes:
         lines = [
-            f"outcome: {self._prefix}.{outcome.code}",
             *(f"{name}: {text}" for name, text in self._facts.items()),
             *self._lines,
         ]
-        return "".join(f"{line}\n" for line in lines).encode()
+        return (
+            self._outcome_line(outcome)
+            + "".join(f"{line}\n" for line in lines).encode()
+        )
+
+    def _cut_to_budget(self, header: bytes) -> bytes:
+        whole_lines = header[: header.rfind(b"\n", 0, self._max_bytes) + 1]
+        return whole_lines or header[: self._max_bytes]
+
+
+def _block_title(title: str) -> str:
+    return f"--- {title}\n"
 
 
 @dataclass(frozen=True)
@@ -229,6 +248,9 @@ def _publish(output_root: Path, invocation: Invocation, verdict: Verdict) -> Non
     request = invocation.request
     outcome = verdict.outcome
     outputs = {item.slot: item.path for item in request.outputs}
+    if not verdict.documents.keys() <= outputs.keys():
+        msg = "the adapter verdict names an output the request does not declare"
+        raise InputError(msg)
     for slot, document in verdict.documents.items():
         atomic_write(output_root, outputs[slot], encode_document(document))
     diagnostic, truncated = invocation.diagnostic.render(outcome)

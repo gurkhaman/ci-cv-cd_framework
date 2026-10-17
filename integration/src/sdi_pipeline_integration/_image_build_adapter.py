@@ -447,10 +447,9 @@ def _diagnose(
     ]
     if not failed:
         return
-    share = diagnostic.remaining(RECORDED) // len(failed)
     for service_id, log in failed:
         title = f"{service_id} build log tail"
-        room = share - len(f"--- {title}\n".encode())
+        room = diagnostic.block_room(RECORDED, title, shares=len(failed))
         if room <= 0:
             diagnostic.omit_block()
             continue
