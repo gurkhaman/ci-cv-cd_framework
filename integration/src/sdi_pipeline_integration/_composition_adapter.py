@@ -223,7 +223,7 @@ def _blueprint_documents(
 class Composed(NamedTuple):
     code: str
     documents: dict[str, BaseModel]
-    lexical_only: bool = False
+    lexical_only: bool
 
 
 def _composition_settings(
@@ -312,7 +312,7 @@ def _compose(invocation: Invocation) -> Composed:
         path = str(error).split(":", 1)[0]
         if path in snapshot.files:
             diagnostic.line(f"invalid_description: {path}")
-        return Composed("invalid-service-description", {})
+        return Composed("invalid-service-description", {}, lexical_only=False)
     inputs = AssessmentInputs(files, profile, requirements, requirements_body)
 
     discovery = discover(
