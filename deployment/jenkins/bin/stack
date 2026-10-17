@@ -688,11 +688,8 @@ platform=$(docker version --format '{{.Server.Os}}/{{.Server.Arch}}' 2>/dev/null
 [ "$platform" = linux/amd64 ] || fail "Docker Engine must be linux/amd64, found $platform"
 
 adapter_images=$(uv run --project "$repository_root/integration" --frozen \
-    --quiet sdi-integration adapter-image \
-    --descriptor "$root/adapters/composition-v1.yaml" \
-    --descriptor "$root/adapters/image-build-v1.yaml" \
-    --descriptor "$root/adapters/cv-fixture-v1.yaml" \
-    --descriptor "$root/adapters/cd-fixture-v1.yaml") || \
+    --quiet sdi-integration adapter-image --repository "$repository_root" \
+    --stage composition --stage image_build --stage cv --stage cd) || \
     fail 'invalid adapter descriptor'
 {
     read -r JENKINS_COMPOSITION_AGENT_IMAGE
