@@ -112,8 +112,14 @@ Compose agents and an uncredentialed HTTPS URL for a relocated agent. Persisted
 container IPs and machine names are not configuration. The host port, user IDs,
 endpoint, repository identity, and secret locations are local deployment
 settings rather than tracked topology. The run and Stage work limits are not
-settings; they come from the Stage registry, and `bin/stack` refuses a
-configuration that still sets one.
+settings; they come from the Stage registry,
+`integration/src/sdi_pipeline_integration/_stage_registry.py`, and `bin/stack`
+refuses a configuration that still sets one. The registry is the source of Stage
+wiring. JCasC, `compose.yaml`, `bin/smoke-check`, and `bin/stack` keep
+hand-kept copies of some registry facts; update each copy to match a registry
+change. `integration/tests/test_stage_wiring.py` fails until they match. Regenerate
+the `Jenkinsfile` Stage block from the repository root with
+`uv run --project integration sdi-integration jenkinsfile --write --jenkinsfile Jenkinsfile`.
 
 Create the administrator and machine-user password files and the OpenAI API key
 file outside the checkout. Each file must be nonempty, owned by the operator, and
@@ -245,6 +251,16 @@ whenever their container is replaced. Their five separate networks allow GitHub
 checkout without making peer agents reachable. `stop`, `status`, `logs`, and `destroy`
 include the runner and proxy containers. Every image the stack builds carries
 the label `org.sdi.project=ci-cv-cd_framework`.
+
+`build` validates the configuration, builds the controller and five agent
+images, rejects an agent image that declares any volume, and writes a
+`build-stamp` file beside the configuration file. The stamp records the tracked
+checkout, including uncommitted changes, and the IDs of the built images.
+`--prebuilt` reuses those images, as in `bin/stack --prebuilt start`. It applies
+only to `start-controller`, `start`, `verify-live`, and `exercise-live`, which then
+skip configuration validation and the controller and agent image builds. Each
+refuses to run when the stamp does not match the current checkout and images;
+run `build` again. Runner and proxy images are still built.
 
 ### Builder And Pipeline Registry
 
