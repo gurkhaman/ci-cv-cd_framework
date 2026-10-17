@@ -7,8 +7,8 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from sdi_pipeline_integration._adapter_kit import encode_document
 from sdi_pipeline_integration._domain_contracts import ImageBuildResult
-from sdi_pipeline_integration._image_build_adapter import encode_document
 from sdi_pipeline_integration._stage_contracts import (
     contains_sensitive_contract_material,
 )

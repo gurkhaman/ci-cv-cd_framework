@@ -159,11 +159,18 @@ class Stage:
     def run(self) -> tuple[AdapterResponse, ImageBuildResult | None, str]:
         """Run the adapter and return its response, result and diagnostic."""
         (self.bin / "scenario.json").write_text(json.dumps(self.scenario))
-        adapter.run_adapter(
-            request_path=self.request,
-            input_root=self.input_root,
-            output_root=self.output_root,
+        exit_code = adapter.main(
+            [
+                "run",
+                "--request",
+                str(self.request),
+                "--input-root",
+                str(self.input_root),
+                "--output-root",
+                str(self.output_root),
+            ]
         )
+        assert exit_code == 0
         response = AdapterResponse.model_validate_json(
             (self.output_root / "response.json").read_bytes(), strict=False
         )
