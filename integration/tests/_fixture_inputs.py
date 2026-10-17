@@ -62,7 +62,6 @@ entrypoint: {entrypoint}
 process_contract_version: sdi.stage-adapter-process/v1
 stage_profile: integration/stage-profiles/composition-v1.yaml
 stage_profile_version: sdi.composition-stage-profile/v1
-agent_label: composition
 secret_bindings: []
 """,
         encoding="utf-8",

@@ -75,6 +75,7 @@ from ._stage_registry import (
     EXPECTED_STAGE_OUTPUTS,
     SLOT_BY_NAME,
     SLOT_BY_SCHEMA,
+    STAGES,
     StageName,
 )
 from ._yaml_input import (
@@ -1518,10 +1519,6 @@ def _adapter_environment(
     return environment, tuple(secrets)
 
 
-def enforce_jenkins_agent_boundary(descriptor: AdapterDescriptor) -> None:
-    enforce_domain_execution_boundary(expected_label=descriptor.agent_label)
-
-
 def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
     *,
     repository: GitRepository,
@@ -1537,7 +1534,9 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
         msg = "attempt root must not already exist"
         raise InputError(msg)
     descriptor, profile = load_stage_adapter(repository, descriptor_path)
-    enforce_jenkins_agent_boundary(descriptor)
+    enforce_domain_execution_boundary(
+        expected_label=STAGES[descriptor.stage].agent.label
+    )
     effective_work_limit_seconds = (
         profile.work_limit_seconds if work_limit_seconds is None else work_limit_seconds
     )

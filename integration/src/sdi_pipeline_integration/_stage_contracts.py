@@ -40,6 +40,8 @@ type ImplementationMode = Literal["fixture", "implemented", "not_implemented"]
 type ExecutionConclusion = Literal["succeeded", "failed", "timed_out", "skipped"]
 type AdapterExecutionConclusion = Literal["succeeded", "failed"]
 type DomainOutcome = Literal["succeeded", "failed", "not_evaluated"]
+# A plain alias, so contract schemas inline the enum instead of naming it.
+ReasonCategory = Literal["fixture", "input", "dependency", "tool", "adapter", "domain"]
 Sha256 = Annotated[str, StringConstraints(strict=True, pattern=r"^[0-9a-f]{64}$")]
 SlotName = Annotated[
     str,
@@ -225,7 +227,7 @@ class Correlation(ContractModel):
 class Reason(ContractModel):
     """Bounded, sanitized process or Domain reason."""
 
-    category: Literal["fixture", "input", "dependency", "tool", "adapter", "domain"]
+    category: ReasonCategory
     code: ReasonCode
     summary: BoundedText
 
@@ -255,7 +257,6 @@ class AdapterDescriptor(ContractModel):
     process_contract_version: Literal["sdi.stage-adapter-process/v1"]
     stage_profile: RepositoryPath
     stage_profile_version: NonBlank
-    agent_label: Slug
     secret_bindings: list[EnvironmentName]
 
     @field_validator("stage_profile")
