@@ -312,13 +312,6 @@ def test_compose_exposes_only_loopback_http_and_persists_only_named_state() -> N
     assert compose["secrets"]["openai-api-key"] == {
         "file": "${JENKINS_OPENAI_API_KEY_FILE}"
     }
-    assert set(controller["environment"]) >= {
-        "JENKINS_PIPELINE_RUN_LIMIT_SECONDS",
-        "JENKINS_COMPOSITION_WORK_LIMIT_SECONDS",
-        "JENKINS_IMAGE_BUILD_WORK_LIMIT_SECONDS",
-        "JENKINS_CV_WORK_LIMIT_SECONDS",
-        "JENKINS_CD_WORK_LIMIT_SECONDS",
-    }
     assert set(controller["networks"]) == {
         "controller-egress",
         "controller-integration",
@@ -359,26 +352,6 @@ def test_jcasc_owns_zero_executor_security_and_retention_defaults() -> None:
                     {
                         "key": "SDI_FORK_REPOSITORY_URL",
                         "value": "${JENKINS_FORK_REPOSITORY_URL}",
-                    },
-                    {
-                        "key": "JENKINS_PIPELINE_RUN_LIMIT_SECONDS",
-                        "value": "${JENKINS_PIPELINE_RUN_LIMIT_SECONDS}",
-                    },
-                    {
-                        "key": "JENKINS_COMPOSITION_WORK_LIMIT_SECONDS",
-                        "value": "${JENKINS_COMPOSITION_WORK_LIMIT_SECONDS}",
-                    },
-                    {
-                        "key": "JENKINS_IMAGE_BUILD_WORK_LIMIT_SECONDS",
-                        "value": "${JENKINS_IMAGE_BUILD_WORK_LIMIT_SECONDS}",
-                    },
-                    {
-                        "key": "JENKINS_CV_WORK_LIMIT_SECONDS",
-                        "value": "${JENKINS_CV_WORK_LIMIT_SECONDS}",
-                    },
-                    {
-                        "key": "JENKINS_CD_WORK_LIMIT_SECONDS",
-                        "value": "${JENKINS_CD_WORK_LIMIT_SECONDS}",
                     },
                 ]
             }
@@ -491,7 +464,6 @@ def test_root_pipeline_is_a_thin_scheduler_over_public_cli_operations() -> None:
     assert "'pipeline-integration': env.SDI_REPOSITORY_URL," in pipeline
     assert "'pipeline-integration-fork': env.SDI_FORK_REPOSITORY_URL," in pipeline
     assert "][env.JOB_NAME]" in pipeline
-    assert "env.JENKINS_PIPELINE_RUN_LIMIT_SECONDS" in pipeline
     assert "timeout(time: runLimitSeconds, unit: 'SECONDS')" in pipeline
     assert "timeout(time: schedulingLimitSeconds, unit: 'SECONDS')" in pipeline
     assert (
@@ -524,14 +496,10 @@ def test_root_pipeline_is_a_thin_scheduler_over_public_cli_operations() -> None:
     assert "lastBuild" not in pipeline
 
 
-def test_root_pipeline_passes_each_stage_its_work_limit_and_credentials() -> None:
+def test_root_pipeline_passes_each_stage_its_credentials() -> None:
     pipeline = (REPOSITORY_ROOT / "Jenkinsfile").read_text()
 
-    assert (
-        r'stageArguments.add("--stage-work-limit \"${definition.stage}='
-        r'\$${definition.workLimitSetting}\"")'
-    ) in pipeline
-    assert r'--work-limit-seconds \"\$${definition.workLimitSetting}\""' in pipeline
+    assert "work-limit" not in pipeline
     assert re.search(
         r"if \(definition\.credentials\) \{\s+"
         r"withCredentials\(definition\.credentials\.collect \{ credential ->\s+"
@@ -867,11 +835,6 @@ def test_stack_validate_uses_compose_and_rejects_insecure_secret_files(  # noqa:
         "JENKINS_REPOSITORY_URL=https://github.com/example/repository.git\n"
         "JENKINS_FORK_REPOSITORY_URL=https://github.com/example-fork/repository.git\n"
         "JENKINS_AGENT_CONTROLLER_URL=http://controller:8080\n"
-        "JENKINS_PIPELINE_RUN_LIMIT_SECONDS=5400\n"
-        "JENKINS_COMPOSITION_WORK_LIMIT_SECONDS=600\n"
-        "JENKINS_IMAGE_BUILD_WORK_LIMIT_SECONDS=1800\n"
-        "JENKINS_CV_WORK_LIMIT_SECONDS=2700\n"
-        "JENKINS_CD_WORK_LIMIT_SECONDS=900\n"
         f"JENKINS_ADMIN_PASSWORD_FILE={admin_secret}\n"
         f"JENKINS_HANDOFF_PASSWORD_FILE={handoff_secret}\n"
         f"JENKINS_OPENAI_API_KEY_FILE={openai_secret}\n"
@@ -954,11 +917,6 @@ def test_stack_validate_uses_compose_and_rejects_insecure_secret_files(  # noqa:
             "https://github.com/example-fork@token/repository.git",
             "JENKINS_FORK_REPOSITORY_URL must not contain credentials",
         ),
-        (
-            "JENKINS_CV_WORK_LIMIT_SECONDS=2700",
-            "JENKINS_CV_WORK_LIMIT_SECONDS=2701",
-            "JENKINS_CV_WORK_LIMIT_SECONDS must be between 1 and 2700 seconds",
-        ),
     ):
         config.write_text(valid_config.replace(valid, invalid))
         completed = subprocess.run(
@@ -994,12 +952,7 @@ def test_stack_validate_uses_compose_and_rejects_insecure_secret_files(  # noqa:
     agent_secrets["cd"].chmod(0o600)
 
     valid_config = config.read_text()
-    config.write_text(
-        valid_config.replace(
-            "JENKINS_PIPELINE_RUN_LIMIT_SECONDS=5400",
-            "JENKINS_PIPELINE_RUN_LIMIT_SECONDS=120",
-        )
-    )
+    config.write_text(f"{valid_config}JENKINS_CV_WORK_LIMIT_SECONDS=2700\n")
     completed = subprocess.run(
         [JENKINS_ROOT / "bin" / "stack", "--config", config, "validate"],
         check=False,
@@ -1011,7 +964,10 @@ def test_stack_validate_uses_compose_and_rejects_insecure_secret_files(  # noqa:
         text=True,
     )
     assert completed.returncode == 2
-    assert "must reserve at least two minutes" in completed.stderr
+    assert completed.stderr == (
+        "stack: delete JENKINS_*_LIMIT_SECONDS from controller.env;"
+        " limits come from the Stage grants in _stage_registry.py\n"
+    )
     config.write_text(valid_config)
 
     _assert_plaintext_relocated_agent_url_is_rejected(config, fake_bin, docker_log)
@@ -1229,11 +1185,6 @@ class _BuiltStack:
             "JENKINS_REPOSITORY_URL=https://github.com/example/repository.git\n"
             "JENKINS_FORK_REPOSITORY_URL=https://github.com/example-fork/repository.git\n"
             "JENKINS_AGENT_CONTROLLER_URL=http://controller:8080\n"
-            "JENKINS_PIPELINE_RUN_LIMIT_SECONDS=5400\n"
-            "JENKINS_COMPOSITION_WORK_LIMIT_SECONDS=600\n"
-            "JENKINS_IMAGE_BUILD_WORK_LIMIT_SECONDS=1800\n"
-            "JENKINS_CV_WORK_LIMIT_SECONDS=2700\n"
-            "JENKINS_CD_WORK_LIMIT_SECONDS=900\n"
             f"JENKINS_ADMIN_PASSWORD_FILE={secrets['admin']}\n"
             f"JENKINS_HANDOFF_PASSWORD_FILE={secrets['handoff']}\n"
             f"JENKINS_OPENAI_API_KEY_FILE={secrets['openai']}\n"

@@ -27,9 +27,6 @@ from tests._fixture_inputs import (
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
 EXECUTION_ID = "12345678-1234-4234-9234-123456789abc"
 SUCCESS_REQUEST = "runs/s-04/s-04-tc-03-c-05-fixture.yaml"
-WORK_LIMITS = {
-    name: str(stage.grant.work_limit_seconds) for name, stage in STAGES.items()
-}
 COMPOSITION_CONFIG_ARGUMENTS = ("--composition-config", FIXTURE_COMPOSITION_CONFIG)
 COMMITTED_FILES = (
     SUCCESS_REQUEST,
@@ -119,17 +116,15 @@ def _fresh_image(repository: Path) -> tuple[str, str]:
     return ("--baked-code-digest", _baked_code_digest(repository))
 
 
-def _preflight(  # noqa: PLR0913
+def _preflight(
     repository: Path,
     commit_sha: str,
     request_path: str,
     started_millis: str,
     *,
     baked: dict[str, str] | None = None,
-    work_limits: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     fresh = _baked_code_digest(repository)
-    configured_work_limits = WORK_LIMITS | (work_limits or {})
     recorded = dict.fromkeys((agent.node for agent in AGENTS), fresh) | (baked or {})
     return subprocess.run(
         [
@@ -158,8 +153,6 @@ def _preflight(  # noqa: PLR0913
                     f"{name}={stage.agent.node}",
                     "--stage-baked-code-digest",
                     f"{name}={recorded[stage.agent.node]}",
-                    "--stage-work-limit",
-                    f"{name}={configured_work_limits[name]}",
                 )
             ),
         ],
@@ -184,7 +177,7 @@ def _execute_chain(  # noqa: PLR0913, PLR0917
     assert json.loads(preflight.stdout)["execution_id"] == EXECUTION_ID
 
     attempts: list[Path] = []
-    configured_work_limits = WORK_LIMITS | (work_limits or {})
+    work_limits = work_limits or {}
     deadline = str(int((time.time() + run_limit_seconds) * 1000))
     for stage in STAGES:
         attempt_root = root / "transfers" / stage
@@ -198,11 +191,11 @@ def _execute_chain(  # noqa: PLR0913, PLR0917
             stage,
             "--attempt-root",
             str(attempt_root),
-            "--work-limit-seconds",
-            configured_work_limits[stage],
             "--run-deadline-epoch-millis",
             deadline,
         ]
+        if stage in work_limits:
+            command.extend(("--work-limit-seconds", work_limits[stage]))
         for prior in attempts:
             command.extend(("--prior-attempt-root", str(prior)))
         executed = subprocess.run(
@@ -326,8 +319,6 @@ def _execute_stage(
             stage,
             "--attempt-root",
             str(attempt_root),
-            "--work-limit-seconds",
-            "600",
             "--run-deadline-epoch-millis",
             str(int(time.time() * 1000) + 60_000),
         ],
@@ -356,37 +347,6 @@ def test_composition_without_a_checked_out_service_repository_claims_no_attempt(
     assert not attempt.exists()
 
 
-@pytest.mark.parametrize(
-    ("work_limit", "message"),
-    [
-        (
-            "2701",
-            (
-                "JENKINS_CV_WORK_LIMIT_SECONDS must be between 1 and the cv Stage's"
-                " granted 2700 seconds"
-            ),
-        ),
-        ("0", "JENKINS_CV_WORK_LIMIT_SECONDS must be a positive integer"),
-        ("45m", "JENKINS_CV_WORK_LIMIT_SECONDS must be a positive integer"),
-    ],
-)
-def test_preflight_rejects_a_work_limit_outside_its_grant(
-    tmp_path: Path, work_limit: str, message: str
-) -> None:
-    repository, commit_sha = _repository(tmp_path)
-
-    preflight = _preflight(
-        repository,
-        commit_sha,
-        SUCCESS_REQUEST,
-        str(int((time.time() - 1) * 1000)),
-        work_limits={"cv": work_limit},
-    )
-
-    assert preflight.returncode == 2
-    assert preflight.stderr == f"sdi-integration: {message}\n"
-
-
 def test_a_work_limit_above_the_grant_claims_no_attempt(tmp_path: Path) -> None:
     repository, commit_sha = _repository(tmp_path)
     attempt = tmp_path / "attempt"
@@ -410,7 +370,7 @@ def test_a_work_limit_above_the_grant_claims_no_attempt(tmp_path: Path) -> None:
 
     assert executed.returncode == 2
     assert executed.stderr == (
-        "sdi-integration: JENKINS_COMPOSITION_WORK_LIMIT_SECONDS must be between 1"
+        "sdi-integration: --work-limit-seconds must be between 1"
         " and the composition Stage's granted 600 seconds\n"
     )
     assert not attempt.exists()
@@ -829,8 +789,6 @@ def test_stale_stage_agent_refuses_its_stage_without_an_attempt(
             "composition",
             "--attempt-root",
             str(attempt),
-            "--work-limit-seconds",
-            WORK_LIMITS["composition"],
             "--run-deadline-epoch-millis",
             str(int(time.time() * 1000) + 60_000),
         ],
@@ -963,8 +921,6 @@ def test_expired_run_deadline_does_not_launch_stage(tmp_path: Path) -> None:
             "composition",
             "--attempt-root",
             str(attempt),
-            "--work-limit-seconds",
-            WORK_LIMITS["composition"],
             "--run-deadline-epoch-millis",
             str(int(time.time() * 1000) - 1),
         ],
@@ -1040,8 +996,6 @@ def test_tampered_attempt_transfer_is_rejected(tmp_path: Path) -> None:
             "composition",
             "--attempt-root",
             str(attempt),
-            "--work-limit-seconds",
-            WORK_LIMITS["composition"],
             "--run-deadline-epoch-millis",
             str(int(time.time() * 1000) + 60_000),
         ],
@@ -1111,8 +1065,6 @@ def test_external_cancellation_publishes_no_attempt(tmp_path: Path) -> None:
             "composition",
             "--attempt-root",
             str(attempt),
-            "--work-limit-seconds",
-            WORK_LIMITS["composition"],
             "--run-deadline-epoch-millis",
             str(int(time.time() * 1000) + 60_000),
         ],

@@ -111,11 +111,9 @@ must be a distinct uncredentialed HTTPS GitHub clone URL.
 Compose agents and an uncredentialed HTTPS URL for a relocated agent. Persisted
 container IPs and machine names are not configuration. The host port, user IDs,
 endpoint, repository identity, and secret locations are local deployment
-settings rather than tracked topology. The five `*_LIMIT_SECONDS` settings are
-trusted deployment overrides for the tracked 90-minute run and 10, 30, 45, and
-15 minute Stage defaults. They must be positive integers no greater than one
-day; the run limit must leave at least two minutes for finalization. Workflow
-dispatch parameters cannot change them.
+settings rather than tracked topology. The run and Stage work limits are not
+settings; they come from the Stage registry, and `bin/stack` refuses a
+configuration that still sets one.
 
 Create the administrator and machine-user password files and the OpenAI API key
 file outside the checkout. Each file must be nonempty, owned by the operator, and
@@ -405,9 +403,8 @@ the only cross-agent Stage data, transferred through Execution-ID-qualified
 Jenkins stashes. The integration agent validates the complete bundle before
 archiving all and only its declared files from the current build.
 
-The pipeline defaults to 10, 30, 45, and 15 minute Python-owned Stage work
-limits, a 90-minute Jenkins run limit, and a two-minute finalization limit. The
-validated local deployment settings may override the Stage and run limits. A
+The pipeline uses the Stage registry's 10, 30, 45, and 15 minute Stage work
+limits, a 90-minute Jenkins run limit, and a two-minute finalization limit. A
 handled machinery failure archives its structured result before Jenkins ends in
 `FAILURE`; a contract-valid negative Domain outcome can remain `SUCCESS`.
 External cancellation propagates immediately, cleans active workspaces and
