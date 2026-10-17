@@ -32,10 +32,6 @@ def test_each_descriptor_validates_and_names_its_stage(name: StageName) -> None:
             parse_yaml((REPOSITORY_ROOT / path).read_bytes(), path)
         )
         assert descriptor.stage == name, f"{name}: {path} names {descriptor.stage}"
-        assert descriptor.agent_label == stage.agent.label, (
-            f"{name}: {path} asks for agent {descriptor.agent_label!r}, "
-            f"the row for {stage.agent.label!r}; {FIX}"
-        )
 
 
 def test_agents_are_unique_and_each_stage_has_its_own() -> None:

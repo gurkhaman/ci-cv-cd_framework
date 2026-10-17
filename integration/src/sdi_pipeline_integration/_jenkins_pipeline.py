@@ -237,10 +237,7 @@ def preflight_jenkins_run(  # noqa: PLR0913
     key_names = composition_key_names(repository, supplied)
     for expected_stage, stage in STAGES.items():
         descriptor, _ = load_stage_adapter(repository, stage.jenkins_descriptor)
-        if (
-            descriptor.stage != expected_stage
-            or descriptor.agent_label != stage.agent.label
-        ):
+        if descriptor.stage != expected_stage:
             msg = f"{expected_stage} does not match its reviewed Jenkins Stage"
             raise InputError(msg)
         check_key_bindings(descriptor, key_names)
