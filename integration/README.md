@@ -59,10 +59,13 @@ uv run --project integration sdi-integration execute-stage \
 ```
 
 Composition is granted every run-supplied input, and image-build only the
-service repository, where the recipes live. `execute-stage` and
-`execute-jenkins-stage` require `--service-repository` for composition and
-image-build, reject `--composition-config` and `--generator` for any Stage but
-composition, and reject all three for CV and CD. `dispatch-local` runs both
+service repository, where the recipes live. `execute-stage` requires
+`--service-repository` for composition and image-build, rejects
+`--composition-config` and `--generator` for any Stage but composition, and
+rejects all three for CV and CD. `execute-jenkins-stage` takes no
+`--service-repository`: a Stage granted the service repository reads
+`service-repository/` from the checked-out commit, and only composition accepts
+the other two. `dispatch-local` runs both
 Stages, so it always requires `--service-repository`. The Jenkins preflight
 takes only `--composition-config` and `--generator`, to check the config's key
 names, and `finalize-jenkins-run` takes none of them.
@@ -268,18 +271,22 @@ six-combination verdict.
 The root `Jenkinsfile` composes five public CLI operations rather than parsing or
 constructing contracts in Groovy:
 
-- `preflight-jenkins-run` first compares the integration code digest each of
-  the five agent images recorded at build time with the digest of the
+- `preflight-jenkins-run` takes `--integration-node` and
+  `--integration-baked-code-digest`, plus `--stage-node STAGE=NODE`,
+  `--stage-baked-code-digest STAGE=DIGEST`, and `--stage-work-limit
+  STAGE=SECONDS` once per Stage. It first compares the integration code digest
+  each of the five agent images recorded at build time with the digest of the
   submitted checkout. It then preserves the submitted Execution ID and
   revalidates the seven scalar handoff values, committed inputs, all
-  descriptors and Stage profiles, settled default limits, and the allocated
-  resource mapping.
-- `execute-jenkins-stage` first repeats that digest comparison for its own
-  agent. It then reconstructs prior accepted attempts from bounded Jenkins
-  stashes, validates every transferred byte and the trusted deployment work
-  limit, and executes only the next reviewed descriptor on its matching
-  immutable agent. An expired run deadline returns control without launching an
-  adapter so integration-owned finalization can create the typed skip.
+  descriptors and Stage profiles, each Stage's work limit against its grant,
+  and the allocated resource mapping.
+- `execute-jenkins-stage --stage STAGE` first repeats that digest comparison
+  for its own agent. It then reconstructs prior accepted attempts from bounded
+  Jenkins stashes, validates every transferred byte and the trusted deployment
+  work limit, which must not exceed the Stage's grant, and executes the Stage's
+  reviewed Jenkins descriptor from the Stage registry on its matching immutable
+  agent. An expired run deadline returns control without launching an adapter
+  so integration-owned finalization can create the typed skip.
 - `attempt-allows-continuation` derives whether another Domain Stage may run.
 - `finalize-jenkins-run` creates typed downstream skips, assembles the exact
   archive, and validates it on the integration agent.
@@ -294,6 +301,20 @@ digest of the checkout cannot be trusted. `integration-code-digest --root
 <integration directory>` prints the digest over `pyproject.toml`, `uv.lock`,
 `src`, and `fixtures`, which the agent image build records in
 `/etc/sdi/integration-code-digest`.
+
+The `Jenkinsfile` reads each Stage's name, agent label, safety timeout,
+work-limit setting, and credentials from a block rendered from the Stage
+registry. After editing the registry, run this from the repository root:
+
+```sh
+uv run --project integration sdi-integration jenkinsfile --write --jenkinsfile Jenkinsfile
+```
+
+`jenkinsfile --check` fails while the block is stale, and `scripts/verify` runs
+it beside the schema and Stage-profile checks. `adapter-image --repository .
+--stage STAGE`, repeated once per Stage, prints the runtime image of each
+Stage's Jenkins adapter descriptor, one per line in argument order; `bin/stack`
+selects the agent images with it.
 
 These commands are pipeline-facing primitives. Operators submit only through the
 fixed Jenkins job; they do not manually coordinate the primitives or reuse their

@@ -301,20 +301,21 @@ esac
 validate_limit_seconds() {
     setting=$1
     value=$2
+    maximum=$3
     case "$value" in
         *[!0-9]*|'') fail "$setting must be a positive integer" ;;
     esac
-    [ "$value" -ge 1 ] && [ "$value" -le 86400 ] || \
-        fail "$setting must be between 1 and 86400 seconds"
+    [ "$value" -ge 1 ] && [ "$value" -le "$maximum" ] || \
+        fail "$setting must be between 1 and $maximum seconds"
 }
 validate_limit_seconds JENKINS_PIPELINE_RUN_LIMIT_SECONDS \
-    "$JENKINS_PIPELINE_RUN_LIMIT_SECONDS"
+    "$JENKINS_PIPELINE_RUN_LIMIT_SECONDS" 86400
 validate_limit_seconds JENKINS_COMPOSITION_WORK_LIMIT_SECONDS \
-    "$JENKINS_COMPOSITION_WORK_LIMIT_SECONDS"
+    "$JENKINS_COMPOSITION_WORK_LIMIT_SECONDS" 600
 validate_limit_seconds JENKINS_IMAGE_BUILD_WORK_LIMIT_SECONDS \
-    "$JENKINS_IMAGE_BUILD_WORK_LIMIT_SECONDS"
-validate_limit_seconds JENKINS_CV_WORK_LIMIT_SECONDS "$JENKINS_CV_WORK_LIMIT_SECONDS"
-validate_limit_seconds JENKINS_CD_WORK_LIMIT_SECONDS "$JENKINS_CD_WORK_LIMIT_SECONDS"
+    "$JENKINS_IMAGE_BUILD_WORK_LIMIT_SECONDS" 1800
+validate_limit_seconds JENKINS_CV_WORK_LIMIT_SECONDS "$JENKINS_CV_WORK_LIMIT_SECONDS" 2700
+validate_limit_seconds JENKINS_CD_WORK_LIMIT_SECONDS "$JENKINS_CD_WORK_LIMIT_SECONDS" 900
 [ "$JENKINS_PIPELINE_RUN_LIMIT_SECONDS" -ge 180 ] || \
     fail 'JENKINS_PIPELINE_RUN_LIMIT_SECONDS must reserve at least two minutes for finalization'
 
@@ -688,11 +689,8 @@ platform=$(docker version --format '{{.Server.Os}}/{{.Server.Arch}}' 2>/dev/null
 [ "$platform" = linux/amd64 ] || fail "Docker Engine must be linux/amd64, found $platform"
 
 adapter_images=$(uv run --project "$repository_root/integration" --frozen \
-    --quiet sdi-integration adapter-image \
-    --descriptor "$root/adapters/composition-v1.yaml" \
-    --descriptor "$root/adapters/image-build-v1.yaml" \
-    --descriptor "$root/adapters/cv-fixture-v1.yaml" \
-    --descriptor "$root/adapters/cd-fixture-v1.yaml") || \
+    --quiet sdi-integration adapter-image --repository "$repository_root" \
+    --stage composition --stage image_build --stage cv --stage cd) || \
     fail 'invalid adapter descriptor'
 {
     read -r JENKINS_COMPOSITION_AGENT_IMAGE

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
+from tests._fixture_inputs import STAGE_DESCRIPTORS
 from tests._live_model import (
     COMPOSITION_CONFIG,
     REPOSITORY_ROOT,
@@ -46,10 +47,7 @@ COMMITTED_FILES = (
     "integration/stage-profiles/image-build-v1.yaml",
     "integration/stage-profiles/cv-v1.yaml",
     "integration/stage-profiles/cd-v1.yaml",
-    "deployment/jenkins/adapters/composition-v1.yaml",
-    "deployment/jenkins/adapters/image-build-fixture-v1.yaml",
-    "deployment/jenkins/adapters/cv-fixture-v1.yaml",
-    "deployment/jenkins/adapters/cd-fixture-v1.yaml",
+    *STAGE_DESCRIPTORS,
     "integration/composition-config.yaml",
 )
 CONFIG_PATH = "integration/composition-config.yaml"
