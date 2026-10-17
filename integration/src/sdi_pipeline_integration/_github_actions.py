@@ -9,10 +9,10 @@ from urllib.parse import urlsplit
 
 from pydantic import TypeAdapter, ValidationError
 
+from ._bundle import validate_bundle_documents
 from ._domain_contracts import DeploymentSchema, ImageBuildResult
 from ._handoff_contracts import HandoffReceipt
 from ._json_input import parse_json
-from ._local_dispatch import validate_bundle_documents
 from ._result_contracts import PIPELINE_RESULT_PATH, PipelineIntegrationResult
 from ._stage_contracts import ExecutionId
 from ._yaml_input import InputError
