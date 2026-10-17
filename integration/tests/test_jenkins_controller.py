@@ -496,6 +496,45 @@ def test_root_pipeline_is_a_thin_scheduler_over_public_cli_operations() -> None:
     assert "lastBuild" not in pipeline
 
 
+def test_only_the_stack_refusal_names_a_limit_setting() -> None:
+    listed = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(REPOSITORY_ROOT),
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            "Jenkinsfile",
+            "deployment",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    mentions = [
+        (path, line.strip())
+        for path in sorted(filter(None, listed.split("\0")))
+        if (REPOSITORY_ROOT / path).is_file()
+        for line in (REPOSITORY_ROOT / path).read_bytes().splitlines()
+        if b"LIMIT_SECONDS" in line
+    ]
+
+    assert mentions == [
+        (
+            "deployment/jenkins/bin/stack",
+            (
+                b"JENKINS_*_LIMIT_SECONDS) fail 'delete JENKINS_*_LIMIT_SECONDS from"
+                b" controller.env; limits come from the Stage grants in"
+                b" _stage_registry.py' ;;"
+            ),
+        )
+    ]
+
+
 def test_root_pipeline_passes_each_stage_its_credentials() -> None:
     pipeline = (REPOSITORY_ROOT / "Jenkinsfile").read_text()
 

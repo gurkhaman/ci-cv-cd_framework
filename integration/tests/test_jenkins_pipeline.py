@@ -347,33 +347,72 @@ def test_composition_without_a_checked_out_service_repository_claims_no_attempt(
     assert not attempt.exists()
 
 
-def test_a_work_limit_above_the_grant_claims_no_attempt(tmp_path: Path) -> None:
+COMPOSITION_GRANT_SECONDS = STAGES["composition"].grant.work_limit_seconds
+
+
+def _execute_composition(
+    repository: Path, commit_sha: str, attempt: Path, *work_limit: str
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            "sdi-integration",
+            "execute-jenkins-stage",
+            *_common(repository, commit_sha, SUCCESS_REQUEST),
+            *_fresh_image(repository),
+            *COMPOSITION_CONFIG_ARGUMENTS,
+            "--stage",
+            "composition",
+            "--attempt-root",
+            str(attempt),
+            *work_limit,
+            "--run-deadline-epoch-millis",
+            str(int(time.time() * 1000) + 60_000),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+@pytest.mark.parametrize("work_limit", ["0", str(COMPOSITION_GRANT_SECONDS + 1)])
+def test_a_work_limit_outside_the_grant_claims_no_attempt(
+    tmp_path: Path, work_limit: str
+) -> None:
     repository, commit_sha = _repository(tmp_path)
     attempt = tmp_path / "attempt"
-    command = [
-        "sdi-integration",
-        "execute-jenkins-stage",
-        *_common(repository, commit_sha, SUCCESS_REQUEST),
-        *_fresh_image(repository),
-        *COMPOSITION_CONFIG_ARGUMENTS,
-        "--stage",
-        "composition",
-        "--attempt-root",
-        str(attempt),
-        "--work-limit-seconds",
-        "601",
-        "--run-deadline-epoch-millis",
-        str(int(time.time() * 1000) + 60_000),
-    ]
 
-    executed = subprocess.run(command, check=False, capture_output=True, text=True)
+    executed = _execute_composition(
+        repository, commit_sha, attempt, "--work-limit-seconds", work_limit
+    )
 
     assert executed.returncode == 2
     assert executed.stderr == (
         "sdi-integration: --work-limit-seconds must be between 1"
-        " and the composition Stage's granted 600 seconds\n"
+        f" and the composition Stage's granted {COMPOSITION_GRANT_SECONDS} seconds\n"
     )
     assert not attempt.exists()
+
+
+def test_a_stage_without_a_work_limit_gets_its_full_grant(tmp_path: Path) -> None:
+    repository, _ = _repository(tmp_path)
+    recorded = tmp_path / "work-limit"
+    adapter = tmp_path / "recording-composition-adapter"
+    write_scripted_adapter(
+        adapter,
+        f"Path({str(recorded)!r}).write_text(str(request['work_limit_seconds']))\n",
+    )
+    write_fixture_composition_descriptor(
+        repository, entrypoint=adapter, mode="implemented"
+    )
+    _git(repository, "add", ".")
+    _git(repository, "commit", "-m", "Select a recording composition adapter")
+
+    executed = _execute_composition(
+        repository, _git(repository, "rev-parse", "HEAD"), tmp_path / "attempt"
+    )
+
+    assert executed.returncode == 0, executed.stderr
+    assert recorded.read_text() == str(COMPOSITION_GRANT_SECONDS)
 
 
 SUPPLIED_INPUTS = (

@@ -273,17 +273,19 @@ constructing contracts in Groovy:
 
 - `preflight-jenkins-run` takes `--integration-node` and
   `--integration-baked-code-digest`, plus `--stage-node STAGE=NODE` and
-  `--stage-baked-code-digest STAGE=DIGEST` once per Stage. It first compares the integration code digest
-  each of the five agent images recorded at build time with the digest of the
-  submitted checkout. It then preserves the submitted Execution ID and
-  revalidates the seven scalar handoff values, committed inputs, all
-  descriptors and Stage profiles, and the allocated resource mapping.
+  `--stage-baked-code-digest STAGE=DIGEST` once per Stage. It first compares
+  the integration code digest each of the five agent images recorded at build
+  time with the digest of the submitted checkout. It then preserves the
+  submitted Execution ID and revalidates the seven scalar handoff values,
+  committed inputs, all descriptors and Stage profiles, and the allocated
+  resource mapping.
 - `execute-jenkins-stage --stage STAGE` first repeats that digest comparison
   for its own agent. It then reconstructs prior accepted attempts from bounded
   Jenkins stashes, validates every transferred byte, and executes the Stage's
   reviewed Jenkins descriptor from the Stage registry on its matching immutable
-  agent under the work limit of the Stage's grant. An expired run deadline returns control without launching an adapter
-  so integration-owned finalization can create the typed skip.
+  agent under the work limit of the Stage's grant. An expired run deadline
+  returns control without launching an adapter so integration-owned
+  finalization can create the typed skip.
 - `attempt-allows-continuation` derives whether another Domain Stage may run.
 - `finalize-jenkins-run` creates typed downstream skips, assembles the exact
   archive, and validates it on the integration agent.
@@ -300,7 +302,8 @@ digest of the checkout cannot be trusted. `integration-code-digest --root
 `/etc/sdi/integration-code-digest`.
 
 The `Jenkinsfile` reads the run limit and each Stage's name, agent label,
-safety timeout, and credentials from a block rendered from the Stage registry. After editing the registry, run this from the repository root:
+safety timeout, and credentials from a block rendered from the Stage registry.
+After editing the registry, run this from the repository root:
 
 ```sh
 uv run --project integration sdi-integration jenkinsfile --write --jenkinsfile Jenkinsfile
