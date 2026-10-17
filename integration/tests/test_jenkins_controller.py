@@ -16,7 +16,10 @@ import pytest
 from ruamel.yaml import YAML
 
 from sdi_pipeline_integration._handoff_contracts import HANDOFF_PARAMETERS
-from sdi_pipeline_integration._integration_code import STALE_IMAGE_REASON
+from sdi_pipeline_integration._integration_code import (
+    STALE_IMAGE_REASON,
+    integration_code_digest,
+)
 from sdi_pipeline_integration._stage_registry import RUN_LIMITS, STAGE_ORDER
 
 if TYPE_CHECKING:
@@ -521,6 +524,24 @@ def test_root_pipeline_is_a_thin_scheduler_over_public_cli_operations() -> None:
     assert "lastBuild" not in pipeline
 
 
+def test_root_pipeline_passes_each_stage_its_work_limit_and_credentials() -> None:
+    pipeline = (REPOSITORY_ROOT / "Jenkinsfile").read_text()
+
+    assert (
+        r'stageArguments.add("--stage-work-limit \"${definition.stage}='
+        r'\$${definition.workLimitSetting}\"")'
+    ) in pipeline
+    assert r'--work-limit-seconds \"\$${definition.workLimitSetting}\""' in pipeline
+    assert re.search(
+        r"if \(definition\.credentials\) \{\s+"
+        r"withCredentials\(definition\.credentials\.collect \{ credential ->\s+"
+        r"string\(credentialsId: credential\.id, variable: credential\.variable\)\s+"
+        r"\}\) \{\s+stageExecutionStatus = executeStage\(\)\s+\}\s+"
+        r"\} else \{\s+stageExecutionStatus = executeStage\(\)\s+\}",
+        pipeline,
+    )
+
+
 def test_root_pipeline_reports_stale_agent_images_as_their_typed_reason() -> None:
     pipeline = (REPOSITORY_ROOT / "Jenkinsfile").read_text()
 
@@ -568,13 +589,7 @@ def test_stale_image_fails_typed_before_any_flag_is_parsed(
     pipeline = (REPOSITORY_ROOT / "Jenkinsfile").read_text()
     digest_file = tmp_path / "integration-code-digest"
     if baked == "checkout":
-        baked = subprocess.run(
-            ["sdi-integration", "integration-code-digest", "--root", "integration"],
-            cwd=REPOSITORY_ROOT,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout
+        baked = integration_code_digest(REPOSITORY_ROOT / "integration")
     if baked is not None:
         digest_file.write_text(baked)
     script = f"set -eu\n{_fresh_image_step(pipeline, digest_file)}\n"
