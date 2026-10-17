@@ -153,7 +153,9 @@ The agent and runner images bake the integration code of the checkout that ran
 handoff, and `Jenkinsfile` of its own repository. Dispatch on upstream only
 after a sync pull request has brought upstream `main` level with the fork
 `main` commit the images were built from. A run whose integration code differs
-from the baked code fails before any handoff or Stage work, as described below.
+from the baked code fails with a typed reason before any handoff or Stage work,
+even when the baked CLI does not accept this `Jenkinsfile`'s flags, as described
+below.
 
 JCasC owns one reviewed script-sandbox approval: reading
 `FlowInterruptedException.getCauses()` lets the thin scheduler distinguish a
@@ -200,11 +202,11 @@ the key while no build runs: rewrite the file, keep it mode `0600`, then run
 HTTPS egress to `api.openai.com`, which serves both luna and the embeddings.
 Without a valid key or that egress, composition fails with
 `sdi.composition.dense-discovery-unavailable` and the build is red.
-The pipeline passes the checked-out `service-repository/` to the composition
-and image-build Stage commands; each agent captures it from its own checkout of
-the same commit, and the image-build command refuses to run unless its capture
-matches the one composition accepted. The CV and CD Stage commands reject it, and
-preflight and finalization take no service repository.
+The composition and image-build Stage commands read `service-repository/` from
+their own checkout of the submitted commit, because the Stage registry grants
+it to them, and the image-build command refuses to run unless its capture
+matches the one composition accepted. The CV and CD Stage commands, preflight,
+and finalization take no service repository.
 
 Each image contains an immutable role and label identity under `/etc/sdi` on its
 read-only root filesystem. The supported Stage execution commands refuse every
@@ -381,8 +383,8 @@ does, including dev-only dependency or tool settings.
 So after merging a change to the baked paths, shut the stack down as in
 [Safe Shutdown](#safe-shutdown) and run `stack start`, which rebuilds the agent
 and runner images; the guard fails every run until you do. Images built before the guard
-existed record no digest, and the first run on them fails because their older
-CLI rejects the new digest arguments rather than with the typed reason.
+existed record no digest, so the first run on them fails with the same typed
+reason.
 The runner image records the same digest, and the protected workflow's
 "Confirm runner integration code matches the revision" step fails the handoff
 job before contacting Jenkins when it differs from the checkout's.
