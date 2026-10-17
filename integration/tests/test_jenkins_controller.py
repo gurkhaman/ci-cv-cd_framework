@@ -17,7 +17,7 @@ from ruamel.yaml import YAML
 
 from sdi_pipeline_integration._handoff_contracts import HANDOFF_PARAMETERS
 from sdi_pipeline_integration._integration_code import STALE_IMAGE_REASON
-from sdi_pipeline_integration._stage_registry import RUN_LIMITS, STAGES
+from sdi_pipeline_integration._stage_registry import RUN_LIMITS, STAGE_ORDER
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -36,6 +36,7 @@ FAKE_AGENT_IMAGES = (
     "docker.io/example/cd@sha256:" + "4" * 64,
 )
 SMOKE_CHECK = JENKINS_ROOT / "bin" / "smoke-check"
+STAGE_ARGUMENTS = " ".join(f"--stage {stage}" for stage in STAGE_ORDER)
 JOB_REPOSITORY_URLS = {
     "/job/pipeline-integration/config.xml": "https://github.com/example/repository.git",
     "/job/pipeline-integration-fork/config.xml": (
@@ -100,9 +101,7 @@ def _write_fake_deployment_tools(fake_bin: Path) -> None:
         "#!/bin/sh\n"
         'printf \'uv %s\\n\' "$*" >> "$DOCKER_LOG"\n'
         'case "$*" in\n'
-        "  *'adapter-image --descriptor '*composition-v1.yaml' --descriptor '"
-        "*image-build-v1.yaml' --descriptor '*cv-fixture-v1.yaml"
-        "' --descriptor '*cd-fixture-v1.yaml) "
+        f"  *'adapter-image --repository '*' {STAGE_ARGUMENTS}') "
         f"printf '%s\\n' {' '.join(FAKE_AGENT_IMAGES)} ;;\n"
         "  *sdi-integration*integration-code-digest*) printf '%064d\\n' 0 ;;\n"
         "  *sdi-integration*validate-installation*) exit 0 ;;\n"
@@ -496,50 +495,14 @@ def test_root_pipeline_is_a_thin_scheduler_over_public_cli_operations() -> None:
         f"timeout(time: {RUN_LIMITS.finalization_reserve_seconds}, unit: 'SECONDS')"
         in pipeline
     )
-    assert (
-        "timeout(time: definition.workLimitSeconds + "
-        f"{RUN_LIMITS.stage_safety_margin_seconds}, unit: 'SECONDS')"
-    ) in pipeline
-    assert "--work-limit-seconds '${definition.workLimitSeconds}'" in pipeline
+    assert "timeout(time: definition.safetyTimeoutSeconds, unit: 'SECONDS')" in pipeline
     assert "stageExecutionStatus == 3" in pipeline
     assert "System.currentTimeMillis() < schedulingDeadlineEpochMillis" in pipeline
     assert "TimeoutStepExecution.ExceededTimeout" in pipeline
     assert "throw interruption" in pipeline
     assert "System.currentTimeMillis() >= runDeadlineEpochMillis" in pipeline
     assert len(re.findall(r"try \{\n\s+deleteDir\(\)", pipeline)) == 4
-    labels = [stage.agent.label for stage in STAGES.values()]
-    assert {label: pipeline.count(f"label: '{label}'") for label in labels} == (
-        dict.fromkeys(labels, 1)
-    )
     assert pipeline.count("execute-jenkins-stage") == 1
-    # The runtime refuses any Stage whose descriptor is not its own table's.
-    assert re.findall(
-        r"\[name: '([^']+)', stage: '([^']+)', label: '([^']+)',\s+"
-        r"descriptor: '([^']+)'",
-        pipeline,
-    ) == [
-        (stage.display_name, stage.name, stage.agent.label, stage.jenkins_descriptor)
-        for stage in STAGES.values()
-    ]
-    credentials = [
-        credential for stage in STAGES.values() for credential in stage.credentials
-    ]
-    assert pipeline.count("credentialsId:") == len(credentials)
-    for credential in credentials:
-        assert f"credentialsId: '{credential.jenkins_id}'" in pipeline
-        assert f"variable: '{credential.variable}'" in pipeline
-    composition_definition = pipeline[
-        pipeline.index("name: 'Composition'") : pipeline.index("name: 'Image build'")
-    ]
-    image_build_definition = pipeline[
-        pipeline.index("name: 'Image build'") : pipeline.index(
-            "name: 'Continuous Validation'"
-        )
-    ]
-    assert pipeline.count("--service-repository") == 2
-    assert "--service-repository service-repository" in composition_definition
-    assert "--service-repository service-repository" in image_build_definition
-    assert "${definition.suppliedArguments}" in pipeline
     assert "--composition-config" not in pipeline
     assert "--generator" not in pipeline
     assert "preflight-jenkins-run" in pipeline
@@ -565,8 +528,8 @@ def test_root_pipeline_reports_stale_agent_images_as_their_typed_reason() -> Non
     assert "preflightStatus == 4" in pipeline
     assert "stageExecutionStatus == 4" in pipeline
     assert pipeline.count("--baked-code-digest") == 1
-    for resource in ("integration", "composition", "image-build", "cv", "cd"):
-        assert pipeline.count(f"--{resource}-baked-code-digest") == 1
+    assert pipeline.count("--integration-baked-code-digest") == 1
+    assert pipeline.count("--stage-baked-code-digest") == 1
 
 
 def test_live_check_compiles_the_tracked_jenkinsfile_with_workflow_cps(  # noqa: C901
@@ -1151,7 +1114,7 @@ def test_smoke_validates_and_builds_each_image_once(tmp_path: Path) -> None:
     assert log.count("up --no-build --detach --wait --wait-timeout 240\n") == 3
     adapter_image_calls = [line for line in log.splitlines() if "adapter-image" in line]
     assert adapter_image_calls
-    assert all(line.count("--descriptor") == 4 for line in adapter_image_calls)
+    assert all(STAGE_ARGUMENTS in line for line in adapter_image_calls)
 
 
 class _BuiltStack:

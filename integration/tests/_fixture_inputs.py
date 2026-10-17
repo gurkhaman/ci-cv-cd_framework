@@ -13,10 +13,20 @@ from pathlib import Path
 
 from sdi_pipeline_integration import _fixture_regeneration
 from sdi_pipeline_integration._integration_code import BAKED_ROOTS
+from sdi_pipeline_integration._stage_registry import STAGES
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 
 COMPOSITION_DESCRIPTOR = "deployment/jenkins/adapters/composition-v1.yaml"
+STAGE_DESCRIPTORS = tuple(
+    sorted(
+        {
+            path
+            for stage in STAGES.values()
+            for path in (stage.jenkins_descriptor, stage.local_descriptor)
+        }
+    )
+)
 # The Fixture cases are generated from these same inputs.
 FIXTURE_COMPOSITION_CONFIG = _fixture_regeneration.FIXTURE_COMPOSITION_CONFIG
 FIXTURE_SERVICE_REPOSITORY = (
