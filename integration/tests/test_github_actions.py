@@ -12,12 +12,12 @@ from pathlib import Path
 import pytest
 from ruamel.yaml import YAML
 
+from sdi_pipeline_integration._bundle import validate_bundle_documents
 from sdi_pipeline_integration._domain_contracts import (
     DeploymentSchema,
     ImageBuildResult,
 )
 from sdi_pipeline_integration._github_actions import render_image_build_section
-from sdi_pipeline_integration._local_dispatch import validate_bundle_documents
 from sdi_pipeline_integration._stage_registry import RUN_LIMITS
 from tests._fixture_inputs import (
     FIXTURE_COMPOSITION_CONFIG,
