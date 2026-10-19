@@ -52,6 +52,8 @@ recognition service can hear spoken requests and spoken replies.
 - When capture fails (PyAudio cannot load, no input device, the stream cannot
   open or stops reading), the node logs the failure once and idles. It keeps
   running and publishes nothing, so a missing microphone shows only in its log.
+  PortAudio's device probe also prints many ALSA and JACK messages before that
+  line.
 - No gain control, noise suppression, or voice activity detection; it sends
   every captured sample.
 - Raw audio sent to another host travels over the robot's network link.

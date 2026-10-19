@@ -64,6 +64,8 @@ and hear spoken replies.
   `audio-capture`), and stops sending between utterances. A continuous stream
   is cut into utterances only where Vosk itself detects a pause, and the text
   is published only after the stream stops.
+- The audio subscription is reliable, so a best-effort audio publisher such as
+  `whisper-audio-listener` cannot feed it.
 
 ## Limitations and known failure modes
 
