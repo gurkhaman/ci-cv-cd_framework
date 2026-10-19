@@ -61,7 +61,7 @@ class FaceRecognition(Node):
 
     def _on_enrollment(self, message: Image) -> None:
         name = message.header.frame_id
-        features = self._features(message)
+        features = self._features_largest_first(message)
         if not name or not features:
             self.get_logger().warning(
                 f"enrollment ignored: name {name!r}, {len(features)} faces"
@@ -73,29 +73,32 @@ class FaceRecognition(Node):
     def _on_image(self, message: Image) -> None:
         if not self._gallery:
             return
-        names = {self._match(feature) for feature in self._features(message)}
+        names = {
+            self._match(feature) for feature in self._features_largest_first(message)
+        }
         for name in sorted(names - {None}):
             self._publisher.publish(String(data=name))
 
     def _match(self, feature: np.ndarray) -> str | None:
-        name, score = max(
-            (
-                (name, self._recognizer.match(feature, enrolled, cv2.FaceRecognizerSF_FR_COSINE))
-                for name, enrolled in self._gallery.items()
-            ),
-            key=lambda pair: pair[1],
-        )
-        return name if score >= MATCH_COSINE else None
+        scores = {
+            name: self._recognizer.match(
+                feature, enrolled, cv2.FaceRecognizerSF_FR_COSINE
+            )
+            for name, enrolled in self._gallery.items()
+        }
+        best = max(scores, key=scores.__getitem__)
+        return best if scores[best] >= MATCH_COSINE else None
 
-    def _features(self, message: Image) -> list[np.ndarray]:
-        """SFace features of every detected face, largest face first."""
+    def _features_largest_first(self, message: Image) -> list[np.ndarray]:
         if message.encoding not in TO_BGR:
             self.get_logger().warning(
                 f"unsupported image encoding {message.encoding!r}", once=True
             )
             return []
         channels, conversion = TO_BGR[message.encoding]
-        rows = np.frombuffer(message.data, np.uint8).reshape(message.height, message.step)
+        rows = np.frombuffer(message.data, np.uint8).reshape(
+            message.height, message.step
+        )
         image = np.ascontiguousarray(
             rows[:, : message.width * channels].reshape(
                 message.height, message.width, channels
