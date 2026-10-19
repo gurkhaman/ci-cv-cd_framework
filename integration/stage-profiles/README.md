@@ -21,8 +21,8 @@ grant or limit takes effect in Jenkins only after the agent images are rebuilt.
 Image build and CV also receive the run-supplied service-repository manifest,
 so they can read each service's description and recipes. Composition receives
 that manifest, the composition settings resolved from the composition config,
-and may publish optional `composition-evidence.json`. CV publishes
-`validation-evidence.json` with its verdict on every outcome; an implemented CV
-attempt whose execution succeeded must publish it. Evidence records how the
+and may publish optional `composition-evidence.json`. An implemented CV attempt
+whose execution succeeded must publish `validation-evidence.json` with its
+verdict, on every outcome; Fixture CV publishes none. Evidence records how the
 Stage reached its outcome and never feeds a later Stage. A negative Domain
 outcome publishes no Domain output.

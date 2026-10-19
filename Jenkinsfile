@@ -320,7 +320,7 @@ sdi-integration bundle-conclusion \
                             )
                         }
                         if (conclusion == 1) {
-                            error('Pipeline integration machinery failed; structured result archived')
+                            error('Pipeline integration machinery or validation verdict failed; structured result archived')
                         }
                     }
                 }

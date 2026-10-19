@@ -852,8 +852,8 @@ def test_cv_implemented_execution_must_publish_its_evidence(tmp_path: Path) -> N
     conclusion, result = _implemented_cv_chain(tmp_path, "succeeded", None)
 
     cv = result["attempts"][2]
+    assert cv.get("reason", {}).get("code") == "sdi.adapter.output-missing", cv
     assert cv["adapter_response_accepted"] is False
-    assert cv["reason"]["code"] == "sdi.adapter.output-missing"
     assert conclusion.returncode == 1
 
 
@@ -867,6 +867,8 @@ def _failed_evidence(**changes: object) -> dict[str, object]:
         _failed_evidence(domain_outcome="succeeded", services=SUCCEEDED["services"]),
         _failed_evidence(services=FAILED["services"][:2]),
         _failed_evidence(blueprint_id="s-04-tc-03-c-05-other"),
+        _failed_evidence(deployment_schema_id="s-04-tc-03-c-05-other"),
+        _failed_evidence(image_build_result_id="s-04-tc-03-c-05-other"),
         _failed_evidence(
             mission=FAILED["mission"] | {"steps": FAILED["mission"]["steps"][::-1]}
         ),
@@ -881,6 +883,8 @@ def _failed_evidence(**changes: object) -> dict[str, object]:
         "other-outcome",
         "other-services",
         "other-blueprint",
+        "other-deployment-schema",
+        "other-image-build-result",
         "steps-out-of-requirement-order",
         "digest-other-than-amd64",
     ],
