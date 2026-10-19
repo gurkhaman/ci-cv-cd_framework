@@ -21,7 +21,7 @@ from tests._fixture_inputs import (
 )
 
 if TYPE_CHECKING:
-    from sdi_pipeline_integration._stage_contracts import StageName
+    from sdi_pipeline_integration._stage_registry import StageName
 
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
 COMMITTED_FILES = (

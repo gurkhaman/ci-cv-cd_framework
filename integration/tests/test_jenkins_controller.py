@@ -15,10 +15,9 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 from ruamel.yaml import YAML
 
+from sdi_pipeline_integration._handoff_contracts import HANDOFF_PARAMETERS
 from sdi_pipeline_integration._integration_code import STALE_IMAGE_REASON
-from sdi_pipeline_integration._jenkins_pipeline import (
-    DESCRIPTORS as JENKINS_DESCRIPTORS,
-)
+from sdi_pipeline_integration._stage_registry import RUN_LIMITS, STAGES
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -30,15 +29,6 @@ EXPECTED_CONTROLLER_IMAGE = (
     "docker.io/jenkins/jenkins:2.568.3-jdk21@"
     "sha256:68964c38dbb70c0bf6adff480d6dda2e1191d2d07e076c9fd2996345303eb999"
 )
-EXPECTED_HANDOFF_PARAMETERS = {
-    "HANDOFF_CONTRACT_VERSION",
-    "EXECUTION_ID",
-    "REQUESTED_GIT_REF",
-    "RESOLVED_COMMIT_SHA",
-    "RUN_REQUEST_PATH",
-    "GITHUB_RUN_ID",
-    "GITHUB_RUN_ATTEMPT",
-}
 FAKE_AGENT_IMAGES = (
     "docker.io/example/composition@sha256:" + "1" * 64,
     "docker.io/example/image-build@sha256:" + "2" * 64,
@@ -502,10 +492,14 @@ def test_root_pipeline_is_a_thin_scheduler_over_public_cli_operations() -> None:
     assert "env.JENKINS_PIPELINE_RUN_LIMIT_SECONDS" in pipeline
     assert "timeout(time: runLimitSeconds, unit: 'SECONDS')" in pipeline
     assert "timeout(time: schedulingLimitSeconds, unit: 'SECONDS')" in pipeline
-    assert "timeout(time: 120, unit: 'SECONDS')" in pipeline
     assert (
-        "timeout(time: definition.workLimitSeconds + 60, unit: 'SECONDS')" in pipeline
+        f"timeout(time: {RUN_LIMITS.finalization_reserve_seconds}, unit: 'SECONDS')"
+        in pipeline
     )
+    assert (
+        "timeout(time: definition.workLimitSeconds + "
+        f"{RUN_LIMITS.stage_safety_margin_seconds}, unit: 'SECONDS')"
+    ) in pipeline
     assert "--work-limit-seconds '${definition.workLimitSeconds}'" in pipeline
     assert "stageExecutionStatus == 3" in pipeline
     assert "System.currentTimeMillis() < schedulingDeadlineEpochMillis" in pipeline
@@ -513,20 +507,27 @@ def test_root_pipeline_is_a_thin_scheduler_over_public_cli_operations() -> None:
     assert "throw interruption" in pipeline
     assert "System.currentTimeMillis() >= runDeadlineEpochMillis" in pipeline
     assert len(re.findall(r"try \{\n\s+deleteDir\(\)", pipeline)) == 4
-    assert [
-        (label, pipeline.count(f"label: '{label}'"))
-        for label in ("composition", "image-build", "cv", "cd")
-    ] == [
-        ("composition", 1),
-        ("image-build", 1),
-        ("cv", 1),
-        ("cd", 1),
-    ]
+    labels = [stage.agent.label for stage in STAGES.values()]
+    assert {label: pipeline.count(f"label: '{label}'") for label in labels} == (
+        dict.fromkeys(labels, 1)
+    )
     assert pipeline.count("execute-jenkins-stage") == 1
     # The runtime refuses any Stage whose descriptor is not its own table's.
-    assert re.findall(r"descriptor: '([^']+)'", pipeline) == [
-        path for _stage, path in JENKINS_DESCRIPTORS
+    assert re.findall(
+        r"\[name: '([^']+)', stage: '([^']+)', label: '([^']+)',\s+"
+        r"descriptor: '([^']+)'",
+        pipeline,
+    ) == [
+        (stage.display_name, stage.name, stage.agent.label, stage.jenkins_descriptor)
+        for stage in STAGES.values()
     ]
+    credentials = [
+        credential for stage in STAGES.values() for credential in stage.credentials
+    ]
+    assert pipeline.count("credentialsId:") == len(credentials)
+    for credential in credentials:
+        assert f"credentialsId: '{credential.jenkins_id}'" in pipeline
+        assert f"variable: '{credential.variable}'" in pipeline
     composition_definition = pipeline[
         pipeline.index("name: 'Composition'") : pipeline.index("name: 'Image build'")
     ]
@@ -651,7 +652,7 @@ def test_live_check_compiles_the_tracked_jenkinsfile_with_workflow_cps(  # noqa:
                     "<hudson.model.StringParameterDefinition>"
                     f"<name>{name}</name>"
                     "</hudson.model.StringParameterDefinition>"
-                    for name in EXPECTED_HANDOFF_PARAMETERS
+                    for name in HANDOFF_PARAMETERS
                 )
                 permissions = "".join(
                     f"<permission>{permission}</permission>"

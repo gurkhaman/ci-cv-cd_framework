@@ -45,11 +45,11 @@ from ._service_descriptions import (
     parse_service_repository,
 )
 from ._stage_contracts import (
-    SLOT_BY_NAME,
     AdapterRequest,
     AdapterResponse,
     contains_sensitive_material,
 )
+from ._stage_registry import SLOT_BY_NAME
 from ._yaml_input import (
     InputError,
     parse_front_matter,

@@ -12,6 +12,7 @@ import pytest
 from ruamel.yaml import YAML
 
 from sdi_pipeline_integration._integration_code import BAKED_ROOTS
+from sdi_pipeline_integration._stage_registry import AGENTS, STAGES
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -19,7 +20,7 @@ if TYPE_CHECKING:
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 JENKINS_ROOT = REPOSITORY_ROOT / "deployment" / "jenkins"
-AGENT_NAMES = {"integration", "ci", "image-build", "cv", "cd"}
+AGENT_NAMES = {agent.node for agent in AGENTS}
 BUILDER_SERVICES = {"buildkitd", "registry"}
 RUNNER_STACK_SERVICES = {
     "runner-upstream",
@@ -27,13 +28,7 @@ RUNNER_STACK_SERVICES = {
     "runner-upstream-proxy",
     "runner-fork-proxy",
 }
-AGENT_LABELS = {
-    "integration": "integration",
-    "ci": "composition",
-    "image-build": "image-build",
-    "cv": "cv",
-    "cd": "cd",
-}
+AGENT_LABELS = {agent.node: agent.label for agent in AGENTS}
 AGENT_TARGETS = dict.fromkeys(AGENT_NAMES, "agent") | {"image-build": "image-build"}
 AGENT_NETWORKS = {name: [f"controller-{name}"] for name in AGENT_NAMES} | {
     "image-build": ["controller-image-build", "image-build-builder"]
@@ -162,23 +157,12 @@ def test_compose_defines_five_isolated_websocket_agents() -> None:
 def test_domain_agents_use_their_descriptor_selected_runtime_image() -> None:
     compose = _load_yaml(JENKINS_ROOT / "compose.yaml")
     services = compose["services"]
-    descriptor_for_agent = {
-        "ci": (
-            "composition-v1.yaml",
-            "${JENKINS_COMPOSITION_AGENT_IMAGE}",
-        ),
-        "image-build": (
-            "image-build-v1.yaml",
-            "${JENKINS_IMAGE_BUILD_AGENT_IMAGE}",
-        ),
-        "cv": ("cv-fixture-v1.yaml", "${JENKINS_CV_AGENT_IMAGE}"),
-        "cd": ("cd-fixture-v1.yaml", "${JENKINS_CD_AGENT_IMAGE}"),
-    }
-
-    for name, (descriptor_name, image_variable) in descriptor_for_agent.items():
-        descriptor = _load_yaml(JENKINS_ROOT / "adapters" / descriptor_name)
+    for name, stage in STAGES.items():
+        descriptor = _load_yaml(REPOSITORY_ROOT / stage.jenkins_descriptor)
         assert descriptor["image"] == FIXTURE_IMAGE
-        assert services[name]["build"]["args"]["RUNTIME_IMAGE"] == image_variable
+        assert services[stage.agent.node]["build"]["args"]["RUNTIME_IMAGE"] == (
+            f"${{JENKINS_{name.upper()}_AGENT_IMAGE}}"
+        )
 
     dockerfile = (JENKINS_ROOT / "agents" / "Dockerfile").read_text()
     assert "FROM ${RUNTIME_IMAGE} AS runtime" in dockerfile

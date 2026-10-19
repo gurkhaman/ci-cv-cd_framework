@@ -55,19 +55,12 @@ from ._service_descriptions import (
 from ._stage_contracts import (
     ASCII_CONTROL_LIMIT,
     ASCII_DELETE,
-    COMMITTED_SLOTS,
-    EXPECTED_STAGE_EVIDENCE,
-    EXPECTED_STAGE_INPUT_SLOTS,
-    EXPECTED_STAGE_OUTPUTS,
-    SLOT_BY_NAME,
-    SLOT_BY_SCHEMA,
     AcceptedAttemptEnvelope,
     AdapterDescriptor,
     AdapterRequest,
     AdapterResponse,
     DomainOutcome,
     ImplementationMode,
-    StageName,
     StageProfile,
     contains_sensitive_contract_material,
     contains_sensitive_material,
@@ -75,6 +68,15 @@ from ._stage_contracts import (
     require_unique_paths,
 )
 from ._stage_profiles import stage_profile_bytes
+from ._stage_registry import (
+    COMMITTED_SLOTS,
+    EXPECTED_STAGE_EVIDENCE,
+    EXPECTED_STAGE_INPUT_SLOTS,
+    EXPECTED_STAGE_OUTPUTS,
+    SLOT_BY_NAME,
+    SLOT_BY_SCHEMA,
+    StageName,
+)
 from ._yaml_input import (
     InputError,
     parse_front_matter,
