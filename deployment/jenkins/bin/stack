@@ -834,7 +834,7 @@ case "$action" in
             build_controller
             agent_services='integration ci image-build cv cd'
         fi
-        compose pull --quiet --policy missing buildkitd registry
+        compose pull --quiet --policy missing buildkitd registry cv-engine
         [ -z "$agent_services$runner_services" ] || \
             compose build $agent_services $runner_services $proxy_services
         for agent in $agent_services; do

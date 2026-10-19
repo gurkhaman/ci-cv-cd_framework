@@ -546,9 +546,9 @@ def test_start_builds_and_starts_only_the_configured_runners(
     assert stack.profiles("up --no-build --detach --wait --wait-timeout 240") == [
         profiles
     ]
-    assert stack.profiles("pull --quiet --policy missing buildkitd registry") == [
-        profiles
-    ]
+    assert stack.profiles(
+        "pull --quiet --policy missing buildkitd registry cv-engine"
+    ) == [profiles]
     log = stack.log()
     pull = next(i for i, line in enumerate(log) if "pull --quiet" in line)
     build = next(i for i, line in enumerate(log) if "build integration" in line)

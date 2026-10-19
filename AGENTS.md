@@ -16,7 +16,7 @@
 ## Pipeline Integration Scaffold
 
 - `integration/` requires Python `>=3.12,<3.13`, pins CPython 3.12.13 for development, and uses its own exact `uv.lock`.
-- Run the deterministic repository checks from any directory with `integration/scripts/verify`. It performs frozen environment setup, generated-schema, Stage-profile, `Jenkinsfile`, and Fixture-case freshness, Ruff formatting and linting, Basedpyright, pytest, and the ephemeral Jenkins stack smoke check (controller, five agents, builder, pipeline registry, and the handoff-runner image) on the supported Docker host.
+- Run the deterministic repository checks from any directory with `integration/scripts/verify`. It performs frozen environment setup, generated-schema, Stage-profile, `Jenkinsfile`, and Fixture-case freshness, Ruff formatting and linting, Basedpyright, pytest, and the ephemeral Jenkins stack smoke check (controller, five agents, builder, pipeline registry, CV engine, and the handoff-runner image) on the supported Docker host.
 - Full verify always runs the smoke check on `main` and on a branch with no commits beyond `origin/main`. On a branch with its own commits, it skips the smoke check when no changed, staged, or untracked file since the merge base is a smoke input. The `smoke_inputs` pattern in `integration/scripts/verify` owns that list, and verify prints which case applied.
 - Run `integration/scripts/verify --fast` while you work. It skips the slow tests and the smoke check. Run the full `integration/scripts/verify` once before you open a pull request.
 - Full verify takes the host lock `/tmp/sdi-host.lock` itself before the slow tests and the smoke check, so concurrent sessions on one host wait in turn. A `flock /tmp/sdi-host.lock` wrapper around verify is safe, because verify reuses the locked descriptor that `flock` passes down. A wrapper that closes inherited descriptors deadlocks. Examples are `flock -o` and a Python process that holds the lock and starts verify through `subprocess`, which closes inherited descriptors by default.
@@ -32,6 +32,7 @@ Each rule has a check that fails when a change breaks it. When the operator corr
 | Rule | Check |
 | --- | --- |
 | Importing `_cli` loads no `openai`; import it only inside the function that builds a client. | `integration/tests/test_import_cost.py` |
+| Importing `_cli` loads no `docker`; import it only inside the function that builds a client. | `integration/tests/test_import_cost.py` |
 | Workflows under `.github/workflows/` pass actionlint. | `integration/tests/test_workflow_lint.py` |
 | `Jenkinsfile` never uses `scm`; select the repository by `env.JOB_NAME` as `checkoutSubmittedCommit` does. | `test_committed_jenkinsfile_does_not_use_scm` in `integration/tests/test_jenkinsfile_lint.py` |
 | `Jenkinsfile` calls only `sdi-integration` operations the CLI defines. | `test_committed_jenkinsfile_calls_only_defined_operations` in `integration/tests/test_jenkinsfile_lint.py` |
