@@ -13,14 +13,12 @@ environment, so the builder and registry addresses are constants.
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import os
 import shutil
 import signal
 import subprocess
-import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -28,9 +26,8 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, cast
 
 import requests
-from pydantic import BaseModel, ValidationError
 
-from ._adapter_output import atomic_write
+from ._adapter_kit import Outcome, Verdict, serve
 from ._contracts import TargetExecutionProfile
 from ._domain_contracts import (
     CompositionBlueprint,
@@ -38,28 +35,20 @@ from ._domain_contracts import (
     ImageBuildResult,
 )
 from ._image_build_redaction import failure_detail, log_tail
-from ._jenkins_agent_boundary import enforce_domain_execution_boundary
-from ._json_input import canonical_json, parse_json
+from ._json_input import parse_json
 from ._service_descriptions import (
     SERVICE_REPOSITORY_ROOT,
     ServiceRepositoryManifest,
     capture_service_repository,
     parse_service_repository,
 )
-from ._stage_contracts import (
-    AdapterRequest,
-    AdapterResponse,
-    contains_sensitive_material,
-)
 from ._yaml_input import InputError, parse_yaml, validate_contract
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
+    from ._adapter_kit import Diagnostic, Invocation
     from ._domain_contracts import ServicePlacement
     from ._service_descriptions import Artifact
 
-MAX_REQUEST_BYTES = 128 * 1024
 BUILDKIT_ADDRESS = "tcp://buildkitd:1234"
 REGISTRY = "registry:5000"
 REGISTRY_URL = f"http://{REGISTRY}"
@@ -81,44 +70,48 @@ MANIFEST_ACCEPT = (
 )
 ARCHITECTURES = {"amd64": ("amd64",), "arm64": ("arm64",), "noarch": ("amd64", "arm64")}
 
-OUTCOMES: dict[str, tuple[str, str, str, str]] = {
-    "recorded": (
-        "succeeded",
-        "succeeded",
-        "domain",
-        "Every placement was recorded as built or failed.",
-    ),
-    "input-mismatch": (
-        "failed",
-        "not_evaluated",
-        "input",
-        "The service repository differs from the one composition read.",
-    ),
-    "too-many-placements": (
-        "failed",
-        "not_evaluated",
-        "input",
-        f"The deployment schema has more than {MAX_PLACEMENTS} placements.",
-    ),
-    "builder-unreachable": (
-        "failed",
-        "not_evaluated",
-        "dependency",
-        "The image builder did not answer.",
-    ),
-    "registry-unreachable": (
-        "failed",
-        "not_evaluated",
-        "dependency",
-        "The pipeline registry did not answer.",
-    ),
-    "arm64-unavailable": (
-        "failed",
-        "not_evaluated",
-        "dependency",
-        "The image builder cannot build linux/arm64 images.",
-    ),
-}
+RECORDED = Outcome(
+    "recorded",
+    "succeeded",
+    "succeeded",
+    "domain",
+    "Every placement was recorded as built or failed.",
+)
+INPUT_MISMATCH = Outcome(
+    "input-mismatch",
+    "failed",
+    "not_evaluated",
+    "input",
+    "The service repository differs from the one composition read.",
+)
+TOO_MANY_PLACEMENTS = Outcome(
+    "too-many-placements",
+    "failed",
+    "not_evaluated",
+    "input",
+    f"The deployment schema has more than {MAX_PLACEMENTS} placements.",
+)
+BUILDER_UNREACHABLE = Outcome(
+    "builder-unreachable",
+    "failed",
+    "not_evaluated",
+    "dependency",
+    "The image builder did not answer.",
+)
+REGISTRY_UNREACHABLE = Outcome(
+    "registry-unreachable",
+    "failed",
+    "not_evaluated",
+    "dependency",
+    "The pipeline registry did not answer.",
+)
+ARM64_UNAVAILABLE = Outcome(
+    "arm64-unavailable",
+    "failed",
+    "not_evaluated",
+    "dependency",
+    "The image builder cannot build linux/arm64 images.",
+)
 # Fixed detail texts, keyed by the cause behind a failure reason.
 DETAILS = {
     "unresolved-placement": "composition left the placement unresolved",
@@ -152,22 +145,6 @@ class Running:
     process: subprocess.Popen[bytes]
     log: Path
     metadata: Path
-
-
-def encode_document(document: BaseModel) -> bytes:
-    """Return the exact bytes the adapter writes for a Domain output."""
-    return canonical_json(document.model_dump(mode="json", exclude_none=True))
-
-
-def _read_input(path: Path, size: int, sha256: str) -> bytes:
-    if path.is_symlink() or not path.is_file() or path.lstat().st_nlink != 1:
-        msg = "adapter input is not a single regular file"
-        raise InputError(msg)
-    content = path.read_bytes()
-    if len(content) != size or hashlib.sha256(content).hexdigest() != sha256:
-        msg = "adapter input bytes do not match the request"
-        raise InputError(msg)
-    return content
 
 
 def _failed(service_id: str, reason: str, detail: str) -> dict[str, object]:
@@ -240,16 +217,15 @@ def _registry_answers() -> bool:
 
 def _build_services_failure(
     builds: list[Build], buildctl: str, environment: dict[str, str]
-) -> str | None:
-    """Return the outcome code of the first builder or registry check that fails."""
+) -> Outcome | None:
     workers = _builder_workers(buildctl, environment)
     if workers is None:
-        return "builder-unreachable"
+        return BUILDER_UNREACHABLE
     if not _registry_answers():
-        return "registry-unreachable"
+        return REGISTRY_UNREACHABLE
     needs_arm64 = any("arm64" in build.architectures for build in builds)
     if needs_arm64 and "linux/arm64" not in workers:
-        return "arm64-unavailable"
+        return ARM64_UNAVAILABLE
     return None
 
 
@@ -454,97 +430,31 @@ def _run_builds(
     return records, running
 
 
-class _Run:
-    """One adapter invocation and the candidate files it publishes."""
-
-    def __init__(self, request: AdapterRequest, output_root: Path) -> None:
-        self.request = request
-        self.output_root = output_root
-        self.outputs = {item.slot: item.path for item in request.outputs}
-        self.records: list[dict[str, object]] = []
-        # Redacted build-log tails, read before the scratch directory goes.
-        self.tails: list[bytes] = []
-        self.tails_cut = False
-
-    def publish(self, code: str, result: ImageBuildResult | None) -> None:
-        """Publish the result, the diagnostic, then the response."""
-        conclusion, domain_outcome, category, summary = OUTCOMES[code]
-        if result is not None:
-            atomic_write(
-                self.output_root,
-                self.outputs["image_build_result"],
-                encode_document(result),
+def _diagnose(
+    diagnostic: Diagnostic, records: list[dict[str, object]], logs: dict[str, Path]
+) -> None:
+    for record in records:
+        if record["status"] == "built":
+            diagnostic.line(f"{record['service_id']}: built {record['digest']}")
+        else:
+            diagnostic.line(
+                f"{record['service_id']}: {record['reason']}: {record['detail']}"
             )
-        diagnostic, truncated = self._diagnostic(code)
-        atomic_write(self.output_root, self.request.diagnostic.path, diagnostic)
-        response = AdapterResponse.model_validate(
-            {
-                "schema_version": "sdi.stage-adapter-response/v1",
-                "correlation": self.request.correlation.model_dump(mode="json"),
-                "execution_conclusion": conclusion,
-                "domain_outcome": domain_outcome,
-                "reason": {
-                    "category": category,
-                    "code": f"sdi.image-build.{code}",
-                    "summary": summary,
-                },
-                "consumed_inputs": [item.slot for item in self.request.inputs],
-                "produced_outputs": [] if result is None else ["image_build_result"],
-                "diagnostic": {"present": True, "truncated": truncated},
-            },
-            strict=True,
-            extra="forbid",
-        )
-        atomic_write(
-            self.output_root,
-            "response.json",
-            canonical_json(response.model_dump(mode="json")),
-        )
-
-    def _header(self, code: str) -> bytes:
-        lines = [f"outcome: sdi.image-build.{code}"]
-        for record in self.records:
-            if record["status"] == "built":
-                lines.append(f"{record['service_id']}: built {record['digest']}")
-            else:
-                lines.append(
-                    f"{record['service_id']}: {record['reason']}: {record['detail']}"
-                )
-        return "".join(f"{line}\n" for line in lines).encode()
-
-    def read_tails(self, logs: dict[str, Path]) -> None:
-        """Keep a fair share of each failed build's log tail."""
-        failed = [
-            (str(record["service_id"]), logs[str(record["service_id"])])
-            for record in self.records
-            if record["status"] == "failed" and record["service_id"] in logs
-        ]
-        if not failed:
-            return
-        room = self.request.diagnostic.max_bytes - len(self._header("recorded"))
-        share = room // len(failed)
-        for service_id, log in failed:
-            title = f"--- {service_id} build log tail\n".encode()
-            if share <= len(title):
-                self.tails_cut = True
-                continue
-            tail = log_tail(log, max_bytes=share - len(title))
-            self.tails_cut = self.tails_cut or tail.cut
-            self.tails.append(
-                title + "".join(f"{line}\n" for line in tail.lines).encode()
-            )
-
-    def _diagnostic(self, code: str) -> tuple[bytes, bool]:
-        """Return each record, then the failed builds' log tails."""
-        limit = self.request.diagnostic.max_bytes
-        header = self._header(code)
-        if len(header) > limit:
-            return header[: header.rfind(b"\n", 0, limit) + 1], True
-        content = header + b"".join(self.tails)
-        # Every line was checked alone; this checks what joining them made.
-        if len(content) > limit or contains_sensitive_material(content.decode()):
-            return header, bool(self.tails)
-        return content, self.tails_cut
+    failed = [
+        (str(record["service_id"]), logs[str(record["service_id"])])
+        for record in records
+        if record["status"] == "failed" and record["service_id"] in logs
+    ]
+    if not failed:
+        return
+    for service_id, log in failed:
+        title = f"{service_id} build log tail"
+        room = diagnostic.block_room(RECORDED, title, shares=len(failed))
+        if room <= 0:
+            diagnostic.omit_block()
+            continue
+        tail = log_tail(log, max_bytes=room)
+        diagnostic.block(title, tail.lines, cut=tail.cut)
 
 
 def _merge(
@@ -568,16 +478,10 @@ def _build_environment(scratch: Path) -> dict[str, str]:
     }
 
 
-def _image_build(
-    run: _Run, input_root: Path, deadline: float
-) -> tuple[str, ImageBuildResult | None]:
-    """Return the outcome code and the result the run publishes."""
-    request = run.request
+def _image_build(invocation: Invocation) -> Verdict:
+    request = invocation.request
     declared = {item.slot: item for item in request.inputs}
-    contents = {
-        slot: _read_input(input_root / item.path, item.byte_size, item.sha256)
-        for slot, item in declared.items()
-    }
+    contents = invocation.inputs
     paths = {slot: item.path for slot, item in declared.items()}
     manifest = validate_contract(
         ServiceRepositoryManifest,
@@ -588,7 +492,7 @@ def _image_build(
         ),
         paths["service_repository"],
     )
-    repository_root = input_root / SERVICE_REPOSITORY_ROOT
+    repository_root = invocation.input_root / SERVICE_REPOSITORY_ROOT
     snapshot = capture_service_repository(repository_root)
     if snapshot.manifest != manifest:
         msg = "copied service folders do not match the service-repository manifest"
@@ -618,9 +522,9 @@ def _image_build(
     )
     composed = {item.slot: item.sha256 for item in deployment.source_inputs}
     if composed.get("service_repository") != declared["service_repository"].sha256:
-        return "input-mismatch", None
+        return Verdict(INPUT_MISMATCH)
     if len(deployment.placements) > MAX_PLACEMENTS:
-        return "too-many-placements", None
+        return Verdict(TOO_MANY_PLACEMENTS)
 
     artifacts = {
         file.description.service_id: file.description.artifacts or {}
@@ -631,20 +535,19 @@ def _image_build(
         for placement in deployment.placements
     ]
     builds = [plan for plan in plans if isinstance(plan, Build)]
-    built: dict[str, dict[str, object]] = {}
     if builds:
         with tempfile.TemporaryDirectory(prefix="sdi-image-build-") as directory:
             scratch = Path(directory)
             environment = _build_environment(scratch)
             buildctl = shutil.which("buildctl", path=environment["PATH"])
             if buildctl is None:
-                return "builder-unreachable", None
+                return Verdict(BUILDER_UNREACHABLE)
             failure = _build_services_failure(builds, buildctl, environment)
             if failure is not None:
-                return failure, None
+                return Verdict(failure)
             built, running = _run_builds(
                 builds,
-                deadline=deadline,
+                deadline=invocation.deadline_monotonic - DEADLINE_RESERVE_SECONDS,
                 builder=Builder(
                     buildctl,
                     repository_root,
@@ -653,10 +556,15 @@ def _image_build(
                     environment,
                 ),
             )
-            run.records = _merge(plans, built)
-            run.read_tails({item.build.service_id: item.log for item in running})
+            records = _merge(plans, built)
+            _diagnose(
+                invocation.diagnostic,
+                records,
+                {item.build.service_id: item.log for item in running},
+            )
     else:
-        run.records = _merge(plans, {})
+        records = _merge(plans, {})
+        _diagnose(invocation.diagnostic, records, {})
     identifier = (
         f"{deployment.scenario_id}-{deployment.testcase_id}-"
         f"{deployment.combination_id}-image-build"
@@ -677,61 +585,11 @@ def _image_build(
                 {"slot": item.slot, "sha256": item.sha256} for item in request.inputs
             ],
             "registry": REGISTRY,
-            "images": run.records,
+            "images": records,
         },
         "image-build-result.json",
     )
-    return "recorded", result
+    return Verdict(RECORDED, {"image_build_result": result})
 
 
-def run_adapter(*, request_path: Path, input_root: Path, output_root: Path) -> None:
-    """Publish one complete candidate response after all candidate files."""
-    started = time.monotonic()
-    enforce_domain_execution_boundary(expected_label="image-build")
-    try:
-        parsed = parse_json(
-            request_path.read_bytes(), str(request_path), max_bytes=MAX_REQUEST_BYTES
-        )
-    except OSError as error:
-        msg = "adapter request cannot be read"
-        raise InputError(msg) from error
-    request = validate_contract(AdapterRequest, parsed, str(request_path))
-    if request.correlation.stage != "image_build":
-        msg = "the image-build adapter serves only the image_build Stage"
-        raise InputError(msg)
-    if (
-        not input_root.is_dir()
-        or not output_root.is_dir()
-        or any(output_root.iterdir())
-    ):
-        msg = "adapter roots must exist and the output root must be empty"
-        raise InputError(msg)
-    deadline = started + request.work_limit_seconds - DEADLINE_RESERVE_SECONDS
-    run = _Run(request, output_root)
-    run.publish(*_image_build(run, input_root, deadline))
-
-
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="sdi-image-build-adapter")
-    commands = parser.add_subparsers(dest="command", required=True)
-    run = commands.add_parser("run")
-    run.add_argument("--request", type=Path, required=True)
-    run.add_argument("--input-root", type=Path, required=True)
-    run.add_argument("--output-root", type=Path, required=True)
-    return parser
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    """Expose only the stable one-shot Stage-adapter operation."""
-    try:
-        enforce_domain_execution_boundary()
-        arguments = _parser().parse_args(argv)
-        run_adapter(
-            request_path=arguments.request,
-            input_root=arguments.input_root,
-            output_root=arguments.output_root,
-        )
-    except (InputError, OSError, ValidationError) as error:
-        sys.stderr.write(f"sdi-image-build-adapter: {type(error).__name__}\n")
-        return 2
-    return 0
+main = serve("image_build", _image_build)
