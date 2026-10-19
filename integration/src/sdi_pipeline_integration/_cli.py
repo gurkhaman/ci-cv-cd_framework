@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, cast
 from pydantic import ValidationError
 
 from ._assessment import assess_proposal_files, load_assessment_inputs
+from ._bundle import validate_bundle
 from ._composition_config import (
     DEFAULT_COMPOSITION_CONFIG,
     resolve_composition_settings,
@@ -36,7 +37,7 @@ from ._jenkins_pipeline import (
     preflight_jenkins_run,
     write_stage_wiring,
 )
-from ._local_dispatch import dispatch_local, validate_bundle
+from ._local_dispatch import dispatch_local
 from ._recovery_contracts import (
     load_installation_authority,
     validate_repository_authority,

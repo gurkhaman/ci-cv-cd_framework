@@ -23,6 +23,7 @@ import requests
 from pydantic import ValidationError
 from requests.adapters import HTTPAdapter
 
+from ._bundle import MAX_RESULT_BYTES, parse_pipeline_result, validate_bundle
 from ._handoff_contracts import (
     HANDOFF_CONTRACT_VERSION,
     HANDOFF_PARAMETERS,
@@ -33,7 +34,6 @@ from ._handoff_contracts import (
 )
 from ._integration_code import STALE_IMAGE_REASON
 from ._json_input import canonical_json, parse_json
-from ._local_dispatch import MAX_RESULT_BYTES, parse_pipeline_result, validate_bundle
 from ._result_contracts import PIPELINE_RESULT_PATH, PipelineIntegrationResult
 from ._run_input import identify_committed_run
 from ._stage_registry import RUN_LIMITS
