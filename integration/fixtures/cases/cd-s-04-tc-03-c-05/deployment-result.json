@@ -43,12 +43,7 @@
     {
       "sha256": "ac4bbdcd00fedd3a6c34112d3f5bf8ea863e921c0512b450527c50f680f7ee0e",
       "slot": "image_build_result"
-    },
-    {
-      "sha256": "e2ee1e98253fb107ec9c862b46d841f18a0f51a2eb94d275af90bc1f78cfae45",
-      "slot": "validation_evidence"
     }
   ],
-  "testcase_id": "TC-03",
-  "validation_evidence_id": "s-04-tc-03-c-05-validation"
+  "testcase_id": "TC-03"
 }

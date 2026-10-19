@@ -295,19 +295,137 @@ class ImageBuildResult(ContractModel):
         return self
 
 
-class FixtureValidationRecord(ContractModel):
-    """One declared validation case that was deliberately not evaluated."""
+class CountingTopic(ContractModel):
+    """Messages counted on one of a service's counting outputs."""
 
-    validation_case_id: Slug
-    description: NonBlank
-    evaluation_status: Literal["not_evaluated"]
+    topic: NonBlank
+    messages: NonNegativeInt
+
+
+class ParticipatingService(ContractModel):
+    """A service whose container still ran when the orchestrator exited."""
+
+    service_id: Slug
+    participation: Literal["participated", "participated_loosened"]
+    image_digest: ImageDigest
+    counting_topics: list[CountingTopic]
+
+
+class NonParticipatingService(ContractModel):
+    """A service that ran in the scenario but did not participate."""
+
+    service_id: Slug
+    participation: Literal["did_not_participate"]
+    reason: Literal["container-exited", "failed-to-start", "no-message"]
+    exit_code: int | SkipJsonSchema[None] = None
+    detail: FailureDetail | SkipJsonSchema[None] = None
+    image_digest: ImageDigest | SkipJsonSchema[None] = None
+    counting_topics: list[CountingTopic] | SkipJsonSchema[None] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_explicit_unknowns(cls, data: object) -> object:
+        """Require absent facts to be omitted rather than null."""
+        return reject_explicit_nulls(
+            data, ("exit_code", "detail", "image_digest", "counting_topics")
+        )
+
+    @model_validator(mode="after")
+    def require_exit_code_of_exited_container(self) -> Self:
+        if (self.reason == "container-exited") != (self.exit_code is not None):
+            msg = "exit_code is recorded exactly for a container-exited service"
+            raise ValueError(msg)
+        return self
+
+
+class UnevaluatedService(ContractModel):
+    """A service whose participation a pipeline gap kept from being judged."""
+
+    service_id: Slug
+    participation: Literal["not_evaluated"]
+    reason: Literal[
+        "image-unavailable",
+        "no-amd64",
+        "needs-gpu-or-device",
+        "unsupported-command",
+        "no-counting-output",
+        "unloadable-type",
+        "blocked",
+    ]
+    detail: FailureDetail | SkipJsonSchema[None] = None
+    image_digest: ImageDigest | SkipJsonSchema[None] = None
+    counting_topics: list[CountingTopic] | SkipJsonSchema[None] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_explicit_unknowns(cls, data: object) -> object:
+        """Require absent facts to be omitted rather than null."""
+        return reject_explicit_nulls(
+            data, ("detail", "image_digest", "counting_topics")
+        )
+
+
+ServiceParticipation = Annotated[
+    ParticipatingService | NonParticipatingService | UnevaluatedService,
+    Field(discriminator="participation"),
+]
+
+
+class MissionStep(ContractModel):
+    """One requirement's mission step; waited_on names the topic or action."""
+
+    requirement_id: Slug
+    status: Literal["passed", "failed", "timed_out", "scripted", "not_reached"]
+    waited_on: NonBlank | SkipJsonSchema[None] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_explicit_unknowns(cls, data: object) -> object:
+        """Require an unwatched step to omit waited_on rather than null it."""
+        return reject_explicit_nulls(data, ("waited_on",))
+
+    @model_validator(mode="after")
+    def reject_waiting_scripted_step(self) -> Self:
+        if self.status == "scripted" and self.waited_on is not None:
+            msg = "a scripted step waits on nothing"
+            raise ValueError(msg)
+        return self
+
+
+class Mission(ContractModel):
+    """The scenario's setup and one step per requirement, in requirement order."""
+
+    setup: Literal["passed", "timed_out"]
+    steps: Annotated[list[MissionStep], Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def validate_steps(self) -> Self:
+        _require_unique([item.requirement_id for item in self.steps], "requirement_id")
+        if self.setup == "timed_out" and any(
+            item.status != "not_reached" for item in self.steps
+        ):
+            msg = "a mission whose setup timed out reaches no step"
+            raise ValueError(msg)
+        return self
+
+    @property
+    def completed(self) -> bool:
+        """Whether setup passed and every step passed or was scripted."""
+        return self.setup == "passed" and all(
+            item.status in {"passed", "scripted"} for item in self.steps
+        )
 
 
 class ValidationEvidence(ContractModel):
-    """Fixture-qualified CV handoff that contains no Validation verdict."""
+    """How CV reached its verdict on one composition in the Validation scenario.
+
+    The verdict is the attempt's domain outcome: not evaluated when a pipeline
+    gap kept any service from being judged, succeeded when every service
+    participated and the mission completed, and failed otherwise.
+    """
 
     schema_version: Literal["sdi.validation-evidence/v1"]
-    evidence_basis: Literal["fixture"]
+    evidence_basis: Literal["implemented"]
     validation_evidence_id: Slug
     blueprint_id: Slug
     deployment_schema_id: Slug
@@ -317,16 +435,48 @@ class ValidationEvidence(ContractModel):
     combination_id: CombinationId
     profile_id: Slug
     source_inputs: Annotated[list[SourceInputDigest], ProducerInputs("cv")]
-    domain_outcome: Literal["not_evaluated"]
+    domain_outcome: Literal["succeeded", "failed", "not_evaluated"]
     kpi_evaluation: Literal["not_evaluated"]
-    validation_records: Annotated[list[FixtureValidationRecord], Field(min_length=1)]
+    negative_cases: Literal["not_evaluated"]
+    platform: Literal["linux/amd64"]
+    services: Annotated[list[ServiceParticipation], Field(min_length=1)]
+    mission: Mission | SkipJsonSchema[None] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_explicit_unknowns(cls, data: object) -> object:
+        """Require an absent mission to be omitted rather than null."""
+        return reject_explicit_nulls(data, ("mission",))
 
     @model_validator(mode="after")
-    def validate_records(self) -> Self:
-        _require_unique(
-            [item.validation_case_id for item in self.validation_records],
-            "validation_case_id",
-        )
+    def validate_verdict(self) -> Self:
+        _require_unique([item.service_id for item in self.services], "service_id")
+        unevaluated = [
+            item for item in self.services if isinstance(item, UnevaluatedService)
+        ]
+        if unevaluated and (
+            len(unevaluated) != len(self.services)
+            or all(item.reason == "blocked" for item in unevaluated)
+        ):
+            msg = (
+                "a pipeline gap leaves every service not_evaluated, "
+                "with at least one cause besides blocked"
+            )
+            raise ValueError(msg)
+        if bool(unevaluated) == (self.mission is not None):
+            msg = "evidence holds a mission exactly when the services were evaluated"
+            raise ValueError(msg)
+        if self.mission is None:
+            verdict = "not_evaluated"
+        elif self.mission.completed and all(
+            isinstance(item, ParticipatingService) for item in self.services
+        ):
+            verdict = "succeeded"
+        else:
+            verdict = "failed"
+        if self.domain_outcome != verdict:
+            msg = f"services and mission make the domain outcome {verdict}"
+            raise ValueError(msg)
         return self
 
 
@@ -353,7 +503,6 @@ class DeploymentResult(ContractModel):
     blueprint_id: Slug
     deployment_schema_id: Slug
     image_build_result_id: Slug
-    validation_evidence_id: Slug
     scenario_id: ScenarioId
     testcase_id: TestcaseId
     combination_id: CombinationId

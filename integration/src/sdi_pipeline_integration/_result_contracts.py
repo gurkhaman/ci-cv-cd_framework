@@ -73,6 +73,13 @@ INITIAL_SKIP_CODES = frozenset(
         "sdi.run.deadline-exceeded",
     }
 )
+RED_REASON_CODES = frozenset(
+    {
+        "sdi.stage.not-implemented",
+        "sdi.dependency.fixture-evidence",
+        "sdi.run.deadline-exceeded",
+    }
+)
 
 
 def archive_path(stage: StageName, accepted_path: str) -> str:
@@ -420,3 +427,16 @@ class PipelineIntegrationResult(ContractModel):
             [PIPELINE_RESULT_PATH, *(item.path for item in self.artifacts)]
         )
         return self
+
+
+def run_is_red(result: PipelineIntegrationResult) -> bool:
+    """Whether the run failed: its machinery broke or CV failed the composition.
+
+    CV not evaluating a composition, or composition finding none, stays green.
+    """
+    return any(
+        attempt.execution_conclusion in {"failed", "timed_out"}
+        or (attempt.reason is not None and attempt.reason.code in RED_REASON_CODES)
+        or (attempt.correlation.stage == "cv" and attempt.domain_outcome == "failed")
+        for attempt in result.attempts
+    )
