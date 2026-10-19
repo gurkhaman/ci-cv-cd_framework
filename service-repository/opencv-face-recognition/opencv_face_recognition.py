@@ -13,6 +13,8 @@ DETECTOR = f"{SHARE}/face_detection_yunet_2022mar.onnx"
 RECOGNIZER = f"{SHARE}/face_recognition_sface_2021dec.onnx"
 # SFace's published cosine threshold for a same-person match.
 MATCH_COSINE = 0.363
+# YuNet 2022mar raises cv2.error on any input side shorter than this.
+MIN_SIDE = 63
 
 TO_BGR = {
     "bgr8": (3, None),
@@ -96,6 +98,18 @@ class FaceRecognition(Node):
             )
             return []
         channels, conversion = TO_BGR[message.encoding]
+        if not (
+            min(message.height, message.width) >= MIN_SIDE
+            and message.step >= message.width * channels
+            and len(message.data) == message.height * message.step
+        ):
+            self.get_logger().warning(
+                f"unusable {message.encoding} image dropped: "
+                f"{message.width}x{message.height}, step {message.step}, "
+                f"{len(message.data)} bytes",
+                once=True,
+            )
+            return []
         rows = np.frombuffer(message.data, np.uint8).reshape(
             message.height, message.step
         )
