@@ -77,21 +77,27 @@ printf '%s\n' \
 
 "$stack" --config "$config" --project-name "$project_name" destroy
 
+"$stack" --config "$config" --project-name "$project_name" build
+
+prebuilt() {
+    "$stack" --config "$config" --project-name "$project_name" --prebuilt "$@"
+}
+
 check() {
-    "$stack" --config "$config" --project-name "$project_name" verify-live
+    prebuilt verify-live
 }
 
 exercise() {
-    "$stack" --config "$config" --project-name "$project_name" exercise-live
+    prebuilt exercise-live
 }
 
-"$stack" --config "$config" --project-name "$project_name" start-controller
+prebuilt start-controller
 "$checker" provision-secrets \
     --url "http://127.0.0.1:$port" \
     --admin-id smoke-administrator \
     --admin-password-file "$admin_password" \
     --agent-secret-directory "$temporary"
-"$stack" --config "$config" --project-name "$project_name" start
+prebuilt start
 check
 
 # The runner image, its controller network, and both registration guards,
@@ -115,8 +121,7 @@ printf '%s\n' 'not-a-registration-token!' > "$temporary/invalid-registration-tok
 expect_refusal 'the registration token is empty or invalid' \
     "$stack" --config "$config" --project-name "$project_name" \
     register-runner fork < "$temporary/invalid-registration-token"
-expect_refusal 'the fork runner is not registered' \
-    "$stack" --config "$config" --project-name "$project_name" start
+expect_refusal 'the fork runner is not registered' prebuilt start
 grep -v '^GITHUB_RUNNERS=' "$config" > "$config.without-runners"
 mv "$config.without-runners" "$config"
 
@@ -140,7 +145,7 @@ rm "$integration_agent_secret" "$ci_agent_secret" "$image_build_agent_secret" \
     "$cv_agent_secret" "$cd_agent_secret"
 printf '%s\n' 'rotated-admin-password-for-controller-smoke' > "$admin_password"
 printf '%s\n' 'rotated-handoff-password-for-controller-smoke' > "$handoff_password"
-"$stack" --config "$config" --project-name "$project_name" start-controller
+prebuilt start-controller
 "$checker" provision-secrets \
     --url "http://127.0.0.1:$port" \
     --admin-id smoke-administrator \
@@ -152,7 +157,7 @@ for name in integration ci image-build cv cd; do
         exit 2
     }
 done
-"$stack" --config "$config" --project-name "$project_name" start
+prebuilt start
 check
 exercise
 
@@ -167,7 +172,7 @@ exercise
     --casc "$root/casc/jenkins.yaml"
 
 "$stack" --config "$config" --project-name "$project_name" stop
-"$stack" --config "$config" --project-name "$project_name" start
+prebuilt start
 check
 
 printf '%s\n' 'Ephemeral Jenkins controller, five-agent, builder, and handoff-runner smoke check passed.'
