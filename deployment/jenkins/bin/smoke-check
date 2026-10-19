@@ -47,7 +47,6 @@ AGENT_EXERCISE_SCRIPT_SECONDS = 90
 EXPECTED_BUILDCTL_VERSION = "v0.34.0"
 # Only the image-build agent may resolve these, on its internal builder network.
 BUILDER_SERVICES = "buildkitd registry"
-# Only the cv agent may resolve the CV engine; it reaches it through the docker SDK.
 CV_ENGINE = "cv-engine"
 CV_ENGINE_PING = (
     "import docker; "

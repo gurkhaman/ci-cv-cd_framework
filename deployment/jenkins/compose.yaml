@@ -259,7 +259,7 @@ services:
       - registry:5000
     volumes:
       - cv-engine-state:/var/lib/docker
-    networks: [cv-engine-agent, image-build-builder, cv-engine-egress]
+    networks: [cv-engine-agent, cv-engine-registry, cv-engine-egress]
     healthcheck:
       test: [CMD, docker, -H, "tcp://127.0.0.1:2375", version]
       interval: 5s
@@ -281,7 +281,7 @@ services:
       - /tmp:rw,nosuid,nodev,mode=1777
     volumes:
       - pipeline-registry:/var/lib/registry
-    networks: [image-build-builder]
+    networks: [image-build-builder, cv-engine-registry]
     healthcheck:
       test: [CMD, wget, -q, -O, /dev/null, "http://127.0.0.1:5000/v2/"]
       interval: 5s
@@ -450,6 +450,8 @@ networks:
     internal: true
   builder-egress:
   cv-engine-agent:
+    internal: true
+  cv-engine-registry:
     internal: true
   cv-engine-egress:
 

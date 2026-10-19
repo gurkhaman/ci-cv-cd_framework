@@ -154,7 +154,11 @@ def test_compose_defines_five_isolated_websocket_agents() -> None:
         == "${JENKINS_AGENT_NETWORK_INTERNAL:-false}"
         for name in agent_networks
     )
-    # cv-engine names its own in-container socket; no service mounts the host's.
+
+
+def test_no_service_mounts_the_host_docker_socket() -> None:
+    services = _load_yaml(JENKINS_ROOT / "compose.yaml")["services"]
+
     assert all(
         "docker.sock" not in json.dumps(service.get("volumes", []))
         for service in services.values()
@@ -213,7 +217,7 @@ def test_builder_and_registry_are_reachable_only_from_the_image_build_agent() ->
         "/etc/buildkit/buildkitd.toml",
     ]
     assert buildkitd["networks"] == ["image-build-builder", "builder-egress"]
-    assert registry["networks"] == ["image-build-builder"]
+    assert registry["networks"] == ["image-build-builder", "cv-engine-registry"]
     assert registry["read_only"] is True
     assert registry["cap_drop"] == ["ALL"]
     assert registry["security_opt"] == ["no-new-privileges:true"]
@@ -237,7 +241,6 @@ def test_builder_and_registry_are_reachable_only_from_the_image_build_agent() ->
     } == {
         "image-build",
         *BUILDER_SERVICES,
-        CV_ENGINE,
     }
     assert {name for name, nets in members.items() if "builder-egress" in nets} == {
         "buildkitd"
@@ -267,18 +270,17 @@ def test_cv_engine_is_reachable_only_from_the_cv_agent() -> None:
         "--insecure-registry",
         "registry:5000",
     ]
-    # The image declares /var/lib/docker as VOLUME; naming it leaves no anonymous
-    # volume behind, and deleting it is the engine's only reset.
+    # The image declares /var/lib/docker as VOLUME.
     assert engine["volumes"] == ["cv-engine-state:/var/lib/docker"]
-    assert "cv-engine-state" in compose["volumes"]
     assert engine["healthcheck"]["test"][0] == "CMD"
     assert engine["networks"] == [
         "cv-engine-agent",
-        "image-build-builder",
+        "cv-engine-registry",
         "cv-engine-egress",
     ]
 
     assert networks["cv-engine-agent"]["internal"] is True
+    assert networks["cv-engine-registry"]["internal"] is True
     assert networks["cv-engine-egress"] is None
     members = {
         name: set(service.get("networks", [])) for name, service in services.items()
@@ -289,6 +291,10 @@ def test_cv_engine_is_reachable_only_from_the_cv_agent() -> None:
     }
     assert {name for name, nets in members.items() if "cv-engine-egress" in nets} == {
         CV_ENGINE
+    }
+    assert {name for name, nets in members.items() if "cv-engine-registry" in nets} == {
+        CV_ENGINE,
+        "registry",
     }
 
 

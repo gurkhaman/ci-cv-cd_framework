@@ -302,10 +302,11 @@ by digest in `deployment/installation.env` as `SDI_CV_ENGINE_IMAGE`.
   and trusts `registry:5000` as an insecure registry. The CV adapter reaches it
   through the Python `docker` SDK. No service mounts the host Docker socket.
 - The internal `cv-engine-agent` network joins only the `cv` agent and
-  `cv-engine`. The `cv` agent joins no builder network and has no other route
-  to the engine. `cv-engine` also joins `image-build-builder` to pull from
-  `registry`, and its own unrestricted `cv-engine-egress` network for base
-  images and packages.
+  `cv-engine`. The internal `cv-engine-registry` network joins only
+  `cv-engine` and `registry`, so the engine pulls from `registry:5000` while
+  the `image-build` agent and `buildkitd` have no route to its root API. The
+  `cv` agent joins no builder network. Only `cv-engine` joins the unrestricted
+  `cv-engine-egress` network, for base images and packages.
 - Its `/var/lib/docker` lives in the `cv-engine-state` named volume. Nothing
   pre-pulls or prunes it. It survives `stop` and `start`; deleting the volume,
   or `destroy`, is the reset. Recovery snapshots do not include it.
