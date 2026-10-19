@@ -588,14 +588,10 @@ response = {{
 
 def _implemented_upstream(
     tmp_path: Path,
-    images: dict[str, dict[str, Any]],
+    images: dict[str, dict[str, Any]] | None,
     service_repository: Path = FIXTURE_SERVICE_REPOSITORY,
     placements: list[dict[str, str]] = PLACEMENTS,
 ) -> Path:
-    """Select implemented composition, then image-build publishing these records.
-
-    With no records, the committed image-build adapter is kept.
-    """
     repository, _commit_sha = _repository(
         tmp_path, service_repository=service_repository
     )
@@ -631,7 +627,7 @@ def _implemented_upstream(
         "profile_id": "waffle-jetson-arm64",
         "source_inputs": [],
         "registry": "registry:5000",
-        "images": list(images.values()),
+        "images": list((images or {}).values()),
     }
     _write_response_adapter(
         image_build, {"image-build-result.json": json.dumps(result)}, "succeeded"
@@ -642,17 +638,16 @@ def _implemented_upstream(
         "entrypoint: sdi-image-build-adapter", f"entrypoint: {image_build}"
     )
     assert scripted != committed
-    if images:
+    if images is not None:
         descriptor.write_text(scripted)
     return repository
 
 
 def _implemented_image_build(
     tmp_path: Path,
-    images: dict[str, dict[str, Any]],
+    images: dict[str, dict[str, Any]] | None,
     service_repository: Path = FIXTURE_SERVICE_REPOSITORY,
 ) -> dict[str, Any]:
-    """Run implemented composition, then image-build publishing these records."""
     repository = _implemented_upstream(tmp_path, images, service_repository)
     _git(repository, "add", ".")
     _git(repository, "commit", "-m", "Select implemented composition and image-build")
@@ -709,7 +704,7 @@ def test_a_buildable_placement_needs_an_answering_builder(
     (fake_bin / "buildctl").chmod(0o755)
     monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
 
-    attempt = _implemented_image_build(tmp_path, {}, service_repository)
+    attempt = _implemented_image_build(tmp_path, None, service_repository)
 
     assert attempt["execution_conclusion"] == "failed"
     assert attempt["domain_outcome"] == "not_evaluated"
@@ -787,7 +782,6 @@ CV_REASONS = {
 def _implemented_cv_chain(
     tmp_path: Path, domain_outcome: str, evidence: dict[str, Any] | None
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
-    """Run implemented upstream Stages into a CV adapter publishing this evidence."""
     repository = _implemented_upstream(tmp_path, CV_IMAGES, placements=CV_PLACEMENTS)
     adapter = tmp_path / "implemented-cv-adapter"
     write_scripted_adapter(

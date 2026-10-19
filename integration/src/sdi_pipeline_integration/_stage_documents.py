@@ -30,10 +30,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class StageDocuments:
-    """One accepted attempt's documents, as its Stage's check reads them."""
-
     stage: StageName
-    implementation_mode: ImplementationMode
     domain_outcome: DomainOutcome
     outputs: Mapping[str, BaseModel]
     inputs: Mapping[str, BaseModel]
@@ -159,15 +156,11 @@ def _check_image_build(documents: StageDocuments) -> None:
 
 
 def _check_cv(documents: StageDocuments) -> None:
-    """Check CV's Validation evidence, which it publishes on every outcome."""
     validation = next(
         (item for item in documents.evidence if isinstance(item, ValidationEvidence)),
         None,
     )
     if validation is None:
-        if documents.implementation_mode == "implemented":
-            msg = "implemented CV candidate did not produce its required output"
-            raise InputError(msg)
         return
     blueprint, deployment, image_build = _image_build_documents(documents)
     if validation.domain_outcome != documents.domain_outcome:
@@ -290,11 +283,14 @@ def validate_stage_documents(  # noqa: PLR0913
         } != expected_input_digests:
             msg = "candidate Domain output input digests do not match the request"
             raise InputError(msg)
+    published = {getattr(item, "schema_version", None) for item in evidence}
+    if implementation_mode == "implemented" and any(
+        grant.required and grant.schema_version not in published
+        for grant in STAGES[stage].grant.evidence
+    ):
+        msg = f"implemented {stage} candidate did not produce its required output"
+        raise InputError(msg)
     if domain_outcome == "failed" and outputs:
         msg = f"{stage} negative Domain outcome cannot carry Domain output"
         raise InputError(msg)
-    CHECKS[stage](
-        StageDocuments(
-            stage, implementation_mode, domain_outcome, outputs, inputs, evidence
-        )
-    )
+    CHECKS[stage](StageDocuments(stage, domain_outcome, outputs, inputs, evidence))

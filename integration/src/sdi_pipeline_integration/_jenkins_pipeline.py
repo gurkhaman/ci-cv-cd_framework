@@ -469,7 +469,6 @@ def finalize_jenkins_run(  # noqa: PLR0913
 
 
 def bundle_is_red(bundle_root: Path, *, execution_id: str) -> bool:
-    """Validate a bundle and derive only its run colour."""
     result = validate_bundle(bundle_root)
     if result.execution_id != execution_id:
         msg = "Pipeline integration result execution ID does not match the build"

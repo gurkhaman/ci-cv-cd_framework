@@ -95,13 +95,18 @@ SUPPLIED_INPUT_SLOTS = frozenset(
 
 @dataclass(frozen=True)
 class EvidenceGrant:
-    """Evidence of how a Stage reached its outcome; never a Domain input."""
+    """Evidence of how a Stage reached its outcome, which no later Stage reads.
+
+    Required evidence comes from every implemented attempt whose execution
+    succeeded.
+    """
 
     name: str
     file_name: str
     media_type: str
     schema_version: str
     max_bytes: int
+    required: bool = False
 
 
 @dataclass(frozen=True)
@@ -222,6 +227,7 @@ STAGES: dict[StageName, Stage] = {
                     "application/json",
                     "sdi.validation-evidence/v1",
                     max_bytes=32768,
+                    required=True,
                 ),
             ),
         ),

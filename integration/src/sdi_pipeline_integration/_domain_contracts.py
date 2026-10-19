@@ -303,7 +303,11 @@ class CountingTopic(ContractModel):
 
 
 class ParticipatingService(ContractModel):
-    """A service whose container still ran when the orchestrator exited."""
+    """A service still running when the orchestrator exited.
+
+    Unless its participation is loosened, it also sent a message on a
+    counting output.
+    """
 
     service_id: Slug
     participation: Literal["participated", "participated_loosened"]
@@ -312,7 +316,7 @@ class ParticipatingService(ContractModel):
 
 
 class NonParticipatingService(ContractModel):
-    """A service that ran in the scenario but did not participate."""
+    """A service that failed to start, exited, or sent no counted message."""
 
     service_id: Slug
     participation: Literal["did_not_participate"]
@@ -410,7 +414,6 @@ class Mission(ContractModel):
 
     @property
     def completed(self) -> bool:
-        """Whether setup passed and every step passed or was scripted."""
         return self.setup == "passed" and all(
             item.status in {"passed", "scripted"} for item in self.steps
         )

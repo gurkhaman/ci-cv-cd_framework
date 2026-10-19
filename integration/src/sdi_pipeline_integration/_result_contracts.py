@@ -73,6 +73,7 @@ INITIAL_SKIP_CODES = frozenset(
         "sdi.run.deadline-exceeded",
     }
 )
+RED_DOMAIN_FAILURE_STAGES: frozenset[StageName] = frozenset({"cv"})
 RED_REASON_CODES = frozenset(
     {
         "sdi.stage.not-implemented",
@@ -430,13 +431,12 @@ class PipelineIntegrationResult(ContractModel):
 
 
 def run_is_red(result: PipelineIntegrationResult) -> bool:
-    """Whether the run failed: its machinery broke or CV failed the composition.
-
-    CV not evaluating a composition, or composition finding none, stays green.
-    """
     return any(
         attempt.execution_conclusion in {"failed", "timed_out"}
         or (attempt.reason is not None and attempt.reason.code in RED_REASON_CODES)
-        or (attempt.correlation.stage == "cv" and attempt.domain_outcome == "failed")
+        or (
+            attempt.correlation.stage in RED_DOMAIN_FAILURE_STAGES
+            and attempt.domain_outcome == "failed"
+        )
         for attempt in result.attempts
     )

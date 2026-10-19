@@ -86,7 +86,7 @@
     },
     "NonParticipatingService": {
       "additionalProperties": false,
-      "description": "A service that ran in the scenario but did not participate.",
+      "description": "A service that failed to start, exited, or sent no counted message.",
       "properties": {
         "counting_topics": {
           "items": {
@@ -140,7 +140,7 @@
     },
     "ParticipatingService": {
       "additionalProperties": false,
-      "description": "A service whose container still ran when the orchestrator exited.",
+      "description": "A service still running when the orchestrator exited.\n\nUnless its participation is loosened, it also sent a message on a\ncounting output.",
       "properties": {
         "counting_topics": {
           "items": {

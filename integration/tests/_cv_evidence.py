@@ -1,5 +1,3 @@
-"""Validation evidence for the S-04 C-05 Fixture composition, one per verdict."""
-
 from __future__ import annotations
 
 from typing import Any
@@ -33,14 +31,15 @@ def step(requirement_id: str, status: str) -> dict[str, Any]:
     )
 
 
-def mission(unmet: str | None = None, status: str = "timed_out") -> dict[str, Any]:
-    """Meet every step before unmet, give unmet this status, reach none after."""
+def mission(
+    first_unmet: str | None = None, unmet_status: str = "timed_out"
+) -> dict[str, Any]:
     steps: list[dict[str, Any]] = []
     reached = True
     for requirement_id, waited_on in WAITED_ON.items():
-        if requirement_id == unmet:
+        if requirement_id == first_unmet:
             reached = False
-            steps.append(step(requirement_id, status))
+            steps.append(step(requirement_id, unmet_status))
         elif not reached:
             steps.append(step(requirement_id, "not_reached"))
         else:

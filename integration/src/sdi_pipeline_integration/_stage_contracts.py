@@ -297,9 +297,7 @@ class OutputGrant(ContractModel):
     path: RepositoryPath
     media_type: NonBlank
     schema_version: NonBlank
-    # A Domain output is required whenever the Domain outcome is not failed;
-    # Stage evidence is never a Domain input, and its Stage's document check
-    # decides when it is required.
+    # A Domain output is required whenever the Domain outcome is not failed.
     role: Literal["domain_output", "stage_evidence"]
     max_bytes: PositiveInt
 
