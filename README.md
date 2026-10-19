@@ -105,8 +105,6 @@ uv run --project integration sdi-integration --help
   self-hosted runners, one per repository, run as optional stack services.
 - `.github/workflows/`: the protected path-only Pipeline integration workflow.
 - `docs/`: role-neutral setup, operation, maintenance, and readiness guidance.
-- `CV/gazebo/`: retained Gazebo source assets. They are not connected to the
-  integration scaffold.
 - `CI/`: an unsupported workspace reserved for a possible future composition
   adapter. It is not a supported entry point.
 

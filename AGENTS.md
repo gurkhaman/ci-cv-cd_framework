@@ -6,7 +6,6 @@
 - `CI/` is an explicitly unsupported workspace. The implemented composition adapter lives in `integration/` as `sdi-composition-adapter`; the architecture in `CI/APSEC_2025_Tools.pdf` is design context, not implemented code.
 - `service-repository/` is the SDI service repository: one `<service_id>/` service folder per mobility service, holding its `SDI.md` description and the recipes that build its artifacts. CI reads it as a supplied read-only path and never writes it.
 - The Year-1 plugin and prototype were retired. Git history is their archive; do not restore their interfaces or artifact formats.
-- Most tracked files are Gazebo assets under `CV/gazebo/models/`; avoid repository-wide formatting or generated-file rewrites there.
 
 ## Engineering Choices
 
@@ -22,7 +21,7 @@
 - Run `integration/scripts/verify --fast` while you work. It skips the slow tests and the smoke check. Run the full `integration/scripts/verify` once before you open a pull request.
 - Full verify takes the host lock `/tmp/sdi-host.lock` itself before the slow tests and the smoke check, so concurrent sessions on one host wait in turn. A `flock /tmp/sdi-host.lock` wrapper around verify is safe, because verify reuses the locked descriptor that `flock` passes down. A wrapper that closes inherited descriptors deadlocks. Examples are `flock -o` and a Python process that holds the lock and starts verify through `subprocess`, which closes inherited descriptors by default.
 - The public entry point is `uv run --project integration sdi-integration`. The CLI, committed file contracts, and language-neutral Stage-adapter process interface are the supported boundaries; internal Python modules are not compatibility contracts.
-- The current scaffold validates committed inputs and executes four Stages locally or through the protected GitHub workflow and thin root Jenkins pipeline on five isolated inbound agents. Composition is implemented: it calls the default generator, or the one `--generator` names, of the committed composition config (`integration/composition-config.yaml`) over the supplied service repository. The config's `qwen` generator is self-hosted for cheap live tests only. Image-build, CV, and CD remain Fixtures; their real adapters are deferred to dedicated implementation work.
+- The current scaffold validates committed inputs and executes four Stages locally or through the protected GitHub workflow and thin root Jenkins pipeline on five isolated inbound agents. Composition is implemented: it calls the default generator, or the one `--generator` names, of the committed composition config (`integration/composition-config.yaml`) over the supplied service repository. The config's `qwen` generator is self-hosted for cheap live tests only. Image-build is implemented on Jenkins, where `sdi-image-build-adapter` builds one image per placement and pushes it to the stack-local pipeline registry; `dispatch-local` still runs its Fixture. CV and CD remain Fixtures; their real adapters are deferred to dedicated implementation work.
 - The composition live tests call a real model. Keep keys in the environment or the ignored root `.env`; never print, write, or commit them.
 - `integration/src/sdi_pipeline_integration/_stage_registry.py` owns Stage wiring. One `Stage` row per Stage holds its grant, display name, agent, Jenkins and local descriptors, and credentials, and `AGENTS` and `RUN_LIMITS` sit beside the rows. Change a Stage fact there first, then regenerate with `uv run --project integration sdi-integration jenkinsfile --write --jenkinsfile Jenkinsfile` and `uv run --project integration sdi-integration stage-profiles --write --directory integration/stage-profiles` from the repository root. JCasC, Compose, `deployment/jenkins/bin/smoke-check`, and `deployment/jenkins/bin/stack` keep hand-kept copies of some of those facts; update each to match. `integration/tests/test_stage_wiring.py` fails until they match.
 
@@ -58,14 +57,8 @@ Each rule has a check that fails when a change breaks it. When the operator corr
 - Keep issue, commit, branch, and pull-request references consistent with the repository's configured tracker and review policy.
 - Begin blocked work only after its blocker is merged.
 
-## CV Assets
-
-- Gazebo files are source assets for an external TurtleBot3 workspace. Copy the world, model directories, and launch file into `turtlebot3_gazebo`, then run `colcon build --symlink-install` from `turtlebot3_ws` before `ros2 launch turtlebot3_gazebo office.launch.py`.
-- The Gazebo assets are not wired into the pipeline integration scaffold and provide no automated scenario, oracle, or Validation evidence.
-- `CV/gazebo/world_parser.py` executes on import. Run it only from `CV/gazebo`; it copies model trees into the ignored `_models/` directory.
-
 ## Generated And Local Files
 
-- `.gitignore` excludes Python caches and environments, generated artifacts, workspaces, recovery artifacts, local deployment configuration, runtime secrets, and Gazebo parser output without hiding committed schemas or Fixture cases.
+- `.gitignore` excludes Python caches and environments, generated artifacts, workspaces, recovery artifacts, local deployment configuration, and runtime secrets without hiding committed schemas or Fixture cases.
 - The active root `Jenkinsfile` schedules only public integration CLI operations across the five agents. `.github/workflows/pipeline-integration.yml` is the protected external trigger, progress, summary, and artifact-retrieval surface.
 - Check `git status` after commands and keep machine-specific values, secrets, generated evidence, and recovery state out of commits.
