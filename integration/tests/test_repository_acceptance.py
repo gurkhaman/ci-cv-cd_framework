@@ -8,6 +8,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 VERIFY = REPOSITORY_ROOT / "integration" / "scripts" / "verify"
+ADAPTERS = REPOSITORY_ROOT / "deployment" / "jenkins" / "adapters"
 
 
 def _acceptance_checkout(tmp_path: Path) -> tuple[Path, Path]:
@@ -58,6 +60,12 @@ def _fake_tools(tmp_path: Path) -> Path:
         "  exit 0\n"
         "fi\n"
         'printf \'uv %s\\n\' "$*" >> "$ACCEPTANCE_LOG"\n'
+        'if [ -n "${STAGE_STATUS_PYTHON-}" ]; then\n'
+        '  case "$*" in "run --frozen sdi-integration stage-status "*)\n'
+        "    shift 3\n"
+        '    exec "$STAGE_STATUS_PYTHON" -m sdi_pipeline_integration "$@"\n'
+        "  esac\n"
+        "fi\n"
         '[ "$*" != "${FAIL_ACCEPTANCE_COMMAND-}" ]\n',
         encoding="utf-8",
     )
@@ -153,8 +161,9 @@ def _git(checkout: Path, *arguments: str) -> None:
 
 def test_verification_is_the_complete_fail_fast_acceptance_gate(tmp_path: Path) -> None:
     checkout, verify = _acceptance_checkout(tmp_path)
+    shutil.copytree(ADAPTERS, checkout / "deployment" / "jenkins" / "adapters")
     log = tmp_path / "acceptance.log"
-    environment = _environment(tmp_path)
+    environment = _environment(tmp_path) | {"STAGE_STATUS_PYTHON": sys.executable}
 
     completed = _run([verify], checkout, environment)
 
@@ -167,6 +176,10 @@ def test_verification_is_the_complete_fail_fast_acceptance_gate(tmp_path: Path) 
         (
             "uv run --frozen sdi-integration stage-profiles --check "
             "--directory stage-profiles"
+        ),
+        (
+            "uv run --frozen sdi-integration jenkinsfile --check "
+            "--jenkinsfile ../Jenkinsfile"
         ),
         (
             "uv run --frozen python -m "
@@ -183,21 +196,31 @@ def test_verification_is_the_complete_fail_fast_acceptance_gate(tmp_path: Path) 
         "uv run --frozen pytest -m slow",
         "uv tree --frozen --all-groups",
         "stack smoke",
+        "uv run --frozen sdi-integration stage-status --repository ..",
     ]
     assert "uv 0.12.1" in completed.stdout
     assert "SDI_GITHUB_RUNNER_VERSION=2.337.0" in completed.stdout
     assert "workflow-cps:4378.v7a_08f1b_b_f8f4" in completed.stdout
-    assert (
-        "Repository acceptance passed.\n"
-        "Passing proves the integration scaffold, the Fixture behavior of the "
-        "image-build, CV, and CD Stages, and the composition Stage contract: "
-        "outcomes, outputs, evidence, and diagnostics.\n"
-        "Live-model composition tests are skipped when their provider keys are "
-        "unavailable.\n"
-        "Passing proves no real image build, CV verdict, deployment, or KPI "
-        "evaluation; product security assurance, availability, and deferred "
-        "infrastructure remain out of scope.\n"
-    ) in completed.stdout
+    stage_status = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "sdi_pipeline_integration",
+            "stage-status",
+            "--repository",
+            REPOSITORY_ROOT,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert stage_status == (
+        "composition: implemented (jenkins), implemented (local)\n"
+        "image-build: implemented (jenkins), fixture (local)\n"
+        "cv: fixture (jenkins), fixture (local)\n"
+        "cd: fixture (jenkins), fixture (local)\n"
+    )
+    assert completed.stdout.endswith(f"Repository acceptance passed.\n{stage_status}")
 
     failed = _run(
         [verify],
@@ -211,6 +234,19 @@ def test_verification_is_the_complete_fail_fast_acceptance_gate(tmp_path: Path) 
         for line in log.read_text(encoding="utf-8").splitlines()[len(passed_commands) :]
     )
     assert "Repository acceptance passed." not in failed.stdout
+
+
+def test_verification_fails_when_stage_status_cannot_read_a_descriptor(
+    tmp_path: Path,
+) -> None:
+    checkout, verify = _acceptance_checkout(tmp_path)
+    environment = _environment(tmp_path) | {"STAGE_STATUS_PYTHON": sys.executable}
+
+    completed = _run([verify], checkout, environment)
+
+    assert completed.returncode != 0
+    assert "sdi-integration: " in completed.stderr
+    assert "Repository acceptance passed." not in completed.stdout
 
 
 def _commands(tmp_path: Path) -> list[str]:

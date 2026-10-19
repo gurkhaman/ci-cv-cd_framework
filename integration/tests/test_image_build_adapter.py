@@ -28,12 +28,12 @@ from sdi_pipeline_integration._service_descriptions import (
     capture_service_repository,
 )
 from sdi_pipeline_integration._stage_contracts import (
-    STAGE_GRANTS,
     AdapterResponse,
     StageProfile,
     contains_sensitive_contract_material,
     contains_sensitive_material,
 )
+from sdi_pipeline_integration._stage_registry import STAGES
 from sdi_pipeline_integration._yaml_input import parse_yaml
 
 if TYPE_CHECKING:
@@ -159,11 +159,18 @@ class Stage:
     def run(self) -> tuple[AdapterResponse, ImageBuildResult | None, str]:
         """Run the adapter and return its response, result and diagnostic."""
         (self.bin / "scenario.json").write_text(json.dumps(self.scenario))
-        adapter.run_adapter(
-            request_path=self.request,
-            input_root=self.input_root,
-            output_root=self.output_root,
+        exit_code = adapter.main(
+            [
+                "run",
+                "--request",
+                str(self.request),
+                "--input-root",
+                str(self.input_root),
+                "--output-root",
+                str(self.output_root),
+            ]
         )
+        assert exit_code == 0
         response = AdapterResponse.model_validate_json(
             (self.output_root / "response.json").read_bytes(), strict=False
         )
@@ -178,7 +185,7 @@ class Stage:
         diagnostic = (self.output_root / "diagnostic.txt").read_text()
         assert not contains_sensitive_material(diagnostic)
         assert (
-            len(diagnostic.encode()) <= STAGE_GRANTS["image_build"].diagnostic_max_bytes
+            len(diagnostic.encode()) <= STAGES["image_build"].grant.diagnostic_max_bytes
         )
         return response, result, diagnostic
 

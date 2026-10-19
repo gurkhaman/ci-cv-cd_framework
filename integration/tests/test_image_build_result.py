@@ -7,12 +7,14 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from sdi_pipeline_integration._adapter_kit import encode_document
 from sdi_pipeline_integration._domain_contracts import ImageBuildResult
-from sdi_pipeline_integration._image_build_adapter import encode_document
 from sdi_pipeline_integration._stage_contracts import (
-    EXPECTED_STAGE_INPUT_SLOTS,
-    STAGE_GRANTS,
     contains_sensitive_contract_material,
+)
+from sdi_pipeline_integration._stage_registry import (
+    EXPECTED_STAGE_INPUT_SLOTS,
+    STAGES,
 )
 
 DIGEST_A = f"sha256:{'a' * 64}"
@@ -174,4 +176,4 @@ def test_forty_eight_worst_case_placements_fit_the_domain_output_limit(
 
     written = encode_document(_validate(payload))
 
-    assert len(written) <= STAGE_GRANTS["image_build"].domain_output_max_bytes
+    assert len(written) <= STAGES["image_build"].grant.domain_output_max_bytes

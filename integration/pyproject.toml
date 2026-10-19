@@ -34,6 +34,8 @@ dev = [
     "pytest-xdist==3.8.0",
     "ruff==0.16.6",
 ]
+# Built from an sdist that downloads its binary from GitHub, so only verify installs it.
+workflow-lint = ["actionlint-py==1.7.12.25"]
 
 [tool.pytest.ini_options]
 addopts = ["--strict-config", "--strict-markers"]

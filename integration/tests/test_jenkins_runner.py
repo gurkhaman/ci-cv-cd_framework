@@ -54,7 +54,7 @@ esac
 """
 FAKE_UV = r"""#!/bin/sh
 case "$*" in
-  *adapter-image*) printf 'docker.io/example/agent@sha256:%064d\n' 1 ;;
+  *adapter-image*) printf 'docker.io/example/agent@sha256:%064d\n' 1 2 3 4 ;;
   *sdi-integration*validate-installation*) exit 0 ;;
   *) exit 2 ;;
 esac
@@ -368,11 +368,6 @@ class _Stack:
             "JENKINS_FORK_REPOSITORY_URL="
             "https://github.com/example-fork/repository.git\n"
             "JENKINS_AGENT_CONTROLLER_URL=http://controller:8080\n"
-            "JENKINS_PIPELINE_RUN_LIMIT_SECONDS=5400\n"
-            "JENKINS_COMPOSITION_WORK_LIMIT_SECONDS=600\n"
-            "JENKINS_IMAGE_BUILD_WORK_LIMIT_SECONDS=1800\n"
-            "JENKINS_CV_WORK_LIMIT_SECONDS=2700\n"
-            "JENKINS_CD_WORK_LIMIT_SECONDS=900\n"
             f"JENKINS_ADMIN_PASSWORD_FILE={secret_files['admin']}\n"
             f"JENKINS_HANDOFF_PASSWORD_FILE={secret_files['handoff']}\n"
             f"JENKINS_OPENAI_API_KEY_FILE={secret_files['openai']}\n"

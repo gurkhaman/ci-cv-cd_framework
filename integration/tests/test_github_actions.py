@@ -12,14 +12,16 @@ from pathlib import Path
 import pytest
 from ruamel.yaml import YAML
 
+from sdi_pipeline_integration._bundle import validate_bundle_documents
 from sdi_pipeline_integration._domain_contracts import (
     DeploymentSchema,
     ImageBuildResult,
 )
 from sdi_pipeline_integration._github_actions import render_image_build_section
-from sdi_pipeline_integration._local_dispatch import validate_bundle_documents
+from sdi_pipeline_integration._stage_registry import RUN_LIMITS
 from tests._fixture_inputs import (
     FIXTURE_COMPOSITION_CONFIG,
+    STAGE_DESCRIPTORS,
     SUPPLIED_INPUT_ARGUMENTS,
     write_fixture_composition_descriptor,
 )
@@ -39,9 +41,7 @@ COMMITTED_FILES = (
     "integration/stage-profiles/image-build-v1.yaml",
     "integration/stage-profiles/cv-v1.yaml",
     "integration/stage-profiles/cd-v1.yaml",
-    "deployment/jenkins/adapters/image-build-fixture-v1.yaml",
-    "deployment/jenkins/adapters/cv-fixture-v1.yaml",
-    "deployment/jenkins/adapters/cd-fixture-v1.yaml",
+    *STAGE_DESCRIPTORS,
     FIXTURE_COMPOSITION_CONFIG,
 )
 
@@ -565,7 +565,7 @@ def test_workflow_is_one_protected_main_only_handoff_job() -> None:
     assert job["if"] == "github.ref == 'refs/heads/main'"
     assert job["environment"] == "pipeline-integration-jenkins"
     assert job["runs-on"] == "sdi-jenkins-handoff"
-    assert job["timeout-minutes"] == 110
+    assert job["timeout-minutes"] * 60 == RUN_LIMITS.github_job_seconds
 
     steps = job["steps"]
     assert all(

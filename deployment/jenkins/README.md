@@ -111,11 +111,15 @@ must be a distinct uncredentialed HTTPS GitHub clone URL.
 Compose agents and an uncredentialed HTTPS URL for a relocated agent. Persisted
 container IPs and machine names are not configuration. The host port, user IDs,
 endpoint, repository identity, and secret locations are local deployment
-settings rather than tracked topology. The five `*_LIMIT_SECONDS` settings are
-trusted deployment overrides for the tracked 90-minute run and 10, 30, 45, and
-15 minute Stage defaults. They must be positive integers no greater than one
-day; the run limit must leave at least two minutes for finalization. Workflow
-dispatch parameters cannot change them.
+settings rather than tracked topology. The run and Stage work limits are not
+settings; they come from the Stage registry,
+`integration/src/sdi_pipeline_integration/_stage_registry.py`, and `bin/stack`
+refuses a configuration that still sets one. The registry is the source of Stage
+wiring. JCasC, `compose.yaml`, `bin/smoke-check`, and `bin/stack` keep
+hand-kept copies of some registry facts; update each copy to match a registry
+change. `integration/tests/test_stage_wiring.py` fails until they match. Regenerate
+the `Jenkinsfile` Stage block from the repository root with
+`uv run --project integration sdi-integration jenkinsfile --write --jenkinsfile Jenkinsfile`.
 
 Create the administrator and machine-user password files and the OpenAI API key
 file outside the checkout. Each file must be nonempty, owned by the operator, and
@@ -153,7 +157,9 @@ The agent and runner images bake the integration code of the checkout that ran
 handoff, and `Jenkinsfile` of its own repository. Dispatch on upstream only
 after a sync pull request has brought upstream `main` level with the fork
 `main` commit the images were built from. A run whose integration code differs
-from the baked code fails before any handoff or Stage work, as described below.
+from the baked code fails with a typed reason before any handoff or Stage work,
+even when the baked CLI does not accept this `Jenkinsfile`'s flags, as described
+below.
 
 JCasC owns one reviewed script-sandbox approval: reading
 `FlowInterruptedException.getCauses()` lets the thin scheduler distinguish a
@@ -200,11 +206,11 @@ the key while no build runs: rewrite the file, keep it mode `0600`, then run
 HTTPS egress to `api.openai.com`, which serves both luna and the embeddings.
 Without a valid key or that egress, composition fails with
 `sdi.composition.dense-discovery-unavailable` and the build is red.
-The pipeline passes the checked-out `service-repository/` to the composition
-and image-build Stage commands; each agent captures it from its own checkout of
-the same commit, and the image-build command refuses to run unless its capture
-matches the one composition accepted. The CV and CD Stage commands reject it, and
-preflight and finalization take no service repository.
+The composition and image-build Stage commands read `service-repository/` from
+their own checkout of the submitted commit, because the Stage registry grants
+it to them, and the image-build command refuses to run unless its capture
+matches the one composition accepted. The CV and CD Stage commands, preflight,
+and finalization take no service repository.
 
 Each image contains an immutable role and label identity under `/etc/sdi` on its
 read-only root filesystem. The supported Stage execution commands refuse every
@@ -245,6 +251,16 @@ whenever their container is replaced. Their five separate networks allow GitHub
 checkout without making peer agents reachable. `stop`, `status`, `logs`, and `destroy`
 include the runner and proxy containers. Every image the stack builds carries
 the label `org.sdi.project=ci-cv-cd_framework`.
+
+`build` validates the configuration, builds the controller and five agent
+images, rejects an agent image that declares any volume, and writes a
+`build-stamp` file beside the configuration file. The stamp records the tracked
+checkout, including uncommitted changes, and the IDs of the built images.
+`--prebuilt` reuses those images, as in `bin/stack --prebuilt start`. It applies
+only to `start-controller`, `start`, `verify-live`, and `exercise-live`, which then
+skip configuration validation and the controller and agent image builds. Each
+refuses to run when the stamp does not match the current checkout and images;
+run `build` again. Runner and proxy images are still built.
 
 ### Builder And Pipeline Registry
 
@@ -381,8 +397,8 @@ does, including dev-only dependency or tool settings.
 So after merging a change to the baked paths, shut the stack down as in
 [Safe Shutdown](#safe-shutdown) and run `stack start`, which rebuilds the agent
 and runner images; the guard fails every run until you do. Images built before the guard
-existed record no digest, and the first run on them fails because their older
-CLI rejects the new digest arguments rather than with the typed reason.
+existed record no digest, so the first run on them fails with the same typed
+reason.
 The runner image records the same digest, and the protected workflow's
 "Confirm runner integration code matches the revision" step fails the handoff
 job before contacting Jenkins when it differs from the checkout's.
@@ -403,9 +419,8 @@ the only cross-agent Stage data, transferred through Execution-ID-qualified
 Jenkins stashes. The integration agent validates the complete bundle before
 archiving all and only its declared files from the current build.
 
-The pipeline defaults to 10, 30, 45, and 15 minute Python-owned Stage work
-limits, a 90-minute Jenkins run limit, and a two-minute finalization limit. The
-validated local deployment settings may override the Stage and run limits. A
+The pipeline uses the Stage registry's 10, 30, 45, and 15 minute Stage work
+limits, a 90-minute Jenkins run limit, and a two-minute finalization limit. A
 handled machinery failure archives its structured result before Jenkins ends in
 `FAILURE`; a contract-valid negative Domain outcome can remain `SUCCESS`.
 External cancellation propagates immediately, cleans active workspaces and
