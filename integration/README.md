@@ -15,6 +15,7 @@ push their timing past its bounds. For a fast check while developing, run from
 this directory:
 
 ```sh
+uv sync --frozen --all-groups
 uv run pytest -m "not live and not slow" -n auto --dist worksteal
 ```
 
