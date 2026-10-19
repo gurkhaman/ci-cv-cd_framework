@@ -2,45 +2,23 @@ import org.jenkinsci.plugins.workflow.steps.FlowInterruptedException
 import org.jenkinsci.plugins.workflow.steps.TimeoutStepExecution
 
 
-def readPositiveSeconds = { name, raw ->
-    if (raw == null || !(raw ==~ /[1-9][0-9]*/)) {
-        error("${name} must be a positive integer")
-    }
-    def value = raw.toInteger()
-    if (value > 86400) {
-        error("${name} must not exceed 86400 seconds")
-    }
-    value
-}
-
-def runLimitSeconds = readPositiveSeconds(
-    'JENKINS_PIPELINE_RUN_LIMIT_SECONDS',
-    env.JENKINS_PIPELINE_RUN_LIMIT_SECONDS,
-)
-if (runLimitSeconds < 180) {
-    error('JENKINS_PIPELINE_RUN_LIMIT_SECONDS must reserve finalization time')
-}
-
 // BEGIN GENERATED STAGE WIRING
 // Rendered from _stage_registry.py. After editing the registry, run this
 // from the repository root: uv run --project integration sdi-integration jenkinsfile --write --jenkinsfile Jenkinsfile
 def integrationLabel = 'integration'
+def runLimitSeconds = 5400
 def stages = [
     [name: 'Composition', stage: 'composition', label: 'composition',
      safetyTimeoutSeconds: 660,
-     workLimitSetting: 'JENKINS_COMPOSITION_WORK_LIMIT_SECONDS',
      credentials: [[id: 'sdi-openai-api-key', variable: 'OPENAI_API_KEY']]],
     [name: 'Image build', stage: 'image_build', label: 'image-build',
      safetyTimeoutSeconds: 1860,
-     workLimitSetting: 'JENKINS_IMAGE_BUILD_WORK_LIMIT_SECONDS',
      credentials: []],
     [name: 'Continuous Validation', stage: 'cv', label: 'cv',
      safetyTimeoutSeconds: 2760,
-     workLimitSetting: 'JENKINS_CV_WORK_LIMIT_SECONDS',
      credentials: []],
     [name: 'Continuous Deployment', stage: 'cd', label: 'cd',
      safetyTimeoutSeconds: 960,
-     workLimitSetting: 'JENKINS_CD_WORK_LIMIT_SECONDS',
      credentials: []],
 ]
 // END GENERATED STAGE WIRING
@@ -175,7 +153,6 @@ timeout(time: runLimitSeconds, unit: 'SECONDS') {
                     preflightEnvironment.add("SDI_DIGEST_${definition.stage}=${bakedCodeDigests[definition.stage]}")
                     stageArguments.add("--stage-node \"${definition.stage}=\$SDI_NODE_${definition.stage}\"")
                     stageArguments.add("--stage-baked-code-digest \"${definition.stage}=\$SDI_DIGEST_${definition.stage}\"")
-                    stageArguments.add("--stage-work-limit \"${definition.stage}=\$${definition.workLimitSetting}\"")
                 }
                 withEnv(preflightEnvironment) {
                     def preflightStatus = sh(returnStatus: true, script: """set -eu
@@ -221,7 +198,6 @@ ${commonArguments} \\
                     def priorArguments = acceptedStages.collect { acceptedStage ->
                         "--prior-attempt-root 'transfers/${acceptedStage}'"
                     }.join(' ')
-                    priorArguments = "${priorArguments} --work-limit-seconds \"\$${definition.workLimitSetting}\""
                     def stageExecutionStatus = 0
                     // Jenkins selects no generator. The Domain agents reach only
                     // the OpenAI endpoint, so every Stage runs with the committed
