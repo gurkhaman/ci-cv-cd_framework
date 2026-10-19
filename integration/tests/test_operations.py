@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._fixture_inputs import STAGE_DESCRIPTORS
+
 REPOSITORY_ROOT = Path(__file__).parents[2]
 INSTALLATION = REPOSITORY_ROOT / "deployment" / "installation.env"
 RECOVERY = REPOSITORY_ROOT / "deployment" / "jenkins" / "bin" / "recovery"
@@ -321,11 +323,7 @@ def test_archived_api_token_removal_rejects_a_user_symlink(tmp_path: Path) -> No
 
 PINNED_SOURCES = (
     ".github/workflows/pipeline-integration.yml",
-    "deployment/jenkins/adapters/cd-fixture-v1.yaml",
-    "deployment/jenkins/adapters/composition-v1.yaml",
-    "deployment/jenkins/adapters/cv-fixture-v1.yaml",
-    "deployment/jenkins/adapters/image-build-fixture-v1.yaml",
-    "deployment/jenkins/adapters/image-build-v1.yaml",
+    *STAGE_DESCRIPTORS,
     "deployment/jenkins/agents/Dockerfile",
     "deployment/jenkins/compose.yaml",
     "deployment/jenkins/controller/Dockerfile",

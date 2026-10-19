@@ -11,10 +11,12 @@ import pytest
 
 from sdi_pipeline_integration._git_input import GitRepository
 from sdi_pipeline_integration._run_input import identify_committed_run
+from sdi_pipeline_integration._stage_registry import STAGES
 from sdi_pipeline_integration._stage_runtime import SuppliedInputs, stage_inputs
 from tests._fixture_inputs import (
     FIXTURE_COMPOSITION_CONFIG,
     FIXTURE_SERVICE_REPOSITORY,
+    STAGE_DESCRIPTORS,
     SUPPLIED_INPUT_ARGUMENTS,
     write_fixture_composition_descriptor,
     write_scripted_adapter,
@@ -31,8 +33,7 @@ COMMITTED_FILES = (
     "integration/stage-profiles/composition-v1.yaml",
     "integration/stage-profiles/image-build-v1.yaml",
     "integration/stage-profiles/cv-v1.yaml",
-    "deployment/jenkins/adapters/image-build-fixture-v1.yaml",
-    "deployment/jenkins/adapters/cv-fixture-v1.yaml",
+    *STAGE_DESCRIPTORS,
     FIXTURE_COMPOSITION_CONFIG,
 )
 
@@ -220,7 +221,7 @@ def test_a_stage_not_granted_the_service_repository_rejects_it(
         commit_sha,
         attempt_root,
         ("--service-repository", str(FIXTURE_SERVICE_REPOSITORY)),
-        descriptor="deployment/jenkins/adapters/cv-fixture-v1.yaml",
+        descriptor=STAGES["cv"].jenkins_descriptor,
     )
 
     assert completed.returncode == 2

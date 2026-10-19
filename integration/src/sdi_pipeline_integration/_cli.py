@@ -30,9 +30,11 @@ from ._jenkins_pipeline import (
     RunDeadlineExpiredError,
     attempt_allows_continuation,
     bundle_has_machinery_failure,
+    check_stage_wiring,
     execute_jenkins_stage,
     finalize_jenkins_run,
     preflight_jenkins_run,
+    write_stage_wiring,
 )
 from ._local_dispatch import dispatch_local, validate_bundle
 from ._recovery_contracts import (
@@ -44,12 +46,14 @@ from ._schemas import check_schemas, write_schemas
 from ._service_descriptions import read_service_repository
 from ._stage_contracts import AdapterDescriptor
 from ._stage_profiles import check_stage_profiles, write_stage_profiles
-from ._stage_registry import STAGE_ORDER
+from ._stage_registry import STAGE_ORDER, STAGES
 from ._stage_runtime import ExternalCancellation, SuppliedInputs, execute_stage
 from ._yaml_input import InputError, parse_yaml
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
+
+    from ._stage_registry import StageName
 
 
 @contextmanager
@@ -103,6 +107,14 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     profile_action.add_argument("--check", action="store_true")
     profile_action.add_argument("--write", action="store_true")
     profiles.add_argument("--directory", type=Path, default=Path("stage-profiles"))
+    jenkinsfile = commands.add_parser(
+        "jenkinsfile",
+        help="write or check the Jenkinsfile Stage wiring rendered from the registry",
+    )
+    jenkinsfile_action = jenkinsfile.add_mutually_exclusive_group(required=True)
+    jenkinsfile_action.add_argument("--check", action="store_true")
+    jenkinsfile_action.add_argument("--write", action="store_true")
+    jenkinsfile.add_argument("--jenkinsfile", type=Path, required=True)
     code_digest = commands.add_parser(
         "integration-code-digest",
         help="print the digest of the integration code an agent image bakes",
@@ -146,11 +158,12 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     generate.add_argument("--evidence", type=Path, required=True)
     adapter_image = commands.add_parser(
         "adapter-image",
-        help="print the immutable runtime image selected by each adapter "
+        help="print the immutable runtime image of each Stage's Jenkins adapter "
         "descriptor, one per line in argument order",
     )
+    adapter_image.add_argument("--repository", type=Path, required=True)
     adapter_image.add_argument(
-        "--descriptor", type=Path, action="append", required=True
+        "--stage", choices=STAGE_ORDER, action="append", required=True
     )
     execute = commands.add_parser(
         "execute-stage",
@@ -173,12 +186,16 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     preflight.add_argument("--github-run-attempt", required=True)
     preflight.add_argument("--build-started-at-millis", required=True)
     preflight.add_argument("--integration-node", required=True)
-    preflight.add_argument("--composition-node", required=True)
-    preflight.add_argument("--image-build-node", required=True)
-    preflight.add_argument("--cv-node", required=True)
-    preflight.add_argument("--cd-node", required=True)
-    for resource in ("integration", "composition", "image-build", "cv", "cd"):
-        preflight.add_argument(f"--{resource}-baked-code-digest", required=True)
+    preflight.add_argument("--integration-baked-code-digest", required=True)
+    for flag in ("--stage-node", "--stage-baked-code-digest", "--stage-work-limit"):
+        preflight.add_argument(
+            flag,
+            type=_stage_assignment,
+            action="append",
+            required=True,
+            metavar="STAGE=VALUE",
+            help="repeat once per Stage",
+        )
     _add_composition_selection_arguments(preflight)
     handoff = commands.add_parser(
         "handoff-jenkins",
@@ -194,7 +211,7 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         help="execute the next Stage from validated Jenkins transfers",
     )
     _add_submitted_run_arguments(jenkins_execute)
-    jenkins_execute.add_argument("--descriptor-path", required=True)
+    jenkins_execute.add_argument("--stage", choices=STAGE_ORDER, required=True)
     jenkins_execute.add_argument("--attempt-root", type=Path, required=True)
     jenkins_execute.add_argument(
         "--prior-attempt-root", type=Path, action="append", default=[]
@@ -202,7 +219,7 @@ def _parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     jenkins_execute.add_argument("--work-limit-seconds", type=int, required=True)
     jenkins_execute.add_argument("--run-deadline-epoch-millis", required=True)
     jenkins_execute.add_argument("--baked-code-digest", required=True)
-    _add_supplied_input_arguments(jenkins_execute, require_service_repository=False)
+    _add_composition_selection_arguments(jenkins_execute)
     attempt_status = commands.add_parser(
         "attempt-allows-continuation",
         help="derive whether an accepted attempt permits the next Stage",
@@ -276,6 +293,27 @@ def _add_submitted_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--resolved-commit", required=True)
     parser.add_argument("--run-request-path", required=True)
     parser.add_argument("--execution-id", required=True)
+
+
+def _stage_assignment(value: str) -> tuple[StageName, str]:
+    stage, separator, assigned = value.partition("=")
+    if not separator or not assigned:
+        msg = f"expected STAGE=VALUE, got {value!r}"
+        raise argparse.ArgumentTypeError(msg)
+    if stage not in STAGES:
+        msg = f"unknown Stage {stage!r}; expected one of {', '.join(STAGE_ORDER)}"
+        raise argparse.ArgumentTypeError(msg)
+    return stage, assigned
+
+
+def _one_value_per_stage(
+    assignments: Sequence[tuple[StageName, str]], flag: str
+) -> dict[StageName, str]:
+    named = [stage for stage, _value in assignments]
+    if sorted(named) != sorted(STAGE_ORDER):
+        msg = f"{flag} must name each of {', '.join(STAGE_ORDER)} exactly once"
+        raise InputError(msg)
+    return dict(assignments)
 
 
 def _add_supplied_input_arguments(
@@ -455,6 +493,16 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
             sys.stderr.write(f"sdi-integration: {error}\n")
             return 2
         return 0
+    if arguments.command == "jenkinsfile":
+        try:
+            if arguments.write:
+                write_stage_wiring(arguments.jenkinsfile)
+            else:
+                check_stage_wiring(arguments.jenkinsfile)
+        except (InputError, OSError) as error:
+            sys.stderr.write(f"sdi-integration: {error}\n")
+            return 2
+        return 0
     if arguments.command == "integration-code-digest":
         try:
             digest = integration_code_digest(arguments.root)
@@ -511,7 +559,8 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
         return _generate_proposals(arguments)
     if arguments.command == "adapter-image":
         images: list[str] = []
-        for path in cast("list[Path]", arguments.descriptor):
+        for stage in cast("list[StageName]", arguments.stage):
+            path = arguments.repository / STAGES[stage].jenkins_descriptor
             try:
                 document = parse_yaml(path.read_bytes(), str(path))
                 images.append(AdapterDescriptor.model_validate(document).image)
@@ -564,20 +613,17 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
                 github_run_id=arguments.github_run_id,
                 github_run_attempt=arguments.github_run_attempt,
                 build_started_at_millis=arguments.build_started_at_millis,
-                resource_nodes={
-                    "integration": arguments.integration_node,
-                    "composition": arguments.composition_node,
-                    "image_build": arguments.image_build_node,
-                    "cv": arguments.cv_node,
-                    "cd": arguments.cd_node,
-                },
+                resource_nodes={"integration": arguments.integration_node}
+                | _one_value_per_stage(arguments.stage_node, "--stage-node"),
                 baked_code_digests={
-                    "integration": arguments.integration_baked_code_digest,
-                    "composition": arguments.composition_baked_code_digest,
-                    "image_build": arguments.image_build_baked_code_digest,
-                    "cv": arguments.cv_baked_code_digest,
-                    "cd": arguments.cd_baked_code_digest,
-                },
+                    "integration": arguments.integration_baked_code_digest
+                }
+                | _one_value_per_stage(
+                    arguments.stage_baked_code_digest, "--stage-baked-code-digest"
+                ),
+                work_limits=_one_value_per_stage(
+                    arguments.stage_work_limit, "--stage-work-limit"
+                ),
                 supplied=SuppliedInputs(
                     composition_config=arguments.composition_config,
                     generator=arguments.generator,
@@ -637,13 +683,16 @@ def main(  # noqa: C901, PLR0911, PLR0912, PLR0915
                     resolved_commit=arguments.resolved_commit,
                     run_request_path=arguments.run_request_path,
                     execution_id=arguments.execution_id,
-                    descriptor_path=arguments.descriptor_path,
+                    stage=arguments.stage,
                     attempt_root=arguments.attempt_root,
                     prior_attempt_roots=arguments.prior_attempt_root,
                     work_limit_seconds=arguments.work_limit_seconds,
                     run_deadline_epoch_millis=arguments.run_deadline_epoch_millis,
                     baked_code_digest=arguments.baked_code_digest,
-                    supplied=_supplied_inputs(arguments),
+                    supplied=SuppliedInputs(
+                        composition_config=arguments.composition_config,
+                        generator=arguments.generator,
+                    ),
                 )
         except ExternalCancellation as cancellation:
             if not attempt_existed:

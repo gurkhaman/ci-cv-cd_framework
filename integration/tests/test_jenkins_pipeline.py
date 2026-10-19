@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import subprocess
 import time
@@ -13,11 +14,11 @@ from typing import Any
 import pytest
 
 from sdi_pipeline_integration._integration_code import integration_code_digest
-from sdi_pipeline_integration._stage_registry import INTEGRATION_AGENT, STAGES
+from sdi_pipeline_integration._stage_registry import AGENTS, INTEGRATION_AGENT, STAGES
 from tests._fixture_inputs import (
     FIXTURE_COMPOSITION_CONFIG,
     FIXTURE_SERVICE_REPOSITORY,
-    SUPPLIED_INPUT_ARGUMENTS,
+    STAGE_DESCRIPTORS,
     copy_baked_integration_code,
     write_fixture_composition_descriptor,
     write_scripted_adapter,
@@ -26,13 +27,10 @@ from tests._fixture_inputs import (
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
 EXECUTION_ID = "12345678-1234-4234-9234-123456789abc"
 SUCCESS_REQUEST = "runs/s-04/s-04-tc-03-c-05-fixture.yaml"
-DESCRIPTORS = tuple((name, stage.jenkins_descriptor) for name, stage in STAGES.items())
 WORK_LIMITS = {
     name: str(stage.grant.work_limit_seconds) for name, stage in STAGES.items()
 }
-DIGEST_OPTION_BY_NODE = {INTEGRATION_AGENT.node: "integration"} | {
-    stage.agent.node: name.replace("_", "-") for name, stage in STAGES.items()
-}
+COMPOSITION_CONFIG_ARGUMENTS = ("--composition-config", FIXTURE_COMPOSITION_CONFIG)
 COMMITTED_FILES = (
     SUCCESS_REQUEST,
     "requirements/s-04/deliver-book-to-joe.md",
@@ -42,10 +40,7 @@ COMMITTED_FILES = (
     "integration/stage-profiles/image-build-v1.yaml",
     "integration/stage-profiles/cv-v1.yaml",
     "integration/stage-profiles/cd-v1.yaml",
-    "deployment/jenkins/adapters/image-build-fixture-v1.yaml",
-    "deployment/jenkins/adapters/image-build-v1.yaml",
-    "deployment/jenkins/adapters/cv-fixture-v1.yaml",
-    "deployment/jenkins/adapters/cd-fixture-v1.yaml",
+    *STAGE_DESCRIPTORS,
     "runs/conformance/composition-negative-domain.yaml",
     "runs/conformance/composition-handled-failure.yaml",
     "runs/conformance/composition-malformed-response.yaml",
@@ -65,7 +60,10 @@ def _git(repository: Path, *arguments: str) -> str:
 
 
 def _repository(
-    tmp_path: Path, *, fixture_image_build: bool = False
+    tmp_path: Path,
+    *,
+    fixture_image_build: bool = False,
+    service_repository: Path = FIXTURE_SERVICE_REPOSITORY,
 ) -> tuple[Path, str]:
     """Commit the Stage inputs; a Fixture image-build completes the chain."""
     repository = tmp_path / "repository"
@@ -84,6 +82,7 @@ def _repository(
         destination = repository / relative_path
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes((SOURCE_ROOT / relative_path).read_bytes())
+    shutil.copytree(service_repository, repository / "service-repository")
     copy_baked_integration_code(repository)
     write_fixture_composition_descriptor(repository)
     if fixture_image_build:
@@ -120,24 +119,18 @@ def _fresh_image(repository: Path) -> tuple[str, str]:
     return ("--baked-code-digest", _baked_code_digest(repository))
 
 
-def _supplied(stage: str) -> tuple[str, ...]:
-    """Give each Stage the supplied inputs it is granted, as the Jenkinsfile does."""
-    if stage == "composition":
-        return SUPPLIED_INPUT_ARGUMENTS
-    if stage == "image_build":
-        return ("--service-repository", str(FIXTURE_SERVICE_REPOSITORY))
-    return ()
-
-
-def _preflight(
+def _preflight(  # noqa: PLR0913
     repository: Path,
     commit_sha: str,
     request_path: str,
     started_millis: str,
+    *,
     baked: dict[str, str] | None = None,
+    work_limits: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     fresh = _baked_code_digest(repository)
-    recorded = dict.fromkeys(DIGEST_OPTION_BY_NODE, fresh) | (baked or {})
+    configured_work_limits = WORK_LIMITS | (work_limits or {})
+    recorded = dict.fromkeys((agent.node for agent in AGENTS), fresh) | (baked or {})
     return subprocess.run(
         [
             "sdi-integration",
@@ -154,19 +147,20 @@ def _preflight(
             "--build-started-at-millis",
             started_millis,
             "--integration-node",
-            "integration",
-            "--composition-node",
-            "ci",
-            "--image-build-node",
-            "image-build",
-            "--cv-node",
-            "cv",
-            "--cd-node",
-            "cd",
+            INTEGRATION_AGENT.node,
+            "--integration-baked-code-digest",
+            recorded[INTEGRATION_AGENT.node],
             *(
                 argument
-                for node, option in DIGEST_OPTION_BY_NODE.items()
-                for argument in (f"--{option}-baked-code-digest", recorded[node])
+                for name, stage in STAGES.items()
+                for argument in (
+                    "--stage-node",
+                    f"{name}={stage.agent.node}",
+                    "--stage-baked-code-digest",
+                    f"{name}={recorded[stage.agent.node]}",
+                    "--stage-work-limit",
+                    f"{name}={configured_work_limits[name]}",
+                )
             ),
         ],
         check=False,
@@ -192,16 +186,16 @@ def _execute_chain(  # noqa: PLR0913, PLR0917
     attempts: list[Path] = []
     configured_work_limits = WORK_LIMITS | (work_limits or {})
     deadline = str(int((time.time() + run_limit_seconds) * 1000))
-    for stage, descriptor in DESCRIPTORS:
+    for stage in STAGES:
         attempt_root = root / "transfers" / stage
         command = [
             "sdi-integration",
             "execute-jenkins-stage",
             *_common(repository, commit_sha, request_path),
             *_fresh_image(repository),
-            *_supplied(stage),
-            "--descriptor-path",
-            descriptor,
+            *(COMPOSITION_CONFIG_ARGUMENTS if stage == "composition" else ()),
+            "--stage",
+            stage,
             "--attempt-root",
             str(attempt_root),
             "--work-limit-seconds",
@@ -291,7 +285,7 @@ def test_distributed_fixture_chain_preserves_identity_and_exact_archive(
     assert conclusion.returncode == 0, conclusion.stderr
     assert result["execution_id"] == EXECUTION_ID
     assert [attempt["correlation"]["stage"] for attempt in result["attempts"]] == [
-        stage for stage, _descriptor in DESCRIPTORS
+        *STAGES
     ]
     assert len(result["artifacts"]) == 9
     assert all(
@@ -317,7 +311,7 @@ def test_implemented_image_build_skips_fixture_composition(tmp_path: Path) -> No
 def _execute_stage(
     repository: Path,
     commit_sha: str,
-    descriptor: str,
+    stage: str,
     attempt_root: Path,
     supplied: tuple[str, ...],
 ) -> subprocess.CompletedProcess[str]:
@@ -328,8 +322,8 @@ def _execute_stage(
             *_common(repository, commit_sha, SUCCESS_REQUEST),
             *_fresh_image(repository),
             *supplied,
-            "--descriptor-path",
-            descriptor,
+            "--stage",
+            stage,
             "--attempt-root",
             str(attempt_root),
             "--work-limit-seconds",
@@ -343,54 +337,109 @@ def _execute_stage(
     )
 
 
-def test_composition_without_a_service_repository_claims_no_attempt(
+def test_composition_without_a_checked_out_service_repository_claims_no_attempt(
     tmp_path: Path,
 ) -> None:
     repository, commit_sha = _repository(tmp_path)
+    shutil.rmtree(repository / "service-repository")
     attempt = tmp_path / "attempt"
 
     executed = _execute_stage(
-        repository,
-        commit_sha,
-        DESCRIPTORS[0][1],
-        attempt,
-        ("--composition-config", FIXTURE_COMPOSITION_CONFIG),
+        repository, commit_sha, "composition", attempt, COMPOSITION_CONFIG_ARGUMENTS
     )
 
     assert executed.returncode == 2
-    assert "composition Stage requires a supplied service repository" in (
-        executed.stderr
+    assert executed.stderr == (
+        f"sdi-integration: {repository / 'service-repository'}:"
+        " service repository is not a directory\n"
+    )
+    assert not attempt.exists()
+
+
+@pytest.mark.parametrize(
+    ("work_limit", "message"),
+    [
+        (
+            "2701",
+            (
+                "JENKINS_CV_WORK_LIMIT_SECONDS must be between 1 and the cv Stage's"
+                " granted 2700 seconds"
+            ),
+        ),
+        ("0", "JENKINS_CV_WORK_LIMIT_SECONDS must be a positive integer"),
+        ("45m", "JENKINS_CV_WORK_LIMIT_SECONDS must be a positive integer"),
+    ],
+)
+def test_preflight_rejects_a_work_limit_outside_its_grant(
+    tmp_path: Path, work_limit: str, message: str
+) -> None:
+    repository, commit_sha = _repository(tmp_path)
+
+    preflight = _preflight(
+        repository,
+        commit_sha,
+        SUCCESS_REQUEST,
+        str(int((time.time() - 1) * 1000)),
+        work_limits={"cv": work_limit},
+    )
+
+    assert preflight.returncode == 2
+    assert preflight.stderr == f"sdi-integration: {message}\n"
+
+
+def test_a_work_limit_above_the_grant_claims_no_attempt(tmp_path: Path) -> None:
+    repository, commit_sha = _repository(tmp_path)
+    attempt = tmp_path / "attempt"
+    command = [
+        "sdi-integration",
+        "execute-jenkins-stage",
+        *_common(repository, commit_sha, SUCCESS_REQUEST),
+        *_fresh_image(repository),
+        *COMPOSITION_CONFIG_ARGUMENTS,
+        "--stage",
+        "composition",
+        "--attempt-root",
+        str(attempt),
+        "--work-limit-seconds",
+        "601",
+        "--run-deadline-epoch-millis",
+        str(int(time.time() * 1000) + 60_000),
+    ]
+
+    executed = subprocess.run(command, check=False, capture_output=True, text=True)
+
+    assert executed.returncode == 2
+    assert executed.stderr == (
+        "sdi-integration: JENKINS_COMPOSITION_WORK_LIMIT_SECONDS must be between 1"
+        " and the composition Stage's granted 600 seconds\n"
     )
     assert not attempt.exists()
 
 
 SUPPLIED_INPUTS = (
-    (("--service-repository", str(FIXTURE_SERVICE_REPOSITORY)), "service repository"),
-    (("--composition-config", FIXTURE_COMPOSITION_CONFIG), "composition config"),
+    (COMPOSITION_CONFIG_ARGUMENTS, "composition config"),
     (("--generator", "fixture"), "generator"),
 )
 
 
 @pytest.mark.parametrize(
-    ("stage", "descriptor", "supplied", "label"),
+    ("stage", "supplied", "label"),
     [
-        (stage, descriptor, supplied, label)
-        for stage, descriptor in DESCRIPTORS[1:]
+        (stage, supplied, label)
+        for stage in list(STAGES)[1:]
         for supplied, label in SUPPLIED_INPUTS
-        if not (stage == "image_build" and label == "service repository")
     ],
 )
 def test_stages_not_granted_supplied_inputs_reject_them(
     tmp_path: Path,
     stage: str,
-    descriptor: str,
     supplied: tuple[str, ...],
     label: str,
 ) -> None:
     repository, commit_sha = _repository(tmp_path)
     attempt = tmp_path / "attempt"
 
-    executed = _execute_stage(repository, commit_sha, descriptor, attempt, supplied)
+    executed = _execute_stage(repository, commit_sha, stage, attempt, supplied)
 
     assert executed.returncode == 2
     assert f"the {stage} Stage is not granted a supplied {label}" in executed.stderr
@@ -540,7 +589,9 @@ def _implemented_image_build(
 
     With no records, the committed image-build adapter runs instead.
     """
-    repository, _commit_sha = _repository(tmp_path)
+    repository, _commit_sha = _repository(
+        tmp_path, service_repository=service_repository
+    )
     case = SOURCE_ROOT / "integration/fixtures/cases/composition-s-04-tc-03-c-05"
     blueprint = json.loads((case / "composition-blueprint.json").read_text())
     deployment = json.loads((case / "deployment-schema.json").read_text())
@@ -578,7 +629,7 @@ def _implemented_image_build(
     _write_response_adapter(
         image_build, {"image-build-result.json": json.dumps(result)}, "succeeded"
     )
-    descriptor = repository / DESCRIPTORS[1][1]
+    descriptor = repository / STAGES["image_build"].jenkins_descriptor
     committed = descriptor.read_text()
     scripted = committed.replace(
         "entrypoint: sdi-image-build-adapter", f"entrypoint: {image_build}"
@@ -594,28 +645,18 @@ def _implemented_image_build(
     executed = _execute_stage(
         repository,
         commit_sha,
-        DESCRIPTORS[0][1],
+        "composition",
         composed,
-        (
-            "--service-repository",
-            str(service_repository),
-            "--composition-config",
-            FIXTURE_COMPOSITION_CONFIG,
-        ),
+        COMPOSITION_CONFIG_ARGUMENTS,
     )
     assert executed.returncode == 0, executed.stderr
     built = tmp_path / "transfers" / "image_build"
     executed = _execute_stage(
         repository,
         commit_sha,
-        DESCRIPTORS[1][1],
+        "image_build",
         built,
-        (
-            "--service-repository",
-            str(service_repository),
-            "--prior-attempt-root",
-            str(composed),
-        ),
+        ("--prior-attempt-root", str(composed)),
     )
     assert executed.returncode == 0, executed.stderr
     return json.loads((built / "accepted-attempt.json").read_text())
@@ -699,7 +740,7 @@ def test_preflight_rejects_a_key_the_composition_descriptor_does_not_bind(
 ) -> None:
     repository, _commit_sha = _repository(tmp_path)
     write_fixture_composition_descriptor(repository, mode="implemented")
-    descriptor = repository / DESCRIPTORS[0][1]
+    descriptor = repository / STAGES["composition"].jenkins_descriptor
     descriptor.write_text(
         descriptor.read_text().replace(
             "secret_bindings: []", "secret_bindings: [OTHER_KEY]"
@@ -783,9 +824,9 @@ def test_stale_stage_agent_refuses_its_stage_without_an_attempt(
             *_common(repository, commit_sha, SUCCESS_REQUEST),
             "--baked-code-digest",
             built,
-            *SUPPLIED_INPUT_ARGUMENTS,
-            "--descriptor-path",
-            DESCRIPTORS[0][1],
+            *COMPOSITION_CONFIG_ARGUMENTS,
+            "--stage",
+            "composition",
             "--attempt-root",
             str(attempt),
             "--work-limit-seconds",
@@ -917,9 +958,9 @@ def test_expired_run_deadline_does_not_launch_stage(tmp_path: Path) -> None:
             "execute-jenkins-stage",
             *_common(repository, commit_sha, SUCCESS_REQUEST),
             *_fresh_image(repository),
-            *SUPPLIED_INPUT_ARGUMENTS,
-            "--descriptor-path",
-            DESCRIPTORS[0][1],
+            *COMPOSITION_CONFIG_ARGUMENTS,
+            "--stage",
+            "composition",
             "--attempt-root",
             str(attempt),
             "--work-limit-seconds",
@@ -994,9 +1035,9 @@ def test_tampered_attempt_transfer_is_rejected(tmp_path: Path) -> None:
             "execute-jenkins-stage",
             *_common(repository, commit_sha, SUCCESS_REQUEST),
             *_fresh_image(repository),
-            *SUPPLIED_INPUT_ARGUMENTS,
-            "--descriptor-path",
-            DESCRIPTORS[0][1],
+            *COMPOSITION_CONFIG_ARGUMENTS,
+            "--stage",
+            "composition",
             "--attempt-root",
             str(attempt),
             "--work-limit-seconds",
@@ -1065,9 +1106,9 @@ def test_external_cancellation_publishes_no_attempt(tmp_path: Path) -> None:
             "execute-jenkins-stage",
             *_common(repository, commit_sha, SUCCESS_REQUEST),
             *_fresh_image(repository),
-            *SUPPLIED_INPUT_ARGUMENTS,
-            "--descriptor-path",
-            DESCRIPTORS[0][1],
+            *COMPOSITION_CONFIG_ARGUMENTS,
+            "--stage",
+            "composition",
             "--attempt-root",
             str(attempt),
             "--work-limit-seconds",
