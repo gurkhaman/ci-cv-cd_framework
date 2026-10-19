@@ -106,8 +106,5 @@ else
     printf '%s\n' 'stack smoke skipped: no smoke inputs changed since the merge base with origin/main'
 fi
 
-printf '%s\n' \
-    'Repository acceptance passed.' \
-    'Passing proves the integration scaffold, the Fixture behavior of the image-build, CV, and CD Stages, and the composition Stage contract: outcomes, outputs, evidence, and diagnostics.' \
-    'Live-model composition tests are skipped when their provider keys are unavailable.' \
-    'Passing proves no real image build, CV verdict, deployment, or KPI evaluation; product security assurance, availability, and deferred infrastructure remain out of scope.'
+stage_status=$(uv run --frozen sdi-integration stage-status --repository ..)
+printf '%s\n' 'Repository acceptance passed.' "$stage_status"
