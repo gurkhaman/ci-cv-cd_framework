@@ -13,14 +13,14 @@ from sdi_pipeline_integration._adapter_kit import serve
 from sdi_pipeline_integration._cv_adapter import validate
 from sdi_pipeline_integration._domain_contracts import UnevaluatedService
 from tests._cv_builders import ARM64_DIGEST, INDEX_DIGEST, STRING, amd64_digest
-from tests._cv_stage import CvRun, CvStage, description
+from tests._cv_stage import CvRun, CvStage, description, refusing_engine_url
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
     from pathlib import Path
 
-# Nothing in this file may reach an engine; a run that tried would fail here.
-ENGINE_URL = "tcp://127.0.0.1:1"
+# Nothing in this file may reach an engine; a run that tried fails at once.
+ENGINE_URL = refusing_engine_url()
 POSE = "geometry_msgs/msg/PoseWithCovarianceStamped"
 HEALTHY = {
     "nav2-localization": description(

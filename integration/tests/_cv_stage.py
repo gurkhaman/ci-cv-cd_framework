@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import socket
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -45,6 +46,18 @@ IMAGE_BUILD_SLOTS = (
     "composition_blueprint",
     "deployment_schema",
 )
+
+
+def refusing_engine_url() -> str:
+    """Return an engine URL that refuses connections at once.
+
+    Some hosts drop rather than refuse port 1, which would stall a run that
+    wrongly reached the engine for the client's whole timeout.
+    """
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    return f"tcp://127.0.0.1:{port}"
 
 
 def description(

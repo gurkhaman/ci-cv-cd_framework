@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import socket
 from functools import partial
 from typing import TYPE_CHECKING, get_args
 
@@ -41,7 +40,7 @@ from tests._cv_builders import (
 )
 from tests._cv_evidence import WAITED_ON
 from tests._cv_recordings import recorded
-from tests._cv_stage import CvRun, CvStage, description
+from tests._cv_stage import CvRun, CvStage, description, refusing_engine_url
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -55,15 +54,6 @@ SPEECH = composed("vosk-speech", {"/speech/text": STRING})
 FACE = composed("opencv-face-recognition", {"/face_recognition/name": STRING})
 CAMERA = composed("v4l2-camera", {"/image": IMAGE}, devices=["camera"])
 SERVICES = (LOCALIZATION, NAVIGATION, SPEECH, CAMERA)
-UNREACHABLE = "tcp://127.0.0.1:1"
-
-
-def _refusing_engine_url() -> str:
-    # Some hosts drop rather than refuse port 1; a just-closed port refuses.
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
-    return f"tcp://127.0.0.1:{port}"
 
 
 def _judged(services: tuple[Composed, ...], run: Runner) -> Judgement:
@@ -338,7 +328,7 @@ def test_cv_an_engine_that_does_not_answer_is_a_cv_error(tmp_path: Path) -> None
         ],
     )
 
-    run = stage.run(serve("cv", partial(validate, engine_url=_refusing_engine_url())))
+    run = stage.run(serve("cv", partial(validate, engine_url=refusing_engine_url())))
 
     _published_error(tmp_path, run, "engine-unreachable", "dependency")
 
@@ -358,7 +348,7 @@ def test_cv_evidence_over_its_grant_is_a_cv_error(tmp_path: Path) -> None:
         evidence_max_bytes=64,
     )
 
-    run = stage.run(serve("cv", partial(validate, engine_url=UNREACHABLE)))
+    run = stage.run(serve("cv", partial(validate, engine_url=refusing_engine_url())))
 
     _published_error(tmp_path, run, "evidence-too-large", "tool")
 
