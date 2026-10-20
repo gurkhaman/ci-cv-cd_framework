@@ -22,6 +22,7 @@ from tests._cv_evidence import (
     SERVICE_IDS,
     SUCCEEDED,
 )
+from tests._cv_stage import description
 from tests._fixture_inputs import (
     FIXTURE_CHAIN_EXIT,
     FIXTURE_COMPOSITION_CONFIG,
@@ -531,13 +532,9 @@ def _described_fixture_services(tmp_path: Path) -> Path:
     repository = tmp_path / "described-service-repository"
     shutil.copytree(FIXTURE_SERVICE_REPOSITORY, repository)
     for service_id in SERVICE_IDS:
-        front_matter = {
-            "schema_version": "sdi.service-description/v1",
-            "service_id": service_id,
-            "title": service_id,
-            "provenance": {"basis": "placeholder", "note": "A pipeline test."},
-            "publishes": {f"/{service_id}/state": {"type": "std_msgs/msg/String"}},
-        }
+        front_matter = description(
+            service_id, {f"/{service_id}/state": "std_msgs/msg/String"}
+        )
         (repository / service_id).mkdir()
         (repository / service_id / "SDI.md").write_text(
             f"---\n{json.dumps(front_matter)}\n---\n\n# {service_id}\n"
