@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Annotated, Literal, Self
+from typing import TYPE_CHECKING, Annotated, Literal, Self, get_args
 
 from pydantic import (
     Field,
@@ -29,6 +29,8 @@ from ._stage_contracts import Sha256, SlotName  # noqa: TC001
 from ._stage_registry import EXPECTED_STAGE_INPUT_SLOTS, StageName
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from pydantic import GetCoreSchemaHandler, GetJsonSchemaHandler
     from pydantic.json_schema import JsonSchemaValue
 
@@ -342,20 +344,26 @@ class NonParticipatingService(ContractModel):
         return self
 
 
+# In summary order: a not-evaluated verdict names the first of these causes.
+# blocked is last because it is never a cause of its own.
+UnevaluatedReason = Literal[
+    "image-unavailable",
+    "no-amd64",
+    "needs-gpu-or-device",
+    "unsupported-command",
+    "no-counting-output",
+    "unloadable-type",
+    "blocked",
+]
+UNEVALUATED_REASONS: tuple[UnevaluatedReason, ...] = get_args(UnevaluatedReason)
+
+
 class UnevaluatedService(ContractModel):
     """A service whose participation a pipeline gap kept from being judged."""
 
     service_id: Slug
     participation: Literal["not_evaluated"]
-    reason: Literal[
-        "image-unavailable",
-        "no-amd64",
-        "needs-gpu-or-device",
-        "unsupported-command",
-        "no-counting-output",
-        "unloadable-type",
-        "blocked",
-    ]
+    reason: UnevaluatedReason
     detail: FailureDetail | SkipJsonSchema[None] = None
     image_digest: ImageDigest | SkipJsonSchema[None] = None
     counting_topics: list[CountingTopic] | SkipJsonSchema[None] = None
@@ -419,6 +427,23 @@ class Mission(ContractModel):
         )
 
 
+def validation_verdict(
+    services: Sequence[ServiceParticipation], mission: Mission | None
+) -> Literal["succeeded", "failed", "not_evaluated"]:
+    """Return CV's verdict on services and the mission they flew.
+
+    Not evaluated without a mission, succeeded when the mission completed and
+    every service participated, and failed otherwise.
+    """
+    if mission is None:
+        return "not_evaluated"
+    if mission.completed and all(
+        isinstance(item, ParticipatingService) for item in services
+    ):
+        return "succeeded"
+    return "failed"
+
+
 class ValidationEvidence(ContractModel):
     """How CV reached its verdict on one composition in the Validation scenario.
 
@@ -469,14 +494,7 @@ class ValidationEvidence(ContractModel):
         if bool(unevaluated) == (self.mission is not None):
             msg = "evidence holds a mission exactly when the services were evaluated"
             raise ValueError(msg)
-        if self.mission is None:
-            verdict = "not_evaluated"
-        elif self.mission.completed and all(
-            isinstance(item, ParticipatingService) for item in self.services
-        ):
-            verdict = "succeeded"
-        else:
-            verdict = "failed"
+        verdict = validation_verdict(self.services, self.mission)
         if self.domain_outcome != verdict:
             msg = f"services and mission make the domain outcome {verdict}"
             raise ValueError(msg)
