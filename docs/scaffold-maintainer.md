@@ -97,7 +97,9 @@ not copied console output.
 
 Composition is implemented: a configured model proposes compositions over the
 supplied service descriptions, and the integration package checks and ranks them.
-The image-build, CV, and CD Stages are explicitly Fixtures. The following remain
+On Jenkins, image build pushes each composition's images and CV runs them in one
+headless Gazebo scenario. Locally, image build is a Fixture, and the CD Stage is
+explicitly a Fixture everywhere. The following remain
 deferred and must not be claimed, inferred, or quietly added as maintenance:
 
 - retrieval-based service discovery, requirement analysis beyond the declared

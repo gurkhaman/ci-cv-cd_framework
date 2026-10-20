@@ -6,10 +6,10 @@ and is started only on demand. One dedicated `integration` agent performs only
 integration work; four independently replaceable agents provide the
 `composition`, `image-build`, `cv`, and `cd` scheduling labels. The root pipeline
 executes one submitted run across those five agents: implemented composition,
-then the image-build, CV, and CD Fixtures. A BuildKit builder and a pipeline
-registry, reachable only from the `image-build` agent, are ready for the real
-image-build adapter. A `docker:dind` CV engine, reachable only from the `cv`
-agent, is ready for the real CV adapter. Optional GitHub self-hosted runner
+image build and CV, then the CD Fixture. The image-build adapter uses a BuildKit
+builder and a pipeline registry, reachable only from the `image-build` agent.
+The CV adapter uses a `docker:dind` CV engine, reachable only from the `cv`
+agent. Optional GitHub self-hosted runner
 services, one per repository, pick up the protected handoff job, reach the
 controller over an internal network, and reach GitHub only through their own
 allowlisting proxy.
@@ -191,9 +191,9 @@ destroyed controller volume:
 
 Never copy one registration secret between nodes. Destroying `jenkins-home`
 invalidates the old files; remove them and repeat provisioning. The integration
-agent receives no Domain credential and has no Domain label. The three Fixture
-descriptors declare no Domain secret binding, and no agent container sees a
-controller password.
+agent receives no Domain credential and has no Domain label. The image-build,
+CV, and CD descriptors declare no Domain secret binding, and no agent container
+sees a controller password.
 
 The composition descriptor binds `OPENAI_API_KEY` and `VLLM_KEY`. The root
 pipeline names no composition config or generator, so it composes with the
