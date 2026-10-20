@@ -1,0 +1,78 @@
+# PROTOTYPE (GUR-182), throwaway. Not part of the Jenkins stack.
+# A standing K3s stand-in cluster: the server doubles as the amd64 `xycar`
+# node. Every node is amd64; arm64 images run on them under binfmt/QEMU.
+# (Whole arm64 K3s nodes under QEMU fail: kube-proxy finds no iptables.)
+name: sdi-k3s-proto
+
+x-k3s: &k3s
+  image: docker.io/rancher/k3s:v1.33.5-k3s1@sha256:fd4740667b7033055c27d424d0d2d660bf66cedbdb225d68e0eab6dd48aa0fd2
+  privileged: true
+  restart: "no"
+  tmpfs: [/run, /var/run]
+  ulimits:
+    nproc: 65535
+    nofile: {soft: 65535, hard: 65535}
+  networks: [k3s]
+  configs:
+    - source: registries
+      target: /etc/rancher/k3s/registries.yaml
+
+x-agent-env: &agent-env
+  K3S_URL: https://xycar:6443
+  K3S_TOKEN: prototype-token
+
+services:
+  registry:
+    image: docker.io/library/registry:3.1.2@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8
+    platform: linux/amd64
+    environment: {OTEL_TRACES_EXPORTER: none}
+    ports: ["127.0.0.1::5000"]
+    networks: [k3s]
+
+  xycar:
+    <<: *k3s
+    platform: linux/amd64
+    hostname: xycar
+    command:
+      - server
+      - --node-name=xycar
+      - --node-label=sdi/host=xycar
+      - --disable=traefik,servicelb,metrics-server,local-storage
+      - --tls-san=127.0.0.1
+    environment:
+      K3S_TOKEN: prototype-token
+      K3S_KUBECONFIG_OUTPUT: /output/kubeconfig.yaml
+      K3S_KUBECONFIG_MODE: "644"
+    ports: ["127.0.0.1::6443"]
+    volumes: [./out:/output]
+
+  waffle:
+    <<: *k3s
+    platform: linux/amd64
+    hostname: waffle
+    command: [agent, --node-name=waffle, --node-label=sdi/host=waffle]
+    environment: *agent-env
+
+  burger:
+    <<: *k3s
+    platform: linux/amd64
+    hostname: burger
+    command: [agent, --node-name=burger, --node-label=sdi/host=burger]
+    environment: *agent-env
+
+  orin:
+    <<: *k3s
+    platform: linux/amd64
+    hostname: orin
+    command: [agent, --node-name=orin, --node-label=sdi/host=orin]
+    environment: *agent-env
+
+configs:
+  registries:
+    content: |
+      mirrors:
+        "registry:5000":
+          endpoint: ["http://registry:5000"]
+
+networks:
+  k3s: {}
