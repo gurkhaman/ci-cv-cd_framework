@@ -13,17 +13,18 @@ from launch import LaunchDescription
 from launch.actions import ExecuteProcess, Shutdown
 from launch_ros.actions import Node
 
+# turtlebot3_gazebo ships each model's SDF and a matching plain URDF under one name.
 ROBOTS = {
-    "waffle_pi": ("turtlebot3_waffle_pi", "turtlebot3_waffle_pi.urdf"),
-    "burger_cam": ("turtlebot3_burger_cam", "turtlebot3_burger.urdf"),
+    "waffle_pi": "turtlebot3_waffle_pi",
+    "burger_cam": "turtlebot3_burger_cam",
 }
 SCENARIO_DIR = Path(__file__).parent
 WORLD_XACRO = "/opt/ros/jazzy/share/nav2_minimal_tb3_sim/worlds/tb3_sandbox.sdf.xacro"
 WORLD_PATH = Path("/tmp/s-04-world.sdf")  # noqa: S108
 
 
-def robot_row() -> tuple[str, str]:
-    """Return the Gazebo model and URDF file that CV_ROBOT names."""
+def robot_model() -> str:
+    """Return the turtlebot3_gazebo model that CV_ROBOT names."""
     name = os.environ.get("CV_ROBOT", "")
     if name not in ROBOTS:
         message = f"CV_ROBOT must be one of {', '.join(ROBOTS)}, not {name!r}"
@@ -75,11 +76,11 @@ def world_sdf(model: str, scenario: dict) -> str:
 
 def generate_launch_description() -> LaunchDescription:
     """Start the sim; the container exits when any of its processes does."""
-    model, urdf = robot_row()
+    model = robot_model()
     scenario = yaml.safe_load((SCENARIO_DIR / "scenario.yaml").read_text())
     WORLD_PATH.write_text(world_sdf(model, scenario))
     urdf_path = Path(
-        get_package_share_directory("turtlebot3_description"), "urdf", urdf
+        get_package_share_directory("turtlebot3_gazebo"), "urdf", f"{model}.urdf"
     )
     return LaunchDescription(
         [
