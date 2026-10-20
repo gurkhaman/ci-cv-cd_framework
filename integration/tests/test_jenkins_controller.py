@@ -434,7 +434,7 @@ def test_job_dsl_defines_no_build_trigger_or_credential() -> None:
     assert "credential" not in job_dsl.lower()
 
 
-def test_root_pipeline_checks_out_the_submitted_commit_without_cv_assets() -> None:
+def test_root_pipeline_checks_out_the_submitted_commit() -> None:
     pipeline = (REPOSITORY_ROOT / "Jenkinsfile").read_text()
 
     assert "$class: 'GitSCM'" not in pipeline
@@ -442,7 +442,6 @@ def test_root_pipeline_checks_out_the_submitted_commit_without_cv_assets() -> No
         "reset_clone clone --filter=blob:none --no-checkout --no-tags --single-branch "
         '--branch main "$SDI_CHECKOUT_REPOSITORY_URL" .'
     ) in pipeline
-    assert "git sparse-checkout set --no-cone '/*' '!/CV/'" in pipeline
     assert 'reset_checkout checkout --quiet --detach "$RESOLVED_COMMIT_SHA"' in pipeline
     assert (
         "until timeout 300 git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 "

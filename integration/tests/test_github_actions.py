@@ -589,8 +589,6 @@ def test_workflow_is_one_protected_main_only_handoff_job() -> None:
         "fetch-depth": 1,
         "persist-credentials": False,
         "filter": "blob:none",
-        "sparse-checkout-cone-mode": False,
-        "sparse-checkout": "/*\n!/CV/\n",
     }
     identify_run = steps[2]["run"]
     handoff_run = steps[3]["run"]
