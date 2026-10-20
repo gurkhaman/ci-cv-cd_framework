@@ -15,6 +15,13 @@ import pytest
 
 from sdi_pipeline_integration._integration_code import integration_code_digest
 from sdi_pipeline_integration._stage_registry import AGENTS, INTEGRATION_AGENT, STAGES
+from tests._cv_evidence import (
+    AMD64_DIGEST,
+    FAILED,
+    NOT_EVALUATED,
+    SERVICE_IDS,
+    SUCCEEDED,
+)
 from tests._fixture_inputs import (
     FIXTURE_COMPOSITION_CONFIG,
     FIXTURE_SERVICE_REPOSITORY,
@@ -280,7 +287,7 @@ def test_distributed_fixture_chain_preserves_identity_and_exact_archive(
     assert [attempt["correlation"]["stage"] for attempt in result["attempts"]] == [
         *STAGES
     ]
-    assert len(result["artifacts"]) == 9
+    assert len(result["artifacts"]) == 8
     assert all(
         attempt["execution_conclusion"] == "succeeded" for attempt in result["attempts"]
     )
@@ -579,15 +586,12 @@ response = {{
     )
 
 
-def _implemented_image_build(
+def _implemented_upstream(
     tmp_path: Path,
-    images: dict[str, dict[str, Any]],
+    images: dict[str, dict[str, Any]] | None,
     service_repository: Path = FIXTURE_SERVICE_REPOSITORY,
-) -> dict[str, Any]:
-    """Run implemented composition, then image-build publishing these records.
-
-    With no records, the committed image-build adapter runs instead.
-    """
+    placements: list[dict[str, str]] = PLACEMENTS,
+) -> Path:
     repository, _commit_sha = _repository(
         tmp_path, service_repository=service_repository
     )
@@ -602,7 +606,7 @@ def _implemented_image_build(
                 blueprint | {"evidence_basis": "implemented"}
             ),
             "deployment-schema.json": json.dumps(
-                deployment | {"evidence_basis": "implemented", "placements": PLACEMENTS}
+                deployment | {"evidence_basis": "implemented", "placements": placements}
             ),
         },
         "succeeded",
@@ -623,7 +627,7 @@ def _implemented_image_build(
         "profile_id": "waffle-jetson-arm64",
         "source_inputs": [],
         "registry": "registry:5000",
-        "images": list(images.values()),
+        "images": list((images or {}).values()),
     }
     _write_response_adapter(
         image_build, {"image-build-result.json": json.dumps(result)}, "succeeded"
@@ -634,8 +638,17 @@ def _implemented_image_build(
         "entrypoint: sdi-image-build-adapter", f"entrypoint: {image_build}"
     )
     assert scripted != committed
-    if images:
+    if images is not None:
         descriptor.write_text(scripted)
+    return repository
+
+
+def _implemented_image_build(
+    tmp_path: Path,
+    images: dict[str, dict[str, Any]] | None,
+    service_repository: Path = FIXTURE_SERVICE_REPOSITORY,
+) -> dict[str, Any]:
+    repository = _implemented_upstream(tmp_path, images, service_repository)
     _git(repository, "add", ".")
     _git(repository, "commit", "-m", "Select implemented composition and image-build")
     commit_sha = _git(repository, "rev-parse", "HEAD")
@@ -691,7 +704,7 @@ def test_a_buildable_placement_needs_an_answering_builder(
     (fake_bin / "buildctl").chmod(0o755)
     monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
 
-    attempt = _implemented_image_build(tmp_path, {}, service_repository)
+    attempt = _implemented_image_build(tmp_path, None, service_repository)
 
     assert attempt["execution_conclusion"] == "failed"
     assert attempt["domain_outcome"] == "not_evaluated"
@@ -732,6 +745,159 @@ def test_implemented_image_build_records_must_match_their_placements(
 
     assert attempt["adapter_response_accepted"] is False
     assert attempt["reason"]["code"] == "sdi.adapter.candidate-rejected"
+
+
+CV_PLACEMENTS = [
+    placement | {"status": "resolved", "artifact_id": "debs"}
+    for placement in PLACEMENTS
+]
+CV_IMAGES = {
+    service_id: {
+        "service_id": service_id,
+        "status": "built",
+        "repository": f"sdi/{service_id}",
+        "digest": DIGEST,
+        "platforms": [
+            {"architecture": "amd64", "digest": AMD64_DIGEST},
+            {"architecture": "arm64", "digest": DIGEST},
+        ],
+    }
+    for service_id in SERVICE_IDS
+}
+CV_REASONS = {
+    "succeeded": None,
+    "failed": {
+        "category": "domain",
+        "code": "sdi.cv.failed",
+        "summary": "fixture-navigation did not participate.",
+    },
+    "not_evaluated": {
+        "category": "dependency",
+        "code": "sdi.cv.not-evaluated",
+        "summary": "fixture-mission-control has an unsupported command.",
+    },
+}
+
+
+def _implemented_cv_chain(
+    tmp_path: Path, domain_outcome: str, evidence: dict[str, Any] | None
+) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
+    repository = _implemented_upstream(tmp_path, CV_IMAGES, placements=CV_PLACEMENTS)
+    adapter = tmp_path / "implemented-cv-adapter"
+    write_scripted_adapter(
+        adapter,
+        f"""evidence = {evidence!r}
+if evidence is not None:
+    evidence["source_inputs"] = [
+        {{"slot": item["slot"], "sha256": item["sha256"]}} for item in request["inputs"]
+    ]
+    (output / "outputs").mkdir()
+    (output / "outputs/validation-evidence.json").write_text(json.dumps(evidence))
+response = {{
+    "schema_version": "sdi.stage-adapter-response/v1",
+    "correlation": request["correlation"],
+    "execution_conclusion": "succeeded",
+    "domain_outcome": {domain_outcome!r},
+    "consumed_inputs": [item["slot"] for item in request["inputs"]],
+    "produced_outputs": [] if evidence is None else ["validation_evidence"],
+    "diagnostic": {{"present": False, "truncated": False}},
+}}
+reason = {CV_REASONS[domain_outcome]!r}
+if reason is not None:
+    response["reason"] = reason
+(output / "response.json").write_text(json.dumps(response))
+""",
+    )
+    descriptor = repository / STAGES["cv"].jenkins_descriptor
+    descriptor.write_text(
+        descriptor.read_text()
+        .replace("implementation_mode: fixture", "implementation_mode: implemented")
+        .replace("entrypoint: sdi-fixture-adapter", f"entrypoint: {adapter}")
+    )
+    _git(repository, "add", ".")
+    _git(repository, "commit", "-m", "Select implemented upstream Stages and CV")
+    return _execute_chain(
+        repository,
+        _git(repository, "rev-parse", "HEAD"),
+        SUCCESS_REQUEST,
+        tmp_path / "run",
+        str(int((time.time() - 1) * 1000)),
+    )
+
+
+@pytest.mark.parametrize(
+    ("evidence", "run_conclusion"),
+    [(SUCCEEDED, 0), (FAILED, 1), (NOT_EVALUATED, 0)],
+    ids=["succeeded-green", "failed-red", "not-evaluated-green"],
+)
+def test_cv_verdict_sets_the_run_colour(
+    tmp_path: Path, evidence: dict[str, Any], run_conclusion: int
+) -> None:
+    conclusion, result = _implemented_cv_chain(
+        tmp_path, evidence["domain_outcome"], evidence
+    )
+
+    cv = result["attempts"][2]
+    assert cv["adapter_response_accepted"] is True, cv.get("reason")
+    assert cv["domain_outcome"] == evidence["domain_outcome"]
+    assert [
+        artifact["slot"]
+        for artifact in result["artifacts"]
+        if artifact["stage"] == "cv"
+    ] == ["validation_evidence"]
+    assert conclusion.returncode == run_conclusion, conclusion.stderr
+
+
+def test_cv_implemented_execution_must_publish_its_evidence(tmp_path: Path) -> None:
+    conclusion, result = _implemented_cv_chain(tmp_path, "succeeded", None)
+
+    cv = result["attempts"][2]
+    assert cv.get("reason", {}).get("code") == "sdi.adapter.output-missing", cv
+    assert cv["adapter_response_accepted"] is False
+    assert conclusion.returncode == 1
+
+
+def _failed_evidence(**changes: object) -> dict[str, object]:
+    return json.loads(json.dumps(FAILED)) | changes
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        _failed_evidence(domain_outcome="succeeded", services=SUCCEEDED["services"]),
+        _failed_evidence(services=FAILED["services"][:2]),
+        _failed_evidence(blueprint_id="s-04-tc-03-c-05-other"),
+        _failed_evidence(deployment_schema_id="s-04-tc-03-c-05-other"),
+        _failed_evidence(image_build_result_id="s-04-tc-03-c-05-other"),
+        _failed_evidence(
+            mission=FAILED["mission"] | {"steps": FAILED["mission"]["steps"][::-1]}
+        ),
+        _failed_evidence(
+            services=[
+                FAILED["services"][0] | {"image_digest": DIGEST},
+                *FAILED["services"][1:],
+            ]
+        ),
+    ],
+    ids=[
+        "other-outcome",
+        "other-services",
+        "other-blueprint",
+        "other-deployment-schema",
+        "other-image-build-result",
+        "steps-out-of-requirement-order",
+        "digest-other-than-amd64",
+    ],
+)
+def test_cv_check_rejects_evidence_contradicting_a_failed_attempt(
+    tmp_path: Path, evidence: dict[str, Any]
+) -> None:
+    conclusion, result = _implemented_cv_chain(tmp_path, "failed", evidence)
+
+    cv = result["attempts"][2]
+    assert cv["adapter_response_accepted"] is False
+    assert cv["reason"]["code"] == "sdi.adapter.candidate-rejected"
+    assert conclusion.returncode == 1
 
 
 def test_preflight_rejects_a_key_the_composition_descriptor_does_not_bind(

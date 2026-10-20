@@ -184,9 +184,11 @@ placement `not_evaluated`. When Image-build was skipped, blocked, failed
 preflight, or timed out, it has no result, and the section gives its conclusion
 and reason in one line instead.
 
-A valid negative Domain outcome can remain green because the integration
-machinery completed correctly. Jenkins machinery failure, retrieval failure,
-contract rejection, identity mismatch, or artifact-publication failure is red.
+A CV `failed` verdict is red, because CV found the composition does not work.
+Any other valid negative Domain outcome, and a composition CV did not evaluate,
+can remain green because the integration machinery completed correctly. Jenkins
+machinery failure, retrieval failure, contract rejection, identity mismatch, or
+artifact-publication failure is red.
 A Jenkins `FAILURE` may still return and publish a valid diagnostic bundle; its
 typed receipt remains authoritative for the red handoff status.
 

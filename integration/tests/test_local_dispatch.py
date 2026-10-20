@@ -166,7 +166,7 @@ def test_dispatches_a_contract_valid_deterministic_four_stage_fixture(
         if path.is_file()
     }
     assert actual_paths == expected_paths
-    assert len(first_result["artifacts"]) == 9
+    assert len(first_result["artifacts"]) == 8
     deployment_artifact = next(
         artifact
         for artifact in first_result["artifacts"]

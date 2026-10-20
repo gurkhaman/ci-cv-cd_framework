@@ -445,8 +445,9 @@ archiving all and only its declared files from the current build.
 
 The pipeline uses the Stage registry's 10, 30, 45, and 15 minute Stage work
 limits, a 90-minute Jenkins run limit, and a two-minute finalization limit. A
-handled machinery failure archives its structured result before Jenkins ends in
-`FAILURE`; a contract-valid negative Domain outcome can remain `SUCCESS`.
+handled machinery failure or a CV `failed` verdict archives its structured
+result before Jenkins ends in `FAILURE`; any other contract-valid negative Domain
+outcome can remain `SUCCESS`.
 External cancellation propagates immediately, cleans active workspaces and
 process trees, ends as `ABORTED`, and does not manufacture a result.
 

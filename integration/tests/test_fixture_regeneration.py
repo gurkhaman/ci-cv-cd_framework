@@ -114,7 +114,6 @@ def test_write_carries_a_config_change_through_every_stage(tmp_path: Path) -> No
             "composition-s-04-tc-03-c-05/composition-blueprint.json",
             "composition-s-04-tc-03-c-05/deployment-schema.json",
             "image-build-s-04-tc-03-c-05/image-build-result.json",
-            "cv-s-04-tc-03-c-05/validation-evidence.json",
             "cd-s-04-tc-03-c-05/deployment-result.json",
         ]
     )
