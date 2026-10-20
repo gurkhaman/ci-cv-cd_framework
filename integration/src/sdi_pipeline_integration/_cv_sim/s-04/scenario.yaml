@@ -1,0 +1,14 @@
+# Poses are in the map frame of turtlebot3_world (Gazebo's tb3_sandbox world frame), metres and radians.
+origin: {x: -2.0, y: -0.5, yaw: 0.0}
+poses:
+  joe-dropoff: {x: -0.55, y: -0.55, yaw: 0.0}
+rendezvous:
+  joe: joe-dropoff
+joe:
+  photo: joe/joe.png
+  # Square, facing -x toward joe-dropoff, 1.15 m ahead of it. The side makes YuNet box Joe's face
+  # 0.4 m wide: his face spans 0.6468 of joe.png's width.
+  poster: {x: 0.60, y: -0.55, side_m: 0.618}
+clips:
+  request: clips/request.wav
+  receipt: clips/receipt.wav
