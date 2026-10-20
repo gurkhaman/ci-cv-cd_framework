@@ -207,9 +207,10 @@ steps to complete.
 
 The composition Stage is implemented and calls the default generator of the
 committed composition config over the checked-out service repository, which
-image build is also given for its recipes. Image build, CV, and CD use
-deterministic Fixtures, which never consume real composition output, so a
-successful composition leaves them skipped. Fixture files prove only the
+image build is also given for its recipes. Image build and CV are implemented:
+a successful composition is followed by a real image build and a CV verdict. CD
+uses a deterministic Fixture, which never consumes real output, so it is
+skipped. Fixture files prove only the
 pipeline interface and evidence handling. They are not proof of a real Domain
 capability, CV verdict, deployment outcome, supported-combination KPI, or any
 aggregate Domain result. The summary therefore always states `KPI evaluation:

@@ -310,6 +310,10 @@ by digest in `deployment/installation.env` as `SDI_CV_ENGINE_IMAGE`.
 - Its `/var/lib/docker` lives in the `cv-engine-state` named volume. Nothing
   pre-pulls or prunes it. It survives `stop` and `start`; deleting the volume,
   or `destroy`, is the reset. Recovery snapshots do not include it.
+- The first CV run on a new or reset engine builds the simulation image cold
+  (2590 s measured, against the 2700 s Stage limit), ends
+  `sdi.cv.no-time-to-start`, and turns the run red. Its verdict does not
+  count. Run S-04 once to warm the engine before a run you time or accept.
 - The smoke check pings the engine through the SDK from the `cv` agent and
   checks that no other agent resolves `cv-engine`.
 
