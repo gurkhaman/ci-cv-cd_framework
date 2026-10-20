@@ -147,16 +147,11 @@ def test_cv_planner_runs_placements_by_digest_with_the_rewritten_command() -> No
 
 def test_cv_planner_hands_the_orchestrator_its_counting_list() -> None:
     commands = {"nav2-navigation": ("a",), "vosk-speech": ("b",)}
-    orchestrator: dict[str, object] = dict(
-        plan(_request(), "sdi-cv-sim:tag", commands).orchestrator
-    )
+    orchestrator = plan(_request(), "sdi-cv-sim:tag", commands).orchestrator
 
-    assert orchestrator["image"] == "sdi-cv-sim:tag"
-    assert orchestrator["command"] == ["cv-orchestrator"]
-    environment = orchestrator["environment"]
-    assert isinstance(environment, dict)
-    counting = environment["CV_COUNTING"]  # pyright: ignore[reportUnknownVariableType]
-    assert isinstance(counting, str)
+    assert orchestrator.get("image") == "sdi-cv-sim:tag"
+    assert orchestrator.get("command") == ["cv-orchestrator"]
+    counting = orchestrator.get("environment", {})["CV_COUNTING"]
     assert " " not in counting
     assert json.loads(counting) == [
         {"topic": "/speech/text", "type": "std_msgs/msg/String", "service_id": "vosk"}

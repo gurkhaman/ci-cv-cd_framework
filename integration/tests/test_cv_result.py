@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 from pydantic import ValidationError
@@ -156,7 +156,7 @@ def _edit_step(index: int, **changes: object) -> dict[str, object]:
     document = _result()
     mission = document["mission"]
     assert isinstance(mission, dict)
-    steps: list[dict[str, object]] = mission["steps"]  # pyright: ignore[reportUnknownVariableType]
+    steps = cast("list[dict[str, object]]", mission["steps"])
     steps[index] = {**steps[index], **changes}
     return document
 

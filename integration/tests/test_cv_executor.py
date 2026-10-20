@@ -1,11 +1,4 @@
-"""The CV run loop against the host's dockerd, with a fake ROS.
-
-The sim is a busybox container that stays up, the orchestrator a script baked
-into the same image, and every placement a busybox image pushed to a registry
-the test starts. The Docker calls are real; only ROS is faked. Each test
-patches the execution label key, the sim context and the registry address,
-so it removes only containers it started.
-"""
+"""The CV run loop against the host's dockerd, with a fake ROS."""
 
 from __future__ import annotations
 
@@ -27,7 +20,7 @@ from sdi_pipeline_integration._cv_run import (
     Blocked,
     ContainerState,
     CountingOutput,
-    Failed,
+    Errored,
     FailedToStart,
     Finished,
     Placement,
@@ -304,7 +297,7 @@ def test_cv_executor_bounds_the_orchestrator_wait_by_the_work_limit(
 
     outcome = run_composition(request, HOST_DOCKER)
 
-    assert isinstance(outcome, Failed)
+    assert isinstance(outcome, Errored)
     assert outcome.error == "orchestrator-timeout"
     assert outcome.snapshot is not None
     assert outcome.snapshot.orchestrator.running
@@ -354,7 +347,7 @@ def test_cv_executor_refuses_a_result_over_64_kib_by_its_size(
         _request(_placement(engine, tmp_path, "fake-node")), HOST_DOCKER
     )
 
-    assert isinstance(outcome, Failed)
+    assert isinstance(outcome, Errored)
     assert outcome.error == "result-too-large"
     assert _remaining(engine) == []
 
@@ -368,7 +361,7 @@ def test_cv_executor_reports_an_orchestrator_that_wrote_no_result(
         _request(_placement(engine, tmp_path, "fake-node")), HOST_DOCKER
     )
 
-    assert isinstance(outcome, Failed)
+    assert isinstance(outcome, Errored)
     assert outcome.error == "no-result"
     assert _remaining(engine) == []
 
@@ -382,7 +375,7 @@ def test_cv_executor_reports_an_invalid_result(
         _request(_placement(engine, tmp_path, "fake-node")), HOST_DOCKER
     )
 
-    assert isinstance(outcome, Failed)
+    assert isinstance(outcome, Errored)
     assert outcome.error == "invalid-result"
 
 
@@ -400,7 +393,7 @@ def test_cv_executor_reports_a_sim_that_stopped(
         _request(_placement(engine, tmp_path, "fake-node")), HOST_DOCKER
     )
 
-    assert isinstance(outcome, Failed)
+    assert isinstance(outcome, Errored)
     assert outcome.error == "sim-not-running"
     assert outcome.snapshot is not None
     assert outcome.snapshot.sim.status == "exited"

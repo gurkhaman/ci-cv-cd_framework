@@ -1,13 +1,3 @@
-"""Run one S-04 composition in the CV engine and report what happened.
-
-The run loop removes leftover CV containers, builds the sim image on a miss,
-pulls every placement by its linux/amd64 digest, rewrites each image's command
-for sim time, and starts the sim, the placements and the orchestrator in the
-sim's network and IPC namespaces. It then waits for the orchestrator, takes a
-snapshot of every container, reads the orchestrator's result file, and removes
-everything it started. The verdict is the caller's.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -42,8 +32,7 @@ ORCHESTRATOR_COMMAND = ("cv-orchestrator",)
 RESULT_PATH = "/cv/result.json"
 RESULT_MAX_BYTES = 64 * 1024
 TEARDOWN_RESERVE_SECONDS = 120
-# Pulls and the sim build stream progress, so a long silence means a stuck engine.
-CLIENT_TIMEOUT_SECONDS = 600
+ENGINE_SILENCE_SECONDS = 600
 LOG_TAIL_LINES = 40
 
 Robot = Literal["waffle_pi", "burger_cam"]
@@ -72,8 +61,6 @@ class RunOptions(TypedDict, total=False):
 
 
 class CountingOutput(ContractModel):
-    """One `CV_COUNTING` entry; service_id is for the orchestrator's logs only."""
-
     topic: NonBlank
     type: NonBlank
     service_id: NonBlank
@@ -144,20 +131,17 @@ class Finished:
 
 
 @dataclass(frozen=True)
-class Failed:
-    """A CV error: the run gave no result to judge."""
-
+class Errored:
     error: RunError
     detail: str
     snapshot: Snapshot | None
     phases: Mapping[Phase, float]
 
 
-RunOutcome = Blocked | Finished | Failed
+RunOutcome = Blocked | Finished | Errored
 
 
 def sim_time_command(command: Sequence[str]) -> tuple[str, ...] | None:
-    """Return the command with sim time switched on, or None for another shape."""
     match list(command):
         case ["ros2", "launch", _, *_]:
             return (*command, "use_sim_time:=true")
@@ -168,7 +152,6 @@ def sim_time_command(command: Sequence[str]) -> tuple[str, ...] | None:
 
 
 def sim_image_tag(context: Path) -> str:
-    """Tag the sim image by the content of its build context."""
     digest = hashlib.sha256()
     files = sorted(
         path
@@ -189,7 +172,6 @@ def sim_image_tag(context: Path) -> str:
 def plan(
     request: RunRequest, sim_image: str, commands: Mapping[str, tuple[str, ...]]
 ) -> Plan:
-    """Return the run options of the sim, every placement and the orchestrator."""
     labels = {EXECUTION_LABEL: request.execution_id}
     sim = f"cv-{request.execution_id}-sim"
     counting = json.dumps(
@@ -232,10 +214,9 @@ def plan(
 
 
 def run_composition(request: RunRequest, engine_url: str = ENGINE_URL) -> RunOutcome:
-    """Run one composition in the engine and remove everything it started."""
     import docker  # noqa: PLC0415
 
-    client = docker.DockerClient(base_url=engine_url, timeout=CLIENT_TIMEOUT_SECONDS)
+    client = docker.DockerClient(base_url=engine_url, timeout=ENGINE_SILENCE_SECONDS)
     try:
         return _Run(client, request).outcome()
     finally:
@@ -258,7 +239,7 @@ class _Run:
             try:
                 sim_image = self.sim_image()
             except _SimBuildError as error:
-                return Failed("sim-build-failed", str(error), None, self.phases)
+                return self.failed("sim-build-failed", str(error), None)
         with self.timed("pulls"):
             commands, causes = self.pull()
         if causes:
@@ -282,20 +263,23 @@ class _Run:
             },
         )
         if not exited:
-            return Failed(
+            return self.failed(
                 "orchestrator-timeout",
                 "the orchestrator was still running at the wait timeout",
                 snapshot,
-                self.phases,
             )
         if not snapshot.sim.running:
-            return Failed(
+            return self.failed(
                 "sim-not-running",
                 f"the sim was {snapshot.sim.status} when the orchestrator exited",
                 snapshot,
-                self.phases,
             )
         return self.read_result(orchestrator, snapshot)
+
+    def failed(
+        self, error: RunError, detail: str, snapshot: Snapshot | None
+    ) -> Errored:
+        return Errored(error, detail, snapshot, self.phases)
 
     @contextmanager
     def timed(self, phase: Phase) -> Generator[None]:
@@ -367,19 +351,15 @@ class _Run:
         try:
             stream, stat = orchestrator.get_archive(RESULT_PATH)
         except NotFound:
-            return Failed(
-                "no-result",
-                f"the orchestrator wrote no {RESULT_PATH}",
-                snapshot,
-                self.phases,
+            return self.failed(
+                "no-result", f"the orchestrator wrote no {RESULT_PATH}", snapshot
             )
         size = cast("int", cast("dict[str, object]", stat)["size"])
         if size > RESULT_MAX_BYTES:
-            return Failed(
+            return self.failed(
                 "result-too-large",
                 f"{RESULT_PATH} is {size} bytes, over {RESULT_MAX_BYTES}",
                 snapshot,
-                self.phases,
             )
         archive = b"".join(stream)
         with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
@@ -389,19 +369,17 @@ class _Run:
         try:
             result = ScenarioResult.model_validate_json(raw)
         except ValidationError as error:
-            return Failed(
+            return self.failed(
                 "invalid-result",
                 f"{RESULT_PATH} is not a valid result: {error.error_count()} errors",
                 snapshot,
-                self.phases,
             )
         expected = {item.topic for item in self.request.counting}
         if not result.unloadable_types and set(result.counts) != expected:
-            return Failed(
+            return self.failed(
                 "invalid-result",
                 f"{RESULT_PATH} does not count exactly the counting topics",
                 snapshot,
-                self.phases,
             )
         return Finished(result, snapshot, self.phases)
 

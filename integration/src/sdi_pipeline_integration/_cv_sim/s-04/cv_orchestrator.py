@@ -1,10 +1,4 @@
-"""Count the composition's outputs and fly the S-04 mission, then write the result.
-
-CV runs this as `cv-orchestrator` in the sim's network and IPC namespaces.
-CV_COUNTING is a JSON list of {topic, type, service_id}. The result file
-/cv/result.json is written by temporary file and rename as the last act.
-Every wait is bounded by a monotonic wall clock; nothing is retried or re-sent.
-"""
+"""Count the composition's outputs and fly the S-04 mission, then write the result."""
 
 import array
 import importlib
@@ -417,7 +411,7 @@ def main() -> None:
     for item in counting:
         try:
             types[item["type"]] = load_type(item["type"])
-        except Exception:  # noqa: BLE001
+        except (ValueError, ImportError, AttributeError):
             unloadable.append({"topic": item["topic"], "type": item["type"]})
     rclpy.init()
     if unloadable:
@@ -431,6 +425,10 @@ def main() -> None:
         )
         return
     node = Orchestrator(counting, types)
+    for item in counting:
+        node.get_logger().info(
+            f"counting {item['topic']} ({item['type']}) for {item['service_id']}"
+        )
     mission = Mission(node).run()
     write_result(
         {

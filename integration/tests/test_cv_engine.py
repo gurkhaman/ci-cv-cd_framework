@@ -1,11 +1,4 @@
-"""Real S-04 compositions in the session's CV engine pair.
-
-The tests build every service image from its recipe inside the engine, push it
-to the pair's registry, and run the composition through the CV run loop: the
-real sim image, Nav2, speech and face services, and the orchestrator flying
-the mission. Each run leaves its result.json, run.json and diagnostic.txt in
-its own directory under the pytest base temp.
-"""
+"""Real S-04 compositions in the session's CV engine pair."""
 
 from __future__ import annotations
 
@@ -25,7 +18,7 @@ from sdi_pipeline_integration import _cv_run as run
 from sdi_pipeline_integration._cv_run import (
     ContainerState,
     CountingOutput,
-    Failed,
+    Errored,
     FailedToStart,
     Finished,
     Placement,
@@ -202,7 +195,7 @@ def _record(directory: Path, request: RunRequest, outcome: RunOutcome) -> None:
     lines = [f"execution: {request.execution_id} robot {request.robot}"]
     lines += [f"placement: {item.reference}" for item in request.placements]
     lines += [f"outcome: {type(outcome).__name__}"]
-    if isinstance(outcome, Failed):
+    if isinstance(outcome, Errored):
         lines.append(f"error: {outcome.error}: {outcome.detail}")
     lines += [f"phase {name}: {seconds} s" for name, seconds in outcome.phases.items()]
     if isinstance(outcome, Finished):
@@ -218,7 +211,7 @@ def _record(directory: Path, request: RunRequest, outcome: RunOutcome) -> None:
             f"{', '.join(item.publishers) or 'no publisher'}"
             for item in result.graph
         ]
-    if not isinstance(outcome, (Finished, Failed)) or outcome.snapshot is None:
+    if not isinstance(outcome, (Finished, Errored)) or outcome.snapshot is None:
         (directory / "diagnostic.txt").write_text("\n".join(lines) + "\n")
         return
     snapshot = outcome.snapshot

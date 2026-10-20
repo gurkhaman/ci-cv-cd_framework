@@ -1,12 +1,3 @@
-"""The S-04 orchestrator's result file, `/cv/result.json`, as CV reads it.
-
-The orchestrator in the sim image writes this file as its last act. It holds
-the message count on every counting topic, the mission's setup and eight
-steps with the wall-clock seconds each took, and the ROS graph at the end of
-the run. When a counting type cannot be loaded, the file names each such type
-and holds no counts and no mission.
-"""
-
 from __future__ import annotations
 
 from typing import Annotated, Literal, Self, get_args
@@ -34,8 +25,6 @@ ENDED: frozenset[StepStatus] = frozenset({"passed", "failed", "timed_out"})
 
 
 class Setup(ContractModel):
-    """Setup's outcome; waited_on names what it still waited for at its timeout."""
-
     status: Literal["passed", "timed_out"]
     elapsed_s: NonNegativeFloat
     waited_on: NonBlank | None = None
@@ -49,8 +38,6 @@ class Setup(ContractModel):
 
 
 class Step(ContractModel):
-    """One requirement's step: a scripted step waits on nothing and takes no time."""
-
     requirement_id: RequirementId
     status: StepStatus
     waited_on: NonBlank | None = None
@@ -72,12 +59,6 @@ class Step(ContractModel):
 
 
 class Mission(ContractModel):
-    """Setup and the eight S-04 steps in requirement order.
-
-    The first step that fails or times out ends the mission, and every step
-    after it is not reached. A setup timeout reaches no step.
-    """
-
     setup: Setup
     steps: list[Step]
 
@@ -107,8 +88,6 @@ class UnloadableType(ContractModel):
 
 
 class GraphTopic(ContractModel):
-    """A topic in the ROS graph at the end of the run, with its publisher nodes."""
-
     topic: NonBlank
     types: list[NonBlank]
     publishers: list[NonBlank]
