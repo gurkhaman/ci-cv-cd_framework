@@ -24,9 +24,9 @@ from tests._cv_evidence import (
 )
 from tests._cv_stage import description
 from tests._fixture_inputs import (
-    FIXTURE_CHAIN_EXIT,
     FIXTURE_COMPOSITION_CONFIG,
     FIXTURE_SERVICE_REPOSITORY,
+    RED_RUN_EXIT,
     STAGE_DESCRIPTORS,
     copy_baked_integration_code,
     write_fixture_composition_descriptor,
@@ -284,7 +284,7 @@ def test_distributed_fixture_chain_preserves_identity_and_exact_archive(
         started_millis,
     )
 
-    assert conclusion.returncode == FIXTURE_CHAIN_EXIT, conclusion.stderr
+    assert conclusion.returncode == RED_RUN_EXIT, conclusion.stderr
     assert result["execution_id"] == EXECUTION_ID
     assert [
         (
@@ -1039,7 +1039,7 @@ def test_malformed_final_bundle_is_rejected_by_public_cli(tmp_path: Path) -> Non
         root,
         str(int((time.time() - 1) * 1000)),
     )
-    assert conclusion.returncode == FIXTURE_CHAIN_EXIT, conclusion.stderr
+    assert conclusion.returncode == RED_RUN_EXIT, conclusion.stderr
     (root / "bundle" / "pipeline-integration-result.json").write_text("{}")
 
     rejected = subprocess.run(

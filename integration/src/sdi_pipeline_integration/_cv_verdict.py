@@ -154,11 +154,23 @@ type Runner = Callable[
 
 
 @dataclass(frozen=True)
-class _Cleared:
+class _Strict:
     service_id: str
     digest: str
-    rule: Literal["strict", "loosened"]
     counting: tuple[CountingOutput, ...]
+
+
+@dataclass(frozen=True)
+class _Loosened:
+    service_id: str
+    digest: str
+
+    @property
+    def counting(self) -> tuple[CountingOutput, ...]:
+        return ()
+
+
+type _Cleared = _Strict | _Loosened
 
 
 @dataclass(frozen=True)
@@ -170,7 +182,7 @@ class _Unfit:
 
 def assess(services: Sequence[Composed], run: Runner) -> Judgement | CvError:
     declared = [_declare(item, services) for item in services]
-    cleared = [item for item in declared if isinstance(item, _Cleared)]
+    cleared = [item for item in declared if not isinstance(item, _Unfit)]
     if len(cleared) < len(declared):
         return Judgement(
             tuple(
@@ -238,7 +250,7 @@ def _declare(service: Composed, services: Sequence[Composed]) -> _Cleared | _Unf
             f"declares {' '.join(unsimulated)}",
         )
     if service.devices:
-        return _Cleared(service.service_id, digest, "loosened", ())
+        return _Loosened(service.service_id, digest)
     others = {
         topic: other.service_id
         for other in services
@@ -254,7 +266,7 @@ def _declare(service: Composed, services: Sequence[Composed]) -> _Cleared | _Unf
         if topic not in others
     )
     if counting:
-        return _Cleared(service.service_id, digest, "strict", counting)
+        return _Strict(service.service_id, digest, counting)
     if not service.publishes:
         detail = "declares no published topic"
     elif not own:
@@ -367,7 +379,7 @@ def _participation(cleared: _Cleared, finished: Finished) -> ServiceParticipatio
             exit_code=state.exit_code,
             **started,
         )
-    if cleared.rule == "loosened":
+    if isinstance(cleared, _Loosened):
         return _service(cleared.service_id, "participated_loosened", **started)
     if any(messages > 0 for messages in counts.values()):
         return _service(cleared.service_id, "participated", **started)

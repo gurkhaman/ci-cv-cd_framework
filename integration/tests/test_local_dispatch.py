@@ -26,9 +26,9 @@ from sdi_pipeline_integration._stage_runtime import (
     SuppliedInputs,
 )
 from tests._fixture_inputs import (
-    FIXTURE_CHAIN_EXIT,
     FIXTURE_COMPOSITION_CONFIG,
     FIXTURE_SERVICE_REPOSITORY,
+    RED_RUN_EXIT,
     RUN_REQUEST_PATH,
     S04_COMBINATION_EXPECTATIONS,
     SUPPLIED_INPUT_ARGUMENTS,
@@ -127,7 +127,7 @@ def test_dispatches_a_contract_valid_deterministic_four_stage_fixture(
         repository, commit_sha, second_root, expected["run_request_path"]
     )
 
-    assert first.returncode == second.returncode == FIXTURE_CHAIN_EXIT, (
+    assert first.returncode == second.returncode == RED_RUN_EXIT, (
         first.stderr + second.stderr
     )
     first_result = json.loads(first.stdout)

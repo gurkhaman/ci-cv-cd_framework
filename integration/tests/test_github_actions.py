@@ -20,8 +20,8 @@ from sdi_pipeline_integration._domain_contracts import (
 from sdi_pipeline_integration._github_actions import render_image_build_section
 from sdi_pipeline_integration._stage_registry import RUN_LIMITS
 from tests._fixture_inputs import (
-    FIXTURE_CHAIN_EXIT,
     FIXTURE_COMPOSITION_CONFIG,
+    RED_RUN_EXIT,
     STAGE_DESCRIPTORS,
     SUPPLIED_INPUT_ARGUMENTS,
     write_fixture_composition_descriptor,
@@ -83,7 +83,7 @@ def _repository(tmp_path: Path) -> tuple[Path, str]:
 def _bundle(
     tmp_path: Path,
     run_request_path: str = RUN_REQUEST_PATH,
-    exit_code: int = FIXTURE_CHAIN_EXIT,
+    exit_code: int = RED_RUN_EXIT,
 ) -> tuple[Path, dict[str, object]]:
     repository, commit_sha = _repository(tmp_path)
     bundle_root = tmp_path / "bundle"

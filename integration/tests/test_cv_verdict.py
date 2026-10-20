@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from functools import partial
-from typing import TYPE_CHECKING, get_args
+from typing import TYPE_CHECKING, Literal, get_args
 
 import pytest
 
@@ -45,7 +45,9 @@ from tests._cv_stage import CvRun, CvStage, description, refusing_engine_url
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from sdi_pipeline_integration._cv_run import BlockingCause
     from sdi_pipeline_integration._cv_verdict import Composed, Runner
+    from sdi_pipeline_integration._stage_contracts import ReasonCategory
     from tests._cv_builders import Requested, RunFor
 
 LOCALIZATION = composed("nav2-localization", {"/amcl_pose": POSE, "/tf": "tf"})
@@ -180,9 +182,9 @@ UNMET = [
 
 @pytest.mark.parametrize(("requirement_id", "status"), UNMET)
 def test_cv_an_unmet_step_fails_the_mission_by_name(
-    requirement_id: str, status: str
+    requirement_id: str, status: Literal["failed", "timed_out"]
 ) -> None:
-    run = finished(scenario_mission=mission(requirement_id, status))  # pyright: ignore[reportArgumentType]
+    run = finished(scenario_mission=mission(requirement_id, status))
 
     judgement = _judged(SERVICES, runner(run))
 
@@ -226,9 +228,9 @@ def test_cv_a_setup_timeout_fails_the_mission() -> None:
     ids=["unsupported-command", "image-unavailable-first"],
 )
 def test_cv_a_blocked_run_is_not_evaluated(
-    causes: dict[str, str], summary: str
+    causes: dict[str, BlockingCause], summary: str
 ) -> None:
-    judgement = _judged(SERVICES, runner(blocked(causes)))  # pyright: ignore[reportArgumentType]
+    judgement = _judged(SERVICES, runner(blocked(causes)))
 
     assert judgement.outcome == Outcome(
         "not-evaluated", "succeeded", "not_evaluated", "dependency", summary
@@ -269,7 +271,7 @@ def test_cv_an_unloadable_type_on_no_counting_topic_is_an_invalid_result() -> No
     assert error.code == "invalid-result"
 
 
-ERROR_CATEGORIES = {
+ERROR_CATEGORIES: dict[RunError, ReasonCategory] = {
     "sim-build-failed": "tool",
     "pull-failed": "dependency",
     "no-time-to-start": "tool",
@@ -291,7 +293,7 @@ def test_cv_a_run_error_is_a_cv_error(error: RunError) -> None:
         error,
         "failed",
         "not_evaluated",
-        ERROR_CATEGORIES[error],  # pyright: ignore[reportArgumentType]
+        ERROR_CATEGORIES[error],
         result.outcome.summary,
     )
     assert run_is_red_for(result.outcome)
