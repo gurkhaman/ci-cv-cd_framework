@@ -42,7 +42,6 @@ RUN retry() { for attempt in 1 2 3 4 5; do "$@" && return 0; sleep 60; done; ret
     ros-jazzy-ros-gz-bridge \
     ros-jazzy-nav2-minimal-tb3-sim \
     ros-jazzy-turtlebot3-gazebo \
-    ros-jazzy-turtlebot3-description \
     ros-jazzy-robot-state-publisher \
     ros-jazzy-xacro \
     ros-jazzy-nav2-msgs \
