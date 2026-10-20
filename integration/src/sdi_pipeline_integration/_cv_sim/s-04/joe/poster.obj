@@ -1,4 +1,3 @@
-# Unit quad in the y-z plane, facing -x; bottom edge at z=0, centred on y. Image left is +y as seen from -x.
 v 0  0.5 0
 v 0 -0.5 0
 v 0 -0.5 1

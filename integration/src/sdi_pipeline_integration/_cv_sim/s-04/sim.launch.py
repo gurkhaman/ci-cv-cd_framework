@@ -5,6 +5,7 @@ The CV_ROBOT environment variable picks the robot.
 
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 import yaml
@@ -13,14 +14,12 @@ from launch import LaunchDescription
 from launch.actions import ExecuteProcess, Shutdown
 from launch_ros.actions import Node
 
-# turtlebot3_gazebo ships each model's SDF and a matching plain URDF under one name.
 ROBOTS = {
     "waffle_pi": "turtlebot3_waffle_pi",
     "burger_cam": "turtlebot3_burger_cam",
 }
 SCENARIO_DIR = Path(__file__).parent
 WORLD_XACRO = "/opt/ros/jazzy/share/nav2_minimal_tb3_sim/worlds/tb3_sandbox.sdf.xacro"
-WORLD_PATH = Path("/tmp/s-04-world.sdf")  # noqa: S108
 
 
 def robot_model() -> str:
@@ -42,7 +41,7 @@ def world_sdf(model: str, scenario: dict) -> str:
     ).stdout
     origin = scenario["origin"]
     poster = scenario["joe"]["poster"]
-    side = poster["side_m"]
+    side = poster["face_width_m"] / scenario["joe"]["photo_face_fraction"]
     photo = SCENARIO_DIR / scenario["joe"]["photo"]
     additions = f"""
     <include>
@@ -78,14 +77,17 @@ def generate_launch_description() -> LaunchDescription:
     """Start the sim; the container exits when any of its processes does."""
     model = robot_model()
     scenario = yaml.safe_load((SCENARIO_DIR / "scenario.yaml").read_text())
-    WORLD_PATH.write_text(world_sdf(model, scenario))
+    with tempfile.NamedTemporaryFile(
+        "w", prefix="s-04-world-", suffix=".sdf", delete=False
+    ) as world:
+        world.write(world_sdf(model, scenario))
     urdf_path = Path(
         get_package_share_directory("turtlebot3_gazebo"), "urdf", f"{model}.urdf"
     )
     return LaunchDescription(
         [
             ExecuteProcess(
-                cmd=["gz", "sim", "-r", "-s", "-v", "2", str(WORLD_PATH)],
+                cmd=["gz", "sim", "-r", "-s", "-v", "2", world.name],
                 output="screen",
                 on_exit=Shutdown(),
             ),

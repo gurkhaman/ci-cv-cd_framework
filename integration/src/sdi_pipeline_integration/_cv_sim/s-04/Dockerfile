@@ -1,9 +1,6 @@
-# CV's S-04 sim image: headless Gazebo Harmonic, rendering on the CPU through
-# Mesa, with the S-04 world, robots, and scenario machinery. It is not a
-# composed service. CV builds it through the Python docker SDK, which has only
-# the classic builder, so this file uses no BuildKit features: no `# syntax=`
+# CV builds this image through the Python docker SDK, which has only the
+# classic builder, so this file uses no BuildKit features: no `# syntax=`
 # line, no RUN --mount, no COPY --chmod, and no heredocs.
-# Sources are pinned as in the nav2-navigation jazzy-debs recipe.
 FROM ubuntu:noble@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55
 
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 LC_ALL=C.UTF-8 ROS_DISTRO=jazzy
@@ -13,9 +10,7 @@ COPY ros-snapshot-archive-keyring.asc /etc/apt/keyrings/ros-snapshot-archive-key
 # The bare image has no CA bundle, so the first update skips TLS peer checks;
 # apt still verifies every index by signature. Both snapshot hosts return
 # bursts of 5xx errors that outlast apt's own retries, and the classic builder
-# has no cache mount to keep fetched packages across builds. So each apt step
-# runs up to five times in this one RUN: an update fails on any missing index,
-# and a retried install keeps the packages it already fetched.
+# has no cache mount to keep fetched packages across builds.
 RUN retry() { for attempt in 1 2 3 4 5; do "$@" && return 0; sleep 60; done; return 1; } \
  && rm -f /etc/apt/sources.list.d/ubuntu.sources \
  && printf '%s\n' 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/90sdi \
@@ -54,12 +49,11 @@ RUN retry() { for attempt in 1 2 3 4 5; do "$@" && return 0; sleep 60; done; ret
  && rm -rf /var/lib/apt/lists/*
 
 # nav2_minimal_tb3_sim comes first so model://turtlebot3_world resolves to the
-# geometry Nav2's map matches. Every model is local; nothing comes from Fuel.
+# geometry Nav2's map matches.
 ENV GZ_SIM_RESOURCE_PATH=/opt/ros/jazzy/share/nav2_minimal_tb3_sim/models:/opt/ros/jazzy/share/turtlebot3_gazebo/models
 
 ENTRYPOINT ["/bin/bash", "-c", "source /opt/ros/jazzy/setup.bash && exec \"$@\"", "--"]
 
-# Scenario data and the orchestrator are copied last so editing them reuses the cached Gazebo layers.
 COPY bridge.yaml /opt/sdi/cv/s-04/
 COPY joe/ /opt/sdi/cv/s-04/joe/
 COPY clips/request.wav clips/receipt.wav /opt/sdi/cv/s-04/clips/

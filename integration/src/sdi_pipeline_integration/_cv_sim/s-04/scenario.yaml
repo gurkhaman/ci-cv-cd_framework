@@ -6,9 +6,8 @@ rendezvous:
   joe: joe-dropoff
 joe:
   photo: joe/joe.png
-  # Square, facing -x toward joe-dropoff, 1.15 m ahead of it. The side makes YuNet box Joe's face
-  # 0.4 m wide: his face spans 0.6468 of joe.png's width.
-  poster: {x: 0.60, y: -0.55, side_m: 0.618}
+  photo_face_fraction: 0.6468
+  poster: {x: 0.60, y: -0.55, face_width_m: 0.4}
 clips:
   request: clips/request.wav
   receipt: clips/receipt.wav
