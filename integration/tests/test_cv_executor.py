@@ -464,8 +464,6 @@ def test_cv_executor_reports_an_engine_silent_during_the_sim_build(
 
 
 class _EngineProxy:
-    """A TCP front for the host daemon that drops connections on cue."""
-
     def __init__(self, drop_on: bytes = b"") -> None:
         self.drop_on = drop_on
         self.listener = socket.create_server(("127.0.0.1", 0))

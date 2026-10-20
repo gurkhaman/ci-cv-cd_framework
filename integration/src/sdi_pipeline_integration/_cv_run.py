@@ -220,6 +220,7 @@ def plan(
 
 def run_composition(request: RunRequest, engine_url: str = ENGINE_URL) -> RunOutcome:
     import docker  # noqa: PLC0415
+    from docker.errors import DockerException  # noqa: PLC0415
 
     label = f"{EXECUTION_LABEL}={request.execution_id}"
     with closing(
@@ -230,7 +231,7 @@ def run_composition(request: RunRequest, engine_url: str = ENGINE_URL) -> RunOut
         except BaseException as error:
             try:
                 _remove(client, label)
-            except Exception as teardown:  # noqa: BLE001
+            except (DockerException, *ENGINE_LOST) as teardown:
                 error.add_note(f"teardown also failed: {teardown!r}")
             raise
         _remove(client, label)
