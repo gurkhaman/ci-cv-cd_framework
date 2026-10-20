@@ -28,6 +28,7 @@ from sdi_pipeline_integration._jenkins_handoff import (
 )
 from sdi_pipeline_integration._yaml_input import InputError
 from tests._fixture_inputs import (
+    FIXTURE_CHAIN_EXIT,
     FIXTURE_COMPOSITION_CONFIG,
     STAGE_DESCRIPTORS,
     SUPPLIED_INPUT_ARGUMENTS,
@@ -117,7 +118,7 @@ def _valid_bundle(
         text=True,
         timeout=HANDOFF_TIMEOUT_SECONDS,
     )
-    assert completed.returncode == 0, completed.stderr
+    assert completed.returncode == FIXTURE_CHAIN_EXIT, completed.stderr
     result = cast("dict[str, object]", json.loads(completed.stdout))
     files = {
         path.relative_to(bundle_root).as_posix(): path.read_bytes()

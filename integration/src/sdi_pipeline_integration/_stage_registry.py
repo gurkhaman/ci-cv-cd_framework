@@ -232,7 +232,7 @@ STAGES: dict[StageName, Stage] = {
             ),
         ),
         agent=Agent("cv", "cv"),
-        jenkins_descriptor="deployment/jenkins/adapters/cv-fixture-v1.yaml",
+        jenkins_descriptor="deployment/jenkins/adapters/cv-v1.yaml",
     ),
     "cd": Stage(
         "cd",

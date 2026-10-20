@@ -217,7 +217,7 @@ def test_verification_is_the_complete_fail_fast_acceptance_gate(tmp_path: Path) 
     assert stage_status == (
         "composition: implemented (jenkins), implemented (local)\n"
         "image-build: implemented (jenkins), fixture (local)\n"
-        "cv: fixture (jenkins), fixture (local)\n"
+        "cv: implemented (jenkins), implemented (local)\n"
         "cd: fixture (jenkins), fixture (local)\n"
     )
     assert completed.stdout.endswith(f"Repository acceptance passed.\n{stage_status}")

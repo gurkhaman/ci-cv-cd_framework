@@ -23,6 +23,7 @@ from tests._cv_evidence import (
     SUCCEEDED,
 )
 from tests._fixture_inputs import (
+    FIXTURE_CHAIN_EXIT,
     FIXTURE_COMPOSITION_CONFIG,
     FIXTURE_SERVICE_REPOSITORY,
     STAGE_DESCRIPTORS,
@@ -282,15 +283,25 @@ def test_distributed_fixture_chain_preserves_identity_and_exact_archive(
         started_millis,
     )
 
-    assert conclusion.returncode == 0, conclusion.stderr
+    assert conclusion.returncode == FIXTURE_CHAIN_EXIT, conclusion.stderr
     assert result["execution_id"] == EXECUTION_ID
-    assert [attempt["correlation"]["stage"] for attempt in result["attempts"]] == [
-        *STAGES
+    assert [
+        (
+            attempt["correlation"]["stage"],
+            attempt["execution_conclusion"],
+            attempt["reason"]["code"],
+        )
+        for attempt in result["attempts"]
+    ] == [
+        ("composition", "succeeded", "sdi.fixture.composition-executed"),
+        ("image_build", "succeeded", "sdi.fixture.image-build-executed"),
+        ("cv", "skipped", "sdi.dependency.fixture-evidence"),
+        ("cd", "skipped", "sdi.dependency.prerequisite-blocked"),
     ]
-    assert len(result["artifacts"]) == 8
-    assert all(
-        attempt["execution_conclusion"] == "succeeded" for attempt in result["attempts"]
-    )
+    assert {artifact["stage"] for artifact in result["artifacts"]} == {
+        "composition",
+        "image_build",
+    }
 
 
 def test_implemented_image_build_skips_fixture_composition(tmp_path: Path) -> None:
@@ -455,32 +466,23 @@ def test_stages_not_granted_supplied_inputs_reject_them(
 def test_implemented_composition_runs_the_image_build_adapter(
     tmp_path: Path,
 ) -> None:
-    # Every Fixture placement is unresolved, so nothing reaches the builder.
-    repository, _commit_sha = _repository(tmp_path)
-    case = SOURCE_ROOT / "integration/fixtures/cases/composition-s-04-tc-03-c-05"
-    blueprint, deployment = (
-        json.dumps(
-            json.loads((case / name).read_text()) | {"evidence_basis": "implemented"}
-        )
-        for name in ("composition-blueprint.json", "deployment-schema.json")
+    # Every Fixture placement is unresolved, so nothing reaches the builder,
+    # and CV stops in its declaration checks before it opens an engine.
+    repository, _commit_sha = _repository(
+        tmp_path, service_repository=_described_fixture_services(tmp_path)
     )
+    case = SOURCE_ROOT / "integration/fixtures/cases/composition-s-04-tc-03-c-05"
     adapter = tmp_path / "implemented-composition-adapter"
-    write_scripted_adapter(
+    _write_response_adapter(
         adapter,
-        f"""(output / "outputs").mkdir()
-(output / "outputs/composition-blueprint.json").write_text({blueprint!r})
-(output / "outputs/deployment-schema.json").write_text({deployment!r})
-response = {{
-    "schema_version": "sdi.stage-adapter-response/v1",
-    "correlation": request["correlation"],
-    "execution_conclusion": "succeeded",
-    "domain_outcome": "succeeded",
-    "consumed_inputs": [item["slot"] for item in request["inputs"]],
-    "produced_outputs": ["composition_blueprint", "deployment_schema"],
-    "diagnostic": {{"present": False, "truncated": False}},
-}}
-(output / "response.json").write_text(json.dumps(response))
-""",
+        {
+            name: json.dumps(
+                json.loads((case / name).read_text())
+                | {"evidence_basis": "implemented"}
+            )
+            for name in ("composition-blueprint.json", "deployment-schema.json")
+        },
+        "succeeded",
     )
     write_fixture_composition_descriptor(
         repository, entrypoint=adapter, mode="implemented"
@@ -498,14 +500,15 @@ response = {{
     )
 
     assert conclusion.returncode == 0, conclusion.stderr
-    assert [attempt["domain_outcome"] for attempt in result["attempts"][:2]] == [
+    assert [attempt["domain_outcome"] for attempt in result["attempts"][:3]] == [
         "succeeded",
         "succeeded",
+        "not_evaluated",
     ]
     assert [attempt["reason"]["code"] for attempt in result["attempts"][1:]] == [
         "sdi.image-build.recorded",
+        "sdi.cv.not-evaluated",
         "sdi.dependency.implemented-evidence",
-        "sdi.dependency.prerequisite-blocked",
     ]
     images = json.loads(
         (
@@ -515,6 +518,31 @@ response = {{
     assert {(item["status"], item["reason"]) for item in images} == {
         ("failed", "unresolved-placement")
     }
+    services = json.loads(
+        (tmp_path / "run/transfers/cv/outputs/validation-evidence.json").read_text()
+    )["services"]
+    assert {(item["participation"], item["reason"]) for item in services} == {
+        ("not_evaluated", "image-unavailable")
+    }
+
+
+def _described_fixture_services(tmp_path: Path) -> Path:
+    """Return the Fixture service repository plus a description per Fixture service."""
+    repository = tmp_path / "described-service-repository"
+    shutil.copytree(FIXTURE_SERVICE_REPOSITORY, repository)
+    for service_id in SERVICE_IDS:
+        front_matter = {
+            "schema_version": "sdi.service-description/v1",
+            "service_id": service_id,
+            "title": service_id,
+            "provenance": {"basis": "placeholder", "note": "A pipeline test."},
+            "publishes": {f"/{service_id}/state": {"type": "std_msgs/msg/String"}},
+        }
+        (repository / service_id).mkdir()
+        (repository / service_id / "SDI.md").write_text(
+            f"---\n{json.dumps(front_matter)}\n---\n\n# {service_id}\n"
+        )
+    return repository
 
 
 # Both profile hosts are arm64; mission control stays unresolved yet keeps a host.
@@ -809,11 +837,10 @@ if reason is not None:
 """,
     )
     descriptor = repository / STAGES["cv"].jenkins_descriptor
-    descriptor.write_text(
-        descriptor.read_text()
-        .replace("implementation_mode: fixture", "implementation_mode: implemented")
-        .replace("entrypoint: sdi-fixture-adapter", f"entrypoint: {adapter}")
-    )
+    committed = descriptor.read_text()
+    scripted = committed.replace("entrypoint: sdi-cv-adapter", f"entrypoint: {adapter}")
+    assert scripted != committed
+    descriptor.write_text(scripted)
     _git(repository, "add", ".")
     _git(repository, "commit", "-m", "Select implemented upstream Stages and CV")
     return _execute_chain(
@@ -1018,7 +1045,7 @@ def test_malformed_final_bundle_is_rejected_by_public_cli(tmp_path: Path) -> Non
         root,
         str(int((time.time() - 1) * 1000)),
     )
-    assert conclusion.returncode == 0, conclusion.stderr
+    assert conclusion.returncode == FIXTURE_CHAIN_EXIT, conclusion.stderr
     (root / "bundle" / "pipeline-integration-result.json").write_text("{}")
 
     rejected = subprocess.run(

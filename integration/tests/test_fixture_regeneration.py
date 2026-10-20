@@ -49,7 +49,7 @@ def test_committed_fixture_cases_are_fresh() -> None:
 
 def test_check_names_the_case_whose_digest_is_stale(tmp_path: Path) -> None:
     root = _copy_inputs(tmp_path)
-    case = root / CASES / "cv-s-04-tc-03-c-05/case.yaml"
+    case = root / CASES / "composition-s-04-tc-03-c-05/case.yaml"
     committed = case.read_text(encoding="utf-8")
     case.write_text(
         committed.replace("byte_size: 8550", "byte_size: 8551", 1), encoding="utf-8"
@@ -60,7 +60,7 @@ def test_check_names_the_case_whose_digest_is_stale(tmp_path: Path) -> None:
     assert completed.returncode == 2
     assert completed.stderr == (
         "regenerate-fixtures: Fixture cases are stale: "
-        f"['{CASES}/cv-s-04-tc-03-c-05/case.yaml']\n"
+        f"['{CASES}/composition-s-04-tc-03-c-05/case.yaml']\n"
     )
 
 
