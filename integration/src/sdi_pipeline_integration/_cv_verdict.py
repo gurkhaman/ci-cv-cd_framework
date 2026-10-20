@@ -1,10 +1,3 @@
-"""CV's judgement of one composition: declaration checks, participation, verdict.
-
-Pure apart from the injected runner, which `assess` calls only after every
-service passes the declaration checks. A composition CV cannot evaluate
-therefore never opens a docker client.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -43,8 +36,6 @@ if TYPE_CHECKING:
     from ._domain_contracts import ImageRecord, UnevaluatedReason
     from ._stage_contracts import ReasonCategory
 
-# Topics the scenario machinery publishes itself, so they never count for a
-# composed service. Pinned by test_cv_topic_constant.py.
 TOPIC_CONSTANT = frozenset(
     {
         "/clock",
@@ -64,11 +55,9 @@ TOPIC_CONSTANT = frozenset(
         "/parameter_events",
     }
 )
-# The sim image's nodes. What they publish must equal TOPIC_CONSTANT.
 MACHINERY_NODES = frozenset(
     {"/s04_bridge", "/robot_state_publisher", "/cv_orchestrator"}
 )
-# Devices Gazebo stands in for. A service declaring only these is judged loosely.
 SIMULATED_DEVICES = frozenset({"opencr", "lidar", "camera", "microphone"})
 
 CvOnlyError = Literal[
@@ -89,8 +78,6 @@ SERVICE_PARTICIPATION: TypeAdapter[ServiceParticipation] = TypeAdapter(
 
 @dataclass(frozen=True)
 class Composed:
-    """One blueprint service, reduced to the facts the declaration checks read."""
-
     service_id: str
     image: ImageRecord | None
     devices: frozenset[str]
@@ -99,22 +86,17 @@ class Composed:
 
 @dataclass(frozen=True)
 class CvError:
-    """No verdict: the execution fails and publishes no evidence."""
-
     code: CvErrorCode
     detail: str
     run: Errored | None = None
 
     @property
     def outcome(self) -> Outcome:
-        """Return the failed execution this error reports."""
         return ERRORS[self.code]
 
 
 @dataclass(frozen=True)
 class Judgement:
-    """A verdict on every service and the mission, plus what the run left."""
-
     services: tuple[ServiceParticipation, ...]
     mission: Mission | None
     counting: tuple[CountingOutput, ...]
@@ -122,7 +104,6 @@ class Judgement:
 
     @property
     def outcome(self) -> Outcome | Succeeded:
-        """Return the verdict, its reason naming the first cause."""
         match validation_verdict(self.services, self.mission):
             case "succeeded":
                 return SUCCEEDED
@@ -174,8 +155,6 @@ type Runner = Callable[
 
 @dataclass(frozen=True)
 class _Cleared:
-    """Passed every declaration check. counting is empty exactly when loosened."""
-
     service_id: str
     digest: str
     rule: Literal["strict", "loosened"]
@@ -190,7 +169,6 @@ class _Unfit:
 
 
 def assess(services: Sequence[Composed], run: Runner) -> Judgement | CvError:
-    """Judge one composition, given its services in blueprint order."""
     declared = [_declare(item, services) for item in services]
     cleared = [item for item in declared if isinstance(item, _Cleared)]
     if len(cleared) < len(declared):
@@ -234,7 +212,6 @@ def assess(services: Sequence[Composed], run: Runner) -> Judgement | CvError:
 def topic_constant_drift(
     graph: Sequence[GraphTopic],
 ) -> tuple[frozenset[str], frozenset[str]]:
-    """Return the constant topics no machinery node published, and the reverse."""
     published = frozenset(
         item.topic for item in graph if MACHINERY_NODES & set(item.publishers)
     )
@@ -242,7 +219,6 @@ def topic_constant_drift(
 
 
 def _declare(service: Composed, services: Sequence[Composed]) -> _Cleared | _Unfit:
-    """Return the first declaration check the service fails, in spec order."""
     image = service.image
     if not isinstance(image, BuiltImageRecord):
         return _Unfit(service.service_id, "image-unavailable", _unbuilt(image))
@@ -437,7 +413,6 @@ _ERRORS: dict[CvErrorCode, tuple[ReasonCategory, str]] = {
         "CV simulates only TurtleBot3 Waffle and Burger targets.",
     ),
 }
-# Built over every code, so a run error without an entry fails at import.
 ERRORS: dict[CvErrorCode, Outcome] = {
     code: Outcome(code, "failed", "not_evaluated", *_ERRORS[code])
     for code in (*get_args(RunError), *get_args(CvOnlyError))

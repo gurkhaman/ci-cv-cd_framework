@@ -50,8 +50,6 @@ class Outcome:
 
 @dataclass(frozen=True)
 class Succeeded:
-    """A succeeded Domain outcome with no reason. Only CV's pass uses it."""
-
     code: Literal["succeeded"] = "succeeded"
     conclusion: Literal["succeeded"] = "succeeded"
     domain_outcome: Literal["succeeded"] = "succeeded"
@@ -144,7 +142,6 @@ def _block_title(title: str) -> str:
 
 
 def block_cost(title: str, lines: Sequence[str]) -> int:
-    """Return the bytes a block of these lines adds to a diagnostic."""
     return len(_block_title(title).encode()) + sum(
         len(line.encode()) + 1 for line in lines
     )

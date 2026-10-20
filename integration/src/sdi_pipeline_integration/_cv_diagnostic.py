@@ -1,29 +1,3 @@
-"""CV's diagnostic.txt: what an operator reads to see why a verdict fell.
-
-Everything but the log tails is header lines, in this order, so the kit's
-end-first cut of an oversized header drops the graph first:
-
-    outcome: sdi.cv.failed                  (the kit's line)
-    robot: waffle_pi                         (the adapter's fact)
-    summary: vosk-speech did not participate: container-exited (exit 137).
-    error: orchestrator-timeout: <detail>    (a CV error only)
-    phase leftover-cleanup: 0.4 s            (each phase the run reached)
-    setup: passed 2.7 s
-    step accept-spoken-request: passed /speech/text 2.4 s
-    service vosk-speech: did_not_participate container-exited exit 137
-    count /speech/text std_msgs/msg/String: 0 (vosk-speech)
-    unloadable /x pkg/msg/T
-    topic-constant: match                    (or the missing and extra topics)
-    graph /s04_bridge: /camera_info /clock /image /imu /joint_states /odom /scan
-    graph 25 nodes: /parameter_events /rosout
-    --- vosk-speech log tail                 (blocks)
-
-The graph is one line per de-duplicated publisher set, machinery sets first,
-and stops at GRAPH_MAX_BYTES. Log tails share the room the header leaves by
-water filling, each keeping its newest lines. The graph stays in the header
-because the kit drops every block when any block holds sensitive material.
-"""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -46,13 +20,11 @@ if TYPE_CHECKING:
     from ._domain_contracts import ServiceParticipation
 
 GRAPH_MAX_BYTES = 8192
-# Every node publishes these, so they are grouped by how many nodes do.
 EVERY_NODE_TOPICS = frozenset({"/rosout", "/parameter_events"})
 UNRECORDED = "unrecorded"
 
 
 def describe(diagnostic: Diagnostic, result: Judgement | CvError) -> None:
-    """Write CV's lines and log-tail blocks for one attempt."""
     outcome = result.outcome
     if isinstance(outcome, Outcome):
         diagnostic.line(f"summary: {outcome.summary}")
@@ -76,7 +48,6 @@ def describe(diagnostic: Diagnostic, result: Judgement | CvError) -> None:
 
 
 def graph_lines(graph: Sequence[GraphTopic]) -> list[str]:
-    """Group topics by publisher set, machinery sets first, unpublished last."""
     groups: dict[tuple[str, ...], list[str]] = {}
     every_node: dict[int, list[str]] = {}
     for item in graph:
@@ -103,10 +74,6 @@ def graph_lines(graph: Sequence[GraphTopic]) -> list[str]:
 
 
 def water_fill(room: int, sizes: Sequence[int]) -> list[int]:
-    """Share room so small items keep everything and large ones split the rest.
-
-    water_fill(10, [2, 9, 9]) == [2, 4, 4].
-    """
     shares = [0] * len(sizes)
     left = max(room, 0)
     order = sorted(range(len(sizes)), key=lambda index: sizes[index])
@@ -207,7 +174,6 @@ def _tails(
 
 
 def _tailed(result: Judgement | CvError) -> list[tuple[str, ContainerState]]:
-    """Name the containers whose logs explain the outcome."""
     if isinstance(result, CvError):
         snapshot = None if result.run is None else result.run.snapshot
         if snapshot is None:

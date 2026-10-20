@@ -25,7 +25,6 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
     from pathlib import Path
 
-# Nothing in this file may reach an engine; a run that tried fails at once.
 ENGINE_URL = refusing_engine_url()
 HEALTHY = {
     "nav2-localization": description(

@@ -344,8 +344,6 @@ class NonParticipatingService(ContractModel):
         return self
 
 
-# In summary order: a not-evaluated verdict names the first of these causes.
-# blocked is last because it is never a cause of its own.
 UnevaluatedReason = Literal[
     "image-unavailable",
     "no-amd64",
@@ -430,11 +428,6 @@ class Mission(ContractModel):
 def validation_verdict(
     services: Sequence[ServiceParticipation], mission: Mission | None
 ) -> Literal["succeeded", "failed", "not_evaluated"]:
-    """Return CV's verdict on services and the mission they flew.
-
-    Not evaluated without a mission, succeeded when the mission completed and
-    every service participated, and failed otherwise.
-    """
     if mission is None:
         return "not_evaluated"
     if mission.completed and all(

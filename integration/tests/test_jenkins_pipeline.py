@@ -467,8 +467,6 @@ def test_stages_not_granted_supplied_inputs_reject_them(
 def test_implemented_composition_runs_the_image_build_adapter(
     tmp_path: Path,
 ) -> None:
-    # Every Fixture placement is unresolved, so nothing reaches the builder,
-    # and CV stops in its declaration checks before it opens an engine.
     repository, _commit_sha = _repository(
         tmp_path, service_repository=_described_fixture_services(tmp_path)
     )
@@ -528,7 +526,6 @@ def test_implemented_composition_runs_the_image_build_adapter(
 
 
 def _described_fixture_services(tmp_path: Path) -> Path:
-    """Return the Fixture service repository plus a description per Fixture service."""
     repository = tmp_path / "described-service-repository"
     shutil.copytree(FIXTURE_SERVICE_REPOSITORY, repository)
     for service_id in SERVICE_IDS:

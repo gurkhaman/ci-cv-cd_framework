@@ -1,10 +1,3 @@
-"""One prepared CV adapter invocation: request, input root and output root.
-
-Inputs follow the image-build adapter tests: the composition Fixture case with
-its services swapped, a service repository written or copied beside it, and
-an implemented image-build result naming each service's images.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -65,7 +58,6 @@ def description(
     publishes: Mapping[str, str] | None = None,
     devices: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Return the front matter of a synthetic service description."""
     front_matter: dict[str, Any] = {
         "schema_version": "sdi.service-description/v1",
         "service_id": service_id,
@@ -83,16 +75,12 @@ def description(
 
 @dataclass(frozen=True)
 class CvRun:
-    """What one adapter run published."""
-
     response: AdapterResponse
     evidence: ValidationEvidence | None
     diagnostic: str
 
 
 class CvStage:
-    """One CV adapter invocation under a test directory."""
-
     def __init__(self, root: Path) -> None:
         self.root = root
         self.request = root / "request.json"
@@ -110,10 +98,6 @@ class CvStage:
         evidence_max_bytes: int | None = None,
         execution_id: str = EXECUTION_ID,
     ) -> None:
-        """Write the request and inputs for these services, in blueprint order.
-
-        A service is a folder to copy, or the front matter of its SDI.md.
-        """
         repository = self.input_root / SERVICE_REPOSITORY_ROOT
         for service_id, source in services.items():
             folder = repository / service_id
@@ -225,7 +209,6 @@ class CvStage:
         self.request.write_bytes(canonical_json(request))
 
     def argv(self) -> list[str]:
-        """Return the adapter's command-line arguments for this invocation."""
         self.output_root.mkdir(exist_ok=True)
         return [
             "run",
@@ -238,11 +221,9 @@ class CvStage:
         ]
 
     def run(self, main: Callable[[Sequence[str]], int]) -> CvRun:
-        """Run an adapter and return what it published."""
         return self.published(main(self.argv()))
 
     def published(self, exit_code: int) -> CvRun:
-        """Read what a finished run published, checking its bounds."""
         assert exit_code == 0
         response = AdapterResponse.model_validate_json(
             (self.output_root / "response.json").read_bytes(), strict=False

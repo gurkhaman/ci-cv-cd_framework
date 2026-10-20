@@ -1,13 +1,3 @@
-"""Implemented CV Stage adapter: one S-04 Validation scenario per composition.
-
-The adapter reads the composed services from the blueprint, their images from
-the image-build result and their devices and outputs from the service
-descriptions. It runs the composition in the stack's CV engine when every
-service passes the declaration checks, and publishes validation-evidence.json
-and diagnostic.txt. Judgement lives in _cv_verdict; this module only crosses
-the boundaries.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -44,7 +34,6 @@ if TYPE_CHECKING:
     from ._domain_contracts import ImageRecord
     from ._service_descriptions import ServiceDescription
 
-# The only place that names the production engine; tests pass their own.
 ENGINE_URL = "tcp://cv-engine:2375"
 ROBOTS: dict[str, Robot] = {
     "turtlebot3-waffle": "waffle_pi",
@@ -62,7 +51,6 @@ class _Inputs:
 
 
 def validate(invocation: Invocation, *, engine_url: str) -> Verdict:
-    """Judge one composition in the CV engine at engine_url."""
     inputs = _read(invocation)
     if isinstance(inputs, CvError):
         return _errored(invocation, inputs)
@@ -94,7 +82,6 @@ def _errored(invocation: Invocation, error: CvError) -> Verdict:
 
 
 def _read(invocation: Invocation) -> _Inputs | CvError:
-    """Parse and cross-check the inputs, as the image-build adapter does."""
     declared = {item.slot: item for item in invocation.request.inputs}
 
     def document[ModelT: BaseModel](model: type[ModelT], slot: str) -> ModelT:

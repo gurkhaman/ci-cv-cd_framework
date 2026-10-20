@@ -1,9 +1,4 @@
-"""Real S-04 compositions in the session's CV engine pair.
-
-The pass and no-face compositions run through the CV adapter, which reads
-their counting outputs from the service descriptions. The probe and repeat
-runs call the run loop directly.
-"""
+"""Real S-04 compositions in the session's CV engine pair."""
 
 from __future__ import annotations
 

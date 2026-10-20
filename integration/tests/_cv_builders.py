@@ -1,9 +1,3 @@
-"""Programmatic services and run outcomes for the fast CV tests.
-
-Defaults describe a passing run, so a test states only what it varies. Mapping
-coverage comes from these builders, never from edited recordings.
-"""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal
@@ -68,7 +62,6 @@ type RunFor = Callable[[tuple[Placement, ...], tuple[CountingOutput, ...]], RunO
 
 
 def amd64_digest(service_id: str) -> str:
-    """Return a distinct amd64 digest per service."""
     return f"sha256:{sum(map(ord, service_id)) % 10**6:064d}"
 
 
@@ -136,7 +129,6 @@ def mission(
     *,
     setup: Literal["passed", "timed_out"] = "passed",
 ) -> Mission:
-    """Return a scenario mission that passes up to its first unmet step."""
     reached = setup == "passed"
     steps: list[dict[str, Any]] = []
     for requirement_id, waited_on in WAITED_ON.items():
@@ -168,7 +160,6 @@ def finished(  # noqa: PLR0913
     orchestrator: ContainerState | None = None,
     graph: Sequence[GraphTopic] = (),
 ) -> RunFor:
-    """Return a run that finished; every counting topic counts 5 by default."""
 
     def run(
         placements: tuple[Placement, ...], counting: tuple[CountingOutput, ...]
@@ -209,7 +200,6 @@ def finished(  # noqa: PLR0913
 
 
 def runner(outcome: RunOutcome | RunFor, seen: list[Requested] | None = None) -> Runner:
-    """Return a runner that records what it was asked to run."""
 
     def run(
         placements: tuple[Placement, ...], counting: tuple[CountingOutput, ...]
@@ -243,7 +233,6 @@ def never(
 
 
 def evidence_of(judgement: Judgement) -> ValidationEvidence:
-    """Return the judgement as evidence the contract accepts."""
     return ValidationEvidence.model_validate(
         evidence(
             judgement.outcome.domain_outcome,
@@ -259,7 +248,6 @@ def evidence_of(judgement: Judgement) -> ValidationEvidence:
 
 
 def run_is_red_for(outcome: Outcome | Succeeded) -> bool:
-    """Return the run colour of a run whose CV attempt had this outcome."""
     reason = (
         None
         if outcome.code == "succeeded"

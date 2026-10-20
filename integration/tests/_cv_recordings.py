@@ -1,5 +1,3 @@
-"""Result files recorded from real cv_engine runs, read-only under a MANIFEST."""
-
 from __future__ import annotations
 
 import hashlib
@@ -21,7 +19,6 @@ def manifest() -> dict[str, str]:
 
 
 def recorded(name: str) -> ScenarioResult:
-    """Parse a recording after checking its bytes against the MANIFEST."""
     content = (RECORDED / f"{name}.json").read_bytes()
     assert hashlib.sha256(content).hexdigest() == manifest()[f"{name}.json"], name
     return ScenarioResult.model_validate_json(content)

@@ -36,7 +36,6 @@ RUNTIME_IMAGE = (
     "docker.io/library/python@sha256:"
     "229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36"
 )
-# CV skips the Fixture chain's unevaluated output, which turns the run red.
 FIXTURE_CHAIN_EXIT = 1
 SUPPLIED_INPUT_ARGUMENTS = (
     "--service-repository",

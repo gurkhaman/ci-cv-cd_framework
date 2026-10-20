@@ -101,7 +101,6 @@ def log_tail(path: Path, *, max_bytes: int) -> LogTail:
 
 
 def tail_lines(lines: Sequence[str], *, max_bytes: int) -> LogTail:
-    """Return the last redacted, non-empty lines within a byte budget."""
     kept: list[str] = []
     used = 0
     cut = False
@@ -120,7 +119,6 @@ def tail_lines(lines: Sequence[str], *, max_bytes: int) -> LogTail:
 
 
 def failure_text(text: str, *, fallback: str) -> str:
-    """Return text redacted and reduced to a result detail, or the fallback."""
     redacted = redact_line(text)
     detail = "" if redacted is None else _reduce(redacted)
     if not detail or contains_sensitive_material(detail):
