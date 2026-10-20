@@ -8,7 +8,8 @@ integration work; four independently replaceable agents provide the
 executes one submitted run across those five agents: implemented composition,
 then the image-build, CV, and CD Fixtures. A BuildKit builder and a pipeline
 registry, reachable only from the `image-build` agent, are ready for the real
-image-build adapter. Optional GitHub self-hosted runner
+image-build adapter. A `docker:dind` CV engine, reachable only from the `cv`
+agent, is ready for the real CV adapter. Optional GitHub self-hosted runner
 services, one per repository, pick up the protected handoff job, reach the
 controller over an internal network, and reach GitHub only through their own
 allowlisting proxy.
@@ -39,6 +40,7 @@ The tracked authority is:
 - `compose.yaml`: loopback-only controller publication, named controller state,
   five agent services, a separate egress-capable network for each agent, the
   `buildkitd` builder and `registry` services with their named volumes, the
+  `cv-engine` service with its named volume, the
   two optional runner services `runner-upstream` and `runner-fork`, and each
   runner's proxy service `runner-upstream-proxy` or `runner-fork-proxy`.
 - `Jenkinsfile`: the thin repository-owned scheduler over public integration CLI
@@ -233,11 +235,11 @@ deployment/jenkins/bin/stack exercise-live
 deployment/jenkins/bin/stack stop
 ```
 
-`start` pulls the pinned builder and registry images when they are missing,
+`start` pulls the pinned builder, registry, and CV engine images when they are missing,
 builds the exact
 controller and five agent images and the runner and proxy images of every
 runner configured in `GITHUB_RUNNERS`, starts the controller, all five agents,
-the builder, the registry, and those runners with their proxies, rejects an
+the builder, the registry, the CV engine, and those runners with their proxies, rejects an
 agent image that declares any volume, and waits for process health. It refuses
 a configured runner that is not registered and refuses while a runner executes
 a job. Jenkins is published on the host only
@@ -245,7 +247,8 @@ at
 `http://127.0.0.1:<configured-port>`. No inbound-agent TCP port is published;
 all agents connect over WebSocket. `stop` removes all containers and networks
 but retains every named volume: `jenkins-home`, the runner state volumes, and
-the builder's `buildkit-state` and `pipeline-registry`. Agent workspaces are
+the builder's `buildkit-state` and `pipeline-registry`, and the CV engine's
+`cv-engine-state`. Agent workspaces are
 separate tmpfs mounts, have no shared or persistent filesystem, and disappear
 whenever their container is replaced. Their five separate networks allow GitHub
 checkout without making peer agents reachable. `stop`, `status`, `logs`, and `destroy`
@@ -264,8 +267,9 @@ run `build` again. Runner and proxy images are still built.
 
 ### Builder And Pipeline Registry
 
-The always-on stack has eight containers: the controller, the five agents,
-`buildkitd`, and `registry`. Both images are pinned by digest in
+The always-on stack has nine containers: the controller, the five agents,
+`buildkitd`, `registry`, and `cv-engine` (see [CV Engine](#cv-engine)). Both
+builder images are pinned by digest in
 `deployment/installation.env` as `SDI_BUILDKIT_IMAGE` and `SDI_REGISTRY_IMAGE`.
 
 - `buildkitd` runs privileged, listens on `tcp://buildkitd:1234` without TLS,
@@ -288,6 +292,26 @@ Building for `linux/arm64` relies on QEMU emulation registered with the host
 kernel's binfmt_misc. Docker Desktop registers it; on a plain Docker Engine
 host, register the arm64 emulator before `start`, or the smoke check fails
 because `buildkitd` lists no `linux/arm64` platform.
+
+### CV Engine
+
+`cv-engine` is a privileged `docker:dind` daemon for the real CV Stage, pinned
+by digest in `deployment/installation.env` as `SDI_CV_ENGINE_IMAGE`.
+
+- It listens on `tcp://cv-engine:2375` without TLS and on its own Unix socket,
+  and trusts `registry:5000` as an insecure registry. The CV adapter reaches it
+  through the Python `docker` SDK. No service mounts the host Docker socket.
+- The internal `cv-engine-agent` network joins only the `cv` agent and
+  `cv-engine`. The internal `cv-engine-registry` network joins only
+  `cv-engine` and `registry`, so the engine pulls from `registry:5000` while
+  the `image-build` agent and `buildkitd` have no route to its root API. The
+  `cv` agent joins no builder network. Only `cv-engine` joins the unrestricted
+  `cv-engine-egress` network, for base images and packages.
+- Its `/var/lib/docker` lives in the `cv-engine-state` named volume. Nothing
+  pre-pulls or prunes it. It survives `stop` and `start`; deleting the volume,
+  or `destroy`, is the reset. Recovery snapshots do not include it.
+- The smoke check pings the engine through the SDK from the `cv` agent and
+  checks that no other agent resolves `cv-engine`.
 
 ### GitHub Handoff Runners
 
@@ -437,7 +461,7 @@ registration secret is validated or mounted during reconciliation.
 
 `bin/stack destroy` is the explicit destructive operation for reconstruction. It
 removes the controller, its named volume, the runner state volumes with their
-registrations, and the builder cache and pipeline registry volumes. Back up
+registrations, and the builder cache, pipeline registry, and CV engine volumes. Back up
 operational state first if it must be retained.
 
 ## Safe Shutdown
@@ -480,7 +504,7 @@ storage encryption or GitHub-side quiescence. The command then runs
 `stack quiesce`, which stops the runners and quiesces Jenkins, refuses queued
 or building runs, cleanly stops every container, and archives the complete
 `jenkins-home` named volume with numeric ownership. The runner state volumes,
-and so the runner registrations, and the builder cache and pipeline registry
+and so the runner registrations, and the builder cache, pipeline registry, and CV engine
 volumes are not part of the snapshot. It creates an
 owner-only archive and a path-free recovery manifest containing the approved
 commit, UTC timestamp, byte size, SHA-256, and every exact installation pin.
@@ -738,8 +762,9 @@ one review unit; a runtime pin change rebuilds the proxy with the runner.
 
 `SDI_BUILDKIT_IMAGE` must match the `BUILDKIT_IMAGE` argument in
 `agents/Dockerfile` and the `buildkitd` image in `compose.yaml`, and
-`SDI_REGISTRY_IMAGE` must match the `registry` image there;
-`validate-installation` checks them. The `image-build` agent's `buildctl` is
+`SDI_REGISTRY_IMAGE` must match the `registry` image there, and
+`SDI_CV_ENGINE_IMAGE` the `cv-engine` image; `validate-installation` checks
+them. The `image-build` agent's `buildctl` is
 copied from that BuildKit image, so client and daemon match by construction.
 The smoke check asserts the client version through `EXPECTED_BUILDCTL_VERSION`
 in `bin/smoke-check`. Change the BuildKit pin in all of those places as one

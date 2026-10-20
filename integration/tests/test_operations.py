@@ -587,7 +587,8 @@ def test_restore_verifies_before_writing_an_empty_volume(tmp_path: Path) -> None
     staging_project = operations[staging_stop].split("--project-name ")[1].split()[0]
     builder_cleanup = operations.index(
         f"docker volume rm --force {staging_project}_buildkit-state "
-        f"{staging_project}_pipeline-registry"
+        f"{staging_project}_pipeline-registry "
+        f"{staging_project}_cv-engine-state"
     )
     assert staging_stop < builder_cleanup
     runner_configs = Path(f"{restore_log}.runners").read_text().splitlines()
@@ -714,6 +715,12 @@ def test_restore_verifies_before_writing_an_empty_volume(tmp_path: Path) -> None
             "image: docker.io/library/registry:3.1.2@sha256:d",
             "image: docker.io/library/registry:3.1.2@sha256:e",
             "registry image pin does not match",
+        ),
+        (
+            "deployment/jenkins/compose.yaml",
+            "image: docker.io/library/docker:29.9.1-dind@sha256:3",
+            "image: docker.io/library/docker:29.9.1-dind@sha256:4",
+            "cv-engine image pin does not match",
         ),
         (
             "deployment/jenkins/adapters/image-build-fixture-v1.yaml",
