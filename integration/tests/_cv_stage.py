@@ -95,6 +95,7 @@ class CvStage:
         target_id: str | None = None,
         blueprint_repository_digest: str | None = None,
         evidence_max_bytes: int | None = None,
+        execution_id: str = EXECUTION_ID,
     ) -> None:
         """Write the request and inputs for these services, in blueprint order.
 
@@ -199,7 +200,7 @@ class CvStage:
         request = {
             "schema_version": "sdi.stage-adapter-request/v1",
             "correlation": {
-                "execution_id": EXECUTION_ID,
+                "execution_id": execution_id,
                 "stage": "cv",
                 "attempt_number": 1,
             },

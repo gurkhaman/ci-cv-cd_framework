@@ -1,13 +1,20 @@
-"""Real S-04 compositions in the session's CV engine pair."""
+"""Real S-04 compositions in the session's CV engine pair.
+
+The pass and no-face compositions run through the CV adapter, which reads
+their counting outputs from the service descriptions. The probe and repeat
+runs call the run loop directly.
+"""
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -15,6 +22,8 @@ import docker
 import pytest
 
 from sdi_pipeline_integration import _cv_run as run
+from sdi_pipeline_integration._adapter_kit import serve
+from sdi_pipeline_integration._cv_adapter import validate
 from sdi_pipeline_integration._cv_run import (
     ContainerState,
     CountingOutput,
@@ -29,6 +38,7 @@ from sdi_pipeline_integration._cv_run import (
 )
 
 from ._cv_images import amd64_digest
+from ._cv_stage import BURGER, WAFFLE, CvRun, CvStage
 
 if TYPE_CHECKING:
     from sdi_pipeline_integration._cv_result import Mission
@@ -78,6 +88,10 @@ TIMEOUTS = {
     "return-to-origin": 480,
 }
 SETUP_TIMEOUT = 300
+SETUP_LINE = re.compile(r"^setup: passed (?P<elapsed>[0-9.]+) s$", re.MULTILINE)
+STEP_LINE = re.compile(
+    r"^step (?P<id>[a-z-]+): passed \S+ (?P<elapsed>[0-9.]+) s$", re.MULTILINE
+)
 
 
 @dataclass(frozen=True)
@@ -89,10 +103,14 @@ class Composition:
     probes: tuple[CountingOutput, ...] = ()
 
 
-COMPOSITIONS = {
+ADAPTER_RUNS = {
     "waffle-pass": Composition("waffle_pi", NAVIGATION + SPEECH + FACE),
     "burger-pass": Composition("burger_cam", NAVIGATION + SPEECH + FACE),
-    "no-face": Composition("waffle_pi", NAVIGATION + SPEECH, (SILENT, WRONG_TYPE)),
+    "no-face": Composition("waffle_pi", NAVIGATION + SPEECH),
+}
+PROFILES: dict[Robot, Path] = {"waffle_pi": WAFFLE, "burger_cam": BURGER}
+COMPOSITIONS = {
+    "probes": Composition("waffle_pi", NAVIGATION + SPEECH, (SILENT, WRONG_TYPE)),
     "waffle-repeat-1": Composition("waffle_pi", NAVIGATION + SPEECH + FACE),
     "waffle-repeat-2": Composition("waffle_pi", NAVIGATION + SPEECH + FACE),
     "waffle-repeat-3": Composition("waffle_pi", NAVIGATION + SPEECH + FACE),
@@ -108,6 +126,7 @@ class Engine:
     root: Path
     placements: dict[str, Placement] = field(default_factory=dict[str, Placement])
     runs: dict[str, RunOutcome] = field(default_factory=dict[str, RunOutcome])
+    adapter_runs: dict[str, CvRun] = field(default_factory=dict[str, CvRun])
 
     def placement(self, service_id: str) -> Placement:
         """Build and push a service on first use."""
@@ -145,8 +164,37 @@ class Engine:
             amd64_digest(self.registry_url, f"sdi/{service_id}", "cv-engine"),
         )
 
+    def adapter_run(self, name: str) -> CvRun:
+        """Run a composition through the CV adapter on first use."""
+        if name not in self.adapter_runs:
+            composition = ADAPTER_RUNS[name]
+            placements = [self.placement(item) for item in composition.services]
+            stage = CvStage(self.root / name)
+            stage.write(
+                {
+                    item: REPOSITORY / "service-repository" / item
+                    for item in composition.services
+                },
+                [
+                    {
+                        "service_id": item.service_id,
+                        "status": "built",
+                        "repository": f"sdi/{item.service_id}",
+                        "digest": item.digest,
+                        "platforms": [{"architecture": "amd64", "digest": item.digest}],
+                    }
+                    for item in placements
+                ],
+                profile=PROFILES[composition.robot],
+                execution_id=str(uuid.uuid4()),
+            )
+            self.adapter_runs[name] = stage.run(
+                serve("cv", partial(validate, engine_url=self.url))
+            )
+        return self.adapter_runs[name]
+
     def outcome(self, name: str) -> RunOutcome:
-        """Run a composition on first use and record what happened."""
+        """Run a composition through the run loop on first use."""
         if name not in self.runs:
             composition = COMPOSITIONS[name]
             request = RunRequest(
@@ -262,29 +310,61 @@ def _passed(outcome: RunOutcome) -> Finished:
     return outcome
 
 
+def _steps(cv: CvRun) -> tuple[str, ...]:
+    assert cv.evidence is not None, cv.response
+    assert cv.evidence.mission is not None
+    return tuple(item.status for item in cv.evidence.mission.steps)
+
+
+def _adapter_passed(cv: CvRun) -> None:
+    assert cv.response.domain_outcome == "succeeded", cv.response.reason
+    assert cv.response.reason is None
+    assert cv.evidence is not None
+    assert {item.participation for item in cv.evidence.services} <= {
+        "participated",
+        "participated_loosened",
+    }
+    assert _steps(cv) == PASS
+    setup = SETUP_LINE.search(cv.diagnostic)
+    assert setup is not None, cv.diagnostic
+    assert float(setup["elapsed"]) <= SETUP_TIMEOUT / 2
+    timed = {
+        match["id"]: float(match["elapsed"])
+        for match in STEP_LINE.finditer(cv.diagnostic)
+    }
+    assert timed.keys() == TIMEOUTS.keys(), cv.diagnostic
+    for requirement_id, elapsed in timed.items():
+        assert elapsed <= TIMEOUTS[requirement_id] / 2, (requirement_id, elapsed)
+
+
 def test_cv_engine_waffle_composition_passes(engine: Engine) -> None:
-    _passed(engine.outcome("waffle-pass"))
+    _adapter_passed(engine.adapter_run("waffle-pass"))
     assert engine.remaining() == []
 
 
 def test_cv_engine_burger_composition_passes(engine: Engine) -> None:
-    _passed(engine.outcome("burger-pass"))
+    _adapter_passed(engine.adapter_run("burger-pass"))
     assert engine.remaining() == []
 
 
-def test_cv_engine_without_face_times_out_at_the_face_step(engine: Engine) -> None:
-    outcome = engine.outcome("no-face")
+def test_cv_engine_without_face_fails_at_the_face_step(engine: Engine) -> None:
+    cv = engine.adapter_run("no-face")
 
-    assert isinstance(outcome, Finished), outcome
-    mission = outcome.result.mission
-    assert mission is not None
-    assert tuple(item.status for item in mission.steps) == NO_FACE
-    assert outcome.result.counts["/speech/text"] > 0
+    assert cv.response.domain_outcome == "failed"
+    assert cv.response.reason is not None
+    assert cv.response.reason.code == "sdi.cv.failed"
+    assert "verify-recipient-face" in cv.response.reason.summary
+    assert _steps(cv) == NO_FACE
+    assert cv.evidence is not None
+    speech = next(
+        item for item in cv.evidence.services if item.service_id == "vosk-speech"
+    )
+    assert speech.participation == "participated"
     assert engine.remaining() == []
 
 
 def test_cv_engine_silent_and_wrong_type_outputs_count_zero(engine: Engine) -> None:
-    outcome = engine.outcome("no-face")
+    outcome = engine.outcome("probes")
 
     assert isinstance(outcome, Finished), outcome
     assert outcome.result.counts[SILENT.topic] == 0
@@ -303,6 +383,10 @@ def test_cv_engine_waffle_composition_passes_again(
 
 
 def test_cv_engine_every_run_dumps_the_ros_graph(engine: Engine) -> None:
+    for name in ADAPTER_RUNS:
+        diagnostic = engine.adapter_run(name).diagnostic
+        assert "\ntopic-constant: match\n" in diagnostic, (name, diagnostic)
+        assert "\ngraph /s04_bridge: " in diagnostic, (name, diagnostic)
     for name in COMPOSITIONS:
         outcome = engine.outcome(name)
         assert isinstance(outcome, Finished), (name, outcome)
