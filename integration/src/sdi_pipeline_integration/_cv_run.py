@@ -5,12 +5,13 @@ import io
 import json
 import tarfile
 import time
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypedDict, cast
 
 import requests
+import urllib3
 from pydantic import ValidationError
 
 from ._contracts import ContractModel, NonBlank
@@ -34,11 +35,15 @@ RESULT_MAX_BYTES = 64 * 1024
 TEARDOWN_RESERVE_SECONDS = 120
 ENGINE_SILENCE_SECONDS = 600
 LOG_TAIL_LINES = 40
+ENGINE_LOST = (requests.RequestException, urllib3.exceptions.HTTPError)
 
 Robot = Literal["waffle_pi", "burger_cam"]
 BlockingCause = Literal["image-unavailable", "unsupported-command"]
 RunError = Literal[
     "sim-build-failed",
+    "pull-failed",
+    "no-time-to-start",
+    "start-failed",
     "orchestrator-timeout",
     "sim-not-running",
     "no-result",
@@ -216,13 +221,20 @@ def plan(
 def run_composition(request: RunRequest, engine_url: str = ENGINE_URL) -> RunOutcome:
     import docker  # noqa: PLC0415
 
-    client = docker.DockerClient(base_url=engine_url, timeout=ENGINE_SILENCE_SECONDS)
-    try:
-        return _Run(client, request).outcome()
-    finally:
-        for container in _labelled(client, f"{EXECUTION_LABEL}={request.execution_id}"):
-            container.remove(force=True)
-        client.close()
+    label = f"{EXECUTION_LABEL}={request.execution_id}"
+    with closing(
+        docker.DockerClient(base_url=engine_url, timeout=ENGINE_SILENCE_SECONDS)
+    ) as client:
+        try:
+            outcome = _Run(client, request).outcome()
+        except BaseException as error:
+            try:
+                _remove(client, label)
+            except Exception as teardown:  # noqa: BLE001
+                error.add_note(f"teardown also failed: {teardown!r}")
+            raise
+        _remove(client, label)
+        return outcome
 
 
 class _Run:
@@ -232,26 +244,33 @@ class _Run:
         self.phases: dict[Phase, float] = {}
 
     def outcome(self) -> RunOutcome:
+        try:
+            return self.run()
+        except _StopRunError as stopped:
+            return self.failed(stopped.error, stopped.detail, None)
+
+    def run(self) -> RunOutcome:
         with self.timed("leftover-cleanup"):
-            for container in _labelled(self.client, EXECUTION_LABEL):
-                container.remove(force=True)
+            _remove(self.client, EXECUTION_LABEL)
         with self.timed("sim-build"):
-            try:
-                sim_image = self.sim_image()
-            except _SimBuildError as error:
-                return self.failed("sim-build-failed", str(error), None)
+            sim_image = self.sim_image()
         with self.timed("pulls"):
             commands, causes = self.pull()
         if causes:
             return Blocked(causes, self.phases)
+        if self.remaining() <= 0:
+            raise _StopRunError(
+                error="no-time-to-start",
+                detail="the work limit ran out during the sim build and pulls",
+            )
         containers = plan(self.request, sim_image, commands)
         with self.timed("start"):
-            sim = self.client.containers.run(**containers.sim)
+            sim = self.start_required("sim", containers.sim)
             placements = {
-                service_id: self.start(options)
+                service_id: self.start_placement(options)
                 for service_id, options in containers.placements.items()
             }
-            orchestrator = self.client.containers.run(**containers.orchestrator)
+            orchestrator = self.start_required("orchestrator", containers.orchestrator)
         with self.timed("orchestrator-wait"):
             exited = self.wait(orchestrator)
         snapshot = Snapshot(
@@ -290,19 +309,28 @@ class _Run:
             self.phases[phase] = round(time.monotonic() - started, 1)
 
     def sim_image(self) -> str:
-        from docker.errors import ImageNotFound  # noqa: PLC0415
+        from docker.errors import DockerException  # noqa: PLC0415
 
         tag = sim_image_tag(SIM_CONTEXT)
         try:
-            self.client.images.get(tag)
-        except ImageNotFound:
+            if self.client.images.list(name=tag):
+                return tag
+            detail = "the build ended without an image"
             for chunk in self.client.api.build(
-                path=str(SIM_CONTEXT), tag=tag, rm=True, forcerm=True, decode=True
+                path=str(SIM_CONTEXT),
+                tag=tag,
+                rm=True,
+                forcerm=True,
+                decode=True,
+                timeout=ENGINE_SILENCE_SECONDS,
             ):
                 entry = cast("dict[str, object]", chunk)
-                if "error" in entry:
-                    raise _SimBuildError(str(entry["error"])) from None
-        return tag
+                detail = str(entry.get("error") or entry.get("message") or detail)
+            if self.client.images.list(name=tag):
+                return tag
+        except (DockerException, *ENGINE_LOST) as error:
+            detail = str(error)
+        raise _StopRunError(error="sim-build-failed", detail=detail)
 
     def pull(self) -> tuple[dict[str, tuple[str, ...]], dict[str, BlockingCause]]:
         from docker.errors import DockerException  # noqa: PLC0415
@@ -315,6 +343,11 @@ class _Run:
             except DockerException:
                 causes[item.service_id] = "image-unavailable"
                 continue
+            except ENGINE_LOST as error:
+                raise _StopRunError(
+                    error="pull-failed",
+                    detail=f"pulling {item.service_id} failed: {error}",
+                ) from error
             config = cast("dict[str, object]", image.attrs.get("Config") or {})
             command = sim_time_command(cast("list[str]", config.get("Cmd") or []))
             if command is None:
@@ -323,7 +356,17 @@ class _Run:
                 commands[item.service_id] = command
         return commands, causes
 
-    def start(self, options: RunOptions) -> Container | FailedToStart:
+    def start_required(self, role: str, options: RunOptions) -> Container:
+        from docker.errors import DockerException  # noqa: PLC0415
+
+        try:
+            return self.client.containers.run(**options)
+        except (DockerException, *ENGINE_LOST) as error:
+            raise _StopRunError(
+                error="start-failed", detail=f"the {role} did not start: {error}"
+            ) from error
+
+    def start_placement(self, options: RunOptions) -> Container | FailedToStart:
         from docker.errors import APIError  # noqa: PLC0415
 
         try:
@@ -331,12 +374,15 @@ class _Run:
         except APIError as error:
             return FailedToStart(str(error.explanation or error))
 
-    def wait(self, orchestrator: Container) -> bool:
-        remaining = (
+    def remaining(self) -> float:
+        return (
             self.request.deadline_monotonic
             - TEARDOWN_RESERVE_SECONDS
             - time.monotonic()
         )
+
+    def wait(self, orchestrator: Container) -> bool:
+        remaining = self.remaining()
         if remaining <= 0:
             return False
         try:
@@ -384,12 +430,16 @@ class _Run:
         return Finished(result, snapshot, self.phases)
 
 
-class _SimBuildError(Exception):
-    pass
+class _StopRunError(Exception):
+    def __init__(self, error: RunError, detail: str) -> None:
+        super().__init__(detail)
+        self.error: RunError = error
+        self.detail = detail
 
 
-def _labelled(client: DockerClient, label: str) -> list[Container]:
-    return client.containers.list(all=True, filters={"label": label})
+def _remove(client: DockerClient, label: str) -> None:
+    for container in client.containers.list(all=True, filters={"label": label}):
+        container.remove(force=True)
 
 
 def _state(container: Container) -> ContainerState:

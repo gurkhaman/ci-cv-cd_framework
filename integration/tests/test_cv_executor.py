@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import socket
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -418,6 +421,206 @@ def test_cv_executor_starts_nothing_when_a_placement_is_blocked(
     }
     assert "start" not in outcome.phases
     assert _remaining(engine) == []
+
+
+def _sim_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> None:
+    context = tmp_path / "unbuildable-sim"
+    context.mkdir()
+    (context / "Dockerfile").write_text(f"FROM {BUSYBOX}\n{body}\n")
+    monkeypatch.setattr(run, "SIM_CONTEXT", context)
+
+
+def test_cv_executor_reports_a_sim_context_the_engine_refuses(
+    engine: Host, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _sim_context(tmp_path, monkeypatch, "NOTANINSTRUCTION x")
+
+    outcome = run_composition(
+        _request(_placement(engine, tmp_path, "fake-node")), HOST_DOCKER
+    )
+
+    assert isinstance(outcome, Errored)
+    assert outcome.error == "sim-build-failed"
+    assert "unknown instruction" in outcome.detail
+    assert set(outcome.phases) == {"leftover-cleanup", "sim-build"}
+    assert _remaining(engine) == []
+
+
+@pytest.mark.usefixtures("engine")
+def test_cv_executor_reports_an_engine_silent_during_the_sim_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(run, "ENGINE_SILENCE_SECONDS", 2)
+    _sim_context(tmp_path, monkeypatch, "RUN sleep 6")
+
+    outcome = run_composition(
+        _request(Placement("fake-node", "sha256:" + "0" * 64)), HOST_DOCKER
+    )
+
+    assert isinstance(outcome, Errored)
+    assert outcome.error == "sim-build-failed"
+    assert set(outcome.phases) == {"leftover-cleanup", "sim-build"}
+    assert outcome.phases["sim-build"] >= 2
+
+
+class _EngineProxy:
+    """A TCP front for the host daemon that drops connections on cue."""
+
+    def __init__(self, drop_on: bytes = b"") -> None:
+        self.drop_on = drop_on
+        self.listener = socket.create_server(("127.0.0.1", 0))
+        self.url = f"tcp://127.0.0.1:{self.listener.getsockname()[1]}"
+        self.connections: list[socket.socket] = []
+        threading.Thread(target=self.accept, daemon=True).start()
+
+    def accept(self) -> None:
+        while True:
+            try:
+                client, _ = self.listener.accept()
+            except OSError:
+                return
+            daemon = socket.socket(socket.AF_UNIX)
+            daemon.connect(HOST_DOCKER.removeprefix("unix://"))
+            self.connections += [client, daemon]
+            for source, target in ((client, daemon), (daemon, client)):
+                threading.Thread(
+                    target=self.pipe, args=(source, target), daemon=True
+                ).start()
+
+    def pipe(self, source: socket.socket, target: socket.socket) -> None:
+        try:
+            while data := source.recv(65536):
+                target.sendall(data)
+                if self.drop_on and self.drop_on in data:
+                    threading.Timer(1, self.drop, (source, target)).start()
+        except OSError:
+            return
+
+    def drop(self, *connections: socket.socket) -> None:
+        for connection in connections:
+            with contextlib.suppress(OSError):
+                connection.shutdown(socket.SHUT_RDWR)
+            connection.close()
+
+    def stop(self) -> None:
+        self.drop(self.listener, *self.connections)
+
+
+def test_cv_executor_reports_a_pull_the_engine_dropped(
+    engine: Host, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    silent = engine.client.containers.run(
+        BUSYBOX,
+        ["nc", "-lk", "-p", "5000", "-e", "sleep", "3600"],
+        detach=True,
+        labels={"org.sdi.cv-test-registry": engine.tag},
+        ports={"5000/tcp": ("127.0.0.1", 0)},
+    )
+    proxy = _EngineProxy(drop_on=b"/images/create?")
+    try:
+        silent.reload()
+        ports = cast("dict[str, list[dict[str, str]]]", silent.ports)
+        monkeypatch.setattr(
+            run, "REGISTRY", f"127.0.0.1:{ports['5000/tcp'][0]['HostPort']}"
+        )
+
+        outcome = run_composition(
+            _request(Placement("fake-node", "sha256:" + "0" * 64)), proxy.url
+        )
+    finally:
+        proxy.stop()
+        silent.remove(force=True)
+
+    assert isinstance(outcome, Errored)
+    assert outcome.error == "pull-failed"
+    assert "fake-node" in outcome.detail
+    assert set(outcome.phases) == {"leftover-cleanup", "sim-build", "pulls"}
+    assert outcome.phases["pulls"] < 30
+    assert _remaining(engine) == []
+
+
+def test_cv_executor_reports_a_sim_that_did_not_start(
+    engine: Host, tmp_path: Path
+) -> None:
+    request = _request(_placement(engine, tmp_path, "fake-node"))
+    squatter = engine.client.containers.run(
+        BUSYBOX,
+        ["sleep", "3600"],
+        detach=True,
+        name=f"cv-{request.execution_id}-sim",
+        labels={"org.sdi.cv-test-registry": engine.tag},
+    )
+    try:
+        outcome = run_composition(request, HOST_DOCKER)
+    finally:
+        squatter.remove(force=True)
+
+    assert isinstance(outcome, Errored)
+    assert outcome.error == "start-failed"
+    assert outcome.detail.startswith("the sim did not start")
+    assert "start" in outcome.phases
+    assert _remaining(engine) == []
+
+
+def test_cv_executor_reports_an_orchestrator_that_did_not_start(
+    engine: Host, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(run, "ORCHESTRATOR_COMMAND", ("no-such-orchestrator",))
+
+    outcome = run_composition(
+        _request(_placement(engine, tmp_path, "fake-node")), HOST_DOCKER
+    )
+
+    assert isinstance(outcome, Errored)
+    assert outcome.error == "start-failed"
+    assert outcome.detail.startswith("the orchestrator did not start")
+    assert "start" in outcome.phases
+    assert _remaining(engine) == []
+
+
+def test_cv_executor_starts_nothing_once_the_work_limit_ran_out(
+    engine: Host, tmp_path: Path
+) -> None:
+    outcome = run_composition(
+        _request(_placement(engine, tmp_path, "fake-node"), wait_s=0), HOST_DOCKER
+    )
+
+    assert isinstance(outcome, Errored)
+    assert outcome.error == "no-time-to-start"
+    assert set(outcome.phases) == {"leftover-cleanup", "sim-build", "pulls"}
+    assert _remaining(engine) == []
+
+
+def test_cv_executor_keeps_the_first_error_when_teardown_fails(
+    engine: Host, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    node = _placement(engine, tmp_path, "fake-node")
+    proxy = _EngineProxy()
+    closed: list[bool] = []
+    close = docker.DockerClient.close
+
+    def snapshot_as_the_engine_goes_away(_: object) -> ContainerState:
+        proxy.stop()
+        message = "snapshot failed"
+        raise RuntimeError(message)
+
+    def recording_close(client: DockerClient) -> None:
+        closed.append(True)
+        close(client)
+
+    monkeypatch.setattr(run, "_state", snapshot_as_the_engine_goes_away)
+    monkeypatch.setattr(docker.DockerClient, "close", recording_close)
+    try:
+        with pytest.raises(RuntimeError, match="snapshot failed") as raised:
+            run_composition(_request(node), proxy.url)
+    finally:
+        for container in engine.client.containers.list(
+            all=True, filters={"label": run.EXECUTION_LABEL}
+        ):
+            container.remove(force=True)
+
+    assert any("teardown" in note for note in raised.value.__notes__)
+    assert closed == [True]
 
 
 def test_cv_executor_tears_down_after_an_exception_mid_run(
