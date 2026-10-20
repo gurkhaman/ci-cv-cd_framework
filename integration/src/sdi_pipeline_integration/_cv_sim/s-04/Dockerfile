@@ -11,9 +11,13 @@ ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 LC_ALL=C.UTF-8 ROS_DISTRO=jazzy
 COPY ros-snapshot-archive-keyring.asc /etc/apt/keyrings/ros-snapshot-archive-keyring.asc
 
 # The bare image has no CA bundle, so the first update skips TLS peer checks;
-# apt still verifies every index by signature. snapshots.ros.org returns
-# occasional 5xx errors, so apt retries.
-RUN rm -f /etc/apt/sources.list.d/ubuntu.sources \
+# apt still verifies every index by signature. Both snapshot hosts return
+# bursts of 5xx errors that outlast apt's own retries, and the classic builder
+# has no cache mount to keep fetched packages across builds. So each apt step
+# runs up to five times in this one RUN: an update fails on any missing index,
+# and a retried install keeps the packages it already fetched.
+RUN retry() { for attempt in 1 2 3 4 5; do "$@" && return 0; sleep 60; done; return 1; } \
+ && rm -f /etc/apt/sources.list.d/ubuntu.sources \
  && printf '%s\n' 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/90sdi \
  && printf '%s\n' \
     'Types: deb' \
@@ -29,10 +33,10 @@ RUN rm -f /etc/apt/sources.list.d/ubuntu.sources \
     'Components: main' \
     'Signed-By: /etc/apt/keyrings/ros-snapshot-archive-keyring.asc' \
     > /etc/apt/sources.list.d/ros-snapshot.sources \
- && apt-get -o Acquire::https::Verify-Peer=false update \
- && apt-get -o Acquire::https::Verify-Peer=false install -y --no-install-recommends ca-certificates \
- && apt-get update \
- && apt-get install -y --no-install-recommends \
+ && retry apt-get -o Acquire::https::Verify-Peer=false update --error-on=any \
+ && retry apt-get -o Acquire::https::Verify-Peer=false install -y --no-install-recommends ca-certificates \
+ && retry apt-get update --error-on=any \
+ && retry apt-get install -y --no-install-recommends \
     ros-jazzy-ros2launch \
     ros-jazzy-ros-gz-sim \
     ros-jazzy-ros-gz-bridge \
