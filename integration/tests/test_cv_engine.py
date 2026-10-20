@@ -167,6 +167,7 @@ class Engine:
     def adapter_run(self, name: str) -> CvRun:
         """Run a composition through the CV adapter on first use."""
         if name not in self.adapter_runs:
+            assert not (self.root / name).exists(), f"{name} already ran and failed"
             composition = ADAPTER_RUNS[name]
             placements = [self.placement(item) for item in composition.services]
             stage = CvStage(self.root / name)

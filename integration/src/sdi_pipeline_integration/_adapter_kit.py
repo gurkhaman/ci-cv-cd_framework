@@ -304,5 +304,7 @@ def _publish(output_root: Path, invocation: Invocation, verdict: Verdict) -> Non
         extra="forbid",
     )
     atomic_write(
-        output_root, "response.json", canonical_json(response.model_dump(mode="json"))
+        output_root,
+        "response.json",
+        canonical_json(response.model_dump(mode="json", exclude_none=True)),
     )
