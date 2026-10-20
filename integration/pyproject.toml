@@ -43,6 +43,7 @@ addopts = ["--strict-config", "--strict-markers"]
 markers = [
     "live: calls a real model provider over the network",
     "slow: waits out a real work limit or deadline",
+    "cv_engine: runs real S-04 compositions in the CV engine pair that SDI_CV_ENGINE_URL and SDI_CV_REGISTRY_URL name",
 ]
 testpaths = ["tests"]
 
