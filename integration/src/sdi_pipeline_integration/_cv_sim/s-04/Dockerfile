@@ -54,9 +54,12 @@ ENV GZ_SIM_RESOURCE_PATH=/opt/ros/jazzy/share/nav2_minimal_tb3_sim/models:/opt/r
 
 ENTRYPOINT ["/bin/bash", "-c", "source /opt/ros/jazzy/setup.bash && exec \"$@\"", "--"]
 
+RUN printf '%s\n' '#!/bin/sh' 'exec python3 /opt/sdi/cv/s-04/cv_orchestrator.py' > /usr/local/bin/cv-orchestrator \
+ && chmod 755 /usr/local/bin/cv-orchestrator
+
 COPY bridge.yaml /opt/sdi/cv/s-04/
 COPY joe/ /opt/sdi/cv/s-04/joe/
 COPY clips/request.wav clips/receipt.wav /opt/sdi/cv/s-04/clips/
-COPY scenario.yaml sim.launch.py /opt/sdi/cv/s-04/
+COPY scenario.yaml sim.launch.py cv_orchestrator.py /opt/sdi/cv/s-04/
 WORKDIR /opt/sdi/cv/s-04
 CMD ["ros2", "launch", "/opt/sdi/cv/s-04/sim.launch.py"]

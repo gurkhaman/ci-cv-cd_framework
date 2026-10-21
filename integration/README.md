@@ -9,15 +9,27 @@ Run all checks through `scripts/verify` rather than using an ambient Python
 environment.
 
 Tests marked `live` call a real model provider; tests marked `slow` wait out a
-real work limit or deadline. `scripts/verify` runs every test: the non-`slow`
-tests in parallel, then the `slow` tests serially, because parallel load can
-push their timing past its bounds. For a fast check while developing, run from
-this directory:
+real work limit or deadline. `scripts/verify` runs every test except the
+`cv_engine` tests: the non-`slow` tests in parallel, then the `slow` tests
+serially, because parallel load can push their timing past its bounds. For a
+fast check while developing, run from this directory:
 
 ```sh
 uv sync --frozen --all-groups
-uv run pytest -m "not live and not slow" -n auto --dist worksteal
+uv run pytest -m "not live and not slow and not cv_engine" -n auto --dist worksteal
 ```
+
+Tests marked `cv_engine` run real S-04 compositions in a Docker-in-Docker
+engine and its registry. They build every image they need inside that engine,
+which takes tens of minutes when the engine is cold. Run them only on request,
+with `SDI_CV_ENGINE_URL` and `SDI_CV_REGISTRY_URL` naming the engine pair:
+
+```sh
+uv run pytest -m cv_engine -v
+```
+
+When those tests are selected and the engine or registry does not answer, the
+session stops with a non-zero exit before any test runs.
 
 ## Identify A Committed Run
 

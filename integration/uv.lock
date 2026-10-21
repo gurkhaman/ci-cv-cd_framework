@@ -570,6 +570,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "requests" },
     { name = "ruamel-yaml" },
+    { name = "urllib3" },
 ]
 
 [package.dev-dependencies]
@@ -592,6 +593,7 @@ requires-dist = [
     { name = "pydantic", specifier = "==2.13.5" },
     { name = "requests", specifier = "==2.34.2" },
     { name = "ruamel-yaml", specifier = "==0.19.0" },
+    { name = "urllib3", specifier = "==2.7.0" },
 ]
 
 [package.metadata.requires-dev]
