@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+import time
 from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING
@@ -7,7 +9,14 @@ from typing import TYPE_CHECKING
 from ._adapter_kit import Verdict, encode_document, serve
 from ._contracts import TargetExecutionProfile
 from ._cv_diagnostic import describe
-from ._cv_run import ENGINE_LOST, RunRequest, run_composition
+from ._cv_run import (
+    ENGINE_LOST,
+    RunRequest,
+    SimBuildFailed,
+    SimImage,
+    prepare_engine,
+    run_composition,
+)
 from ._cv_verdict import Composed, CvError, Judgement, assess
 from ._domain_contracts import (
     CompositionBlueprint,
@@ -218,4 +227,37 @@ def _evidence(
     )
 
 
+def warm_engine(engine_url: str) -> int:
+    from docker.errors import DockerException  # noqa: PLC0415
+
+    _say("sdi-cv-warm: checking the CV engine for the S-04 sim image")
+    started = time.monotonic()
+    try:
+        prepared = prepare_engine(engine_url, _forward_step)
+    except (DockerException, *ENGINE_LOST) as error:
+        detail = failure_text(str(error), fallback=type(error).__name__)
+        sys.stderr.write(f"sdi-cv-warm: engine-unreachable: {detail}\n")
+        return 1
+    match prepared:
+        case SimBuildFailed(detail=detail):
+            detail = failure_text(detail, fallback="the build failed")
+            sys.stderr.write(f"sdi-cv-warm: sim-build-failed: {detail}\n")
+            return 1
+        case SimImage(tag=tag, built=built):
+            seconds = round(time.monotonic() - started, 1)
+            _say(f"sdi-cv-warm: {tag} {'built' if built else 'present'} in {seconds} s")
+            return 0
+
+
+def _forward_step(text: str) -> None:
+    if text.startswith("Step "):
+        _say(text.rstrip("\n"))
+
+
+def _say(line: str) -> None:
+    sys.stdout.write(f"{line}\n")
+    sys.stdout.flush()
+
+
 main = serve("cv", partial(validate, engine_url=ENGINE_URL))
+warm = partial(warm_engine, ENGINE_URL)
