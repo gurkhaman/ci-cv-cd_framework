@@ -242,7 +242,9 @@ runner configured in `GITHUB_RUNNERS`, starts the controller, all five agents,
 the builder, the registry, the CV engine, and those runners with their proxies, rejects an
 agent image that declares any volume, and waits for process health. It refuses
 a configured runner that is not registered and refuses while a runner executes
-a job. Jenkins is published on the host only
+a job. Before it starts the agents and runners, `start` builds the CV
+simulation image into the CV engine (see [CV Engine](#cv-engine)). Jenkins is
+published on the host only
 at
 `http://127.0.0.1:<configured-port>`. No inbound-agent TCP port is published;
 all agents connect over WebSocket. `stop` removes all containers and networks
@@ -264,6 +266,9 @@ only to `start-controller`, `start`, `verify-live`, and `exercise-live`, which t
 skip configuration validation and the controller and agent image builds. Each
 refuses to run when the stamp does not match the current checkout and images;
 run `build` again. Runner and proxy images are still built.
+
+`--no-cv-warm` applies only to `start` and skips the CV simulation image build.
+`bin/smoke` and the recovery staging stack use it because they run no CV Stage.
 
 ### Builder And Pipeline Registry
 
@@ -310,10 +315,19 @@ by digest in `deployment/installation.env` as `SDI_CV_ENGINE_IMAGE`.
 - Its `/var/lib/docker` lives in the `cv-engine-state` named volume. Nothing
   pre-pulls or prunes it. It survives `stop` and `start`; deleting the volume,
   or `destroy`, is the reset. Recovery snapshots do not include it.
-- The first CV run on a new or reset engine builds the simulation image cold
-  (2590 s measured, against the 2700 s Stage limit), ends
-  `sdi.cv.no-time-to-start`, and turns the run red. Its verdict does not
-  count. Run S-04 once to warm the engine before a run you time or accept.
+- `start` builds the S-04 simulation image into the engine before it starts
+  the agents and runners, so no run reaches an engine without it. It runs
+  `sdi-cv-warm`, the CV adapter's own build, in a one-off `cv` container. The
+  image therefore has the tag and layers that the CV Stage looks for. On a new
+  or reset engine the build took 675 to 4400 s in measured runs. `start` prints
+  each `Step` line and then `sdi-cv-warm: <tag> built in <seconds> s`. When the
+  engine already holds the image, `start` prints `present in` after about a
+  second.
+- If the build fails, `start` exits with an error before it starts the agents
+  and runners. Run `start` again.
+- After `start --no-cv-warm` on a new engine, the first CV run builds the image
+  inside its 2700 s Stage limit. That run can end `sdi.cv.no-time-to-start` and
+  turn the run red.
 - The smoke check pings the engine through the SDK from the `cv` agent and
   checks that no other agent resolves `cv-engine`.
 
@@ -460,7 +474,9 @@ local image tag. `bin/stack` loads each image through the integration CLI's stri
 descriptor model and injects it only into the matching Compose service. A
 reviewed descriptor image replacement followed by
 `bin/stack reconcile-agent <ci|image-build|cv|cd>` builds and replaces only the
-affected Domain agent without starting or rebuilding the controller. The node
+affected Domain agent without starting or rebuilding the controller. For `cv`,
+it first builds the rebuilt agent's simulation image into the CV engine, and
+keeps the old agent if that build fails. The node
 identity and scheduling label remain unchanged. Only the selected agent's
 registration secret is validated or mounted during reconciliation.
 
