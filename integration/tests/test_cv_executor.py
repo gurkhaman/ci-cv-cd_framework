@@ -18,6 +18,7 @@ import pytest
 import requests
 
 from sdi_pipeline_integration import _cv_run as run
+from sdi_pipeline_integration._cv_adapter import warm_engine
 from sdi_pipeline_integration._cv_result import REQUIREMENTS
 from sdi_pipeline_integration._cv_run import (
     Blocked,
@@ -461,6 +462,54 @@ def test_cv_executor_reports_an_engine_silent_during_the_sim_build(
     assert outcome.error == "sim-build-failed"
     assert set(outcome.phases) == {"leftover-cleanup", "sim-build"}
     assert outcome.phases["sim-build"] >= 2
+
+
+def test_cv_executor_warm_builds_the_sim_image_the_stage_then_reuses(
+    engine: Host,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    unique = f"# {uuid.uuid4().hex}\n"
+    _sim(tmp_path, monkeypatch, WRITE_RESULT.format(delay=1) + unique)
+    tag = run.sim_image_tag(run.SIM_CONTEXT)
+
+    assert warm_engine(HOST_DOCKER) == 0
+    built = capsys.readouterr().out.splitlines()
+    assert warm_engine(HOST_DOCKER) == 0
+    present = capsys.readouterr().out.splitlines()
+    outcome = run_composition(
+        _request(_placement(engine, tmp_path, "fake-node")), HOST_DOCKER
+    )
+
+    assert [line.split(" : ")[0] for line in built if line.startswith("Step ")] == [
+        "Step 1/4",
+        "Step 2/4",
+        "Step 3/4",
+        "Step 4/4",
+    ]
+    assert built[-1].startswith(f"sdi-cv-warm: {tag} built in ")
+    assert present[-1].startswith(f"sdi-cv-warm: {tag} present in ")
+    assert not [line for line in present if line.startswith("Step ")]
+    assert isinstance(outcome, Finished)
+
+
+@pytest.mark.usefixtures("engine")
+def test_cv_executor_warm_reports_a_sim_image_that_does_not_build(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _sim_context(tmp_path, monkeypatch, "RUN exit 3")
+
+    assert warm_engine(HOST_DOCKER) == 1
+
+    captured = capsys.readouterr()
+    steps = [line for line in captured.out.splitlines() if line.startswith("Step ")]
+    assert [line.split(" : ")[0] for line in steps] == ["Step 1/2", "Step 2/2"]
+    assert captured.err.startswith("sdi-cv-warm: sim-build-failed: "), captured.err
+    assert "returned a non-zero code: 3" in captured.err
+    assert " built in " not in captured.out
 
 
 class _EngineProxy:

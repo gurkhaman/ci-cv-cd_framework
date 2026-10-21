@@ -358,7 +358,7 @@ case "$operation" in
             --agent-secret-directory "$generated" || \
             fail 'Jenkins did not issue fresh agent credentials'
         "$stack_command" --config "$staging_config" \
-            --project-name "$staging_project" start
+            --project-name "$staging_project" --no-cv-warm start
         "$stack_command" --config "$staging_config" \
             --project-name "$staging_project" verify-live
         "$stack_command" --config "$staging_config" \

@@ -100,7 +100,8 @@ def _write_fake_recovery_tools(fake_bin: Path) -> None:
         "#!/bin/sh\n"
         'printf \'stack %s\\n\' "$*" >> "$OPERATIONS_LOG"\n'
         "runners=$(grep '^GITHUB_RUNNERS=' \"$2\" || printf none)\n"
-        'printf \'stack-runners %s %s\\n\' "$5" "$runners" \\\n'
+        "for action do :; done\n"
+        'printf \'stack-runners %s %s\\n\' "$action" "$runners" \\\n'
         '    >> "$OPERATIONS_LOG.runners"\n',
         encoding="utf-8",
     )
@@ -232,6 +233,13 @@ def _assert_restore_credential_rotation_order(operations: list[str]) -> None:
     assert staging_start < provision < staging_verify
     assert staging_verify < target_restore < target_token_removal < key_install
     assert key_install < target_start
+    staging_cold_start = next(
+        index
+        for index, line in enumerate(operations)
+        if "sdi-recovery-credentials" in line and line.endswith(" --no-cv-warm start")
+    )
+    assert staging_verify > staging_cold_start > provision
+    assert "--no-cv-warm" not in operations[target_start]
 
 
 def test_archived_api_tokens_are_removed_with_user_config_preserved(

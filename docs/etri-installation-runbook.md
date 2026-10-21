@@ -125,6 +125,14 @@ deployment/jenkins/bin/stack verify-live
 deployment/jenkins/bin/stack exercise-live
 ```
 
+On a new `cv-engine-state` volume, `start` also builds the CV simulation image
+into the CV engine before it starts the agents. Measured builds took 675 to
+4400 s. `start` prints each `Step` line of the build and then
+`sdi-cv-warm: sdi-cv-sim:<hash> built in <seconds> s`. If the build fails, for
+example because a package mirror keeps returning errors, `start` exits with an
+error and leaves the agents stopped. Run `deployment/jenkins/bin/stack start`
+again. A later `start` finds the image and prints `present in`.
+
 Jenkins remains at `http://127.0.0.1:<configured-port>`. Do not publish it or an
 inbound-agent TCP port. The agents connect over WebSocket on isolated Docker
 networks.
@@ -189,27 +197,7 @@ proxy, which admits only the GitHub Actions endpoints; the proxy limits where
 job code can connect but does not prevent data exfiltration. See the security
 review in `deployment/jenkins/README.md`.
 
-## 6. Warm The CV Engine
-
-The first CV run on a new or reset `cv-engine-state` volume builds the
-simulation image. A cold build measured 2590 s, plus about 38 s of image pulls,
-against the CV Stage limit of 2700 s. That run ends with
-`sdi.cv.no-time-to-start` and turns the run red. Its verdict does not count.
-
-Run S-04 once to warm the engine. In GitHub, open **Actions > Pipeline
-integration > Run workflow**, select `main`, and submit:
-
-```text
-runs/s-04/s-04-tc-03-c-01-fixture.yaml
-```
-
-The next run reuses the image. If the warm-up is stopped during the build, run
-it again. The engine's classic builder keeps the layers it finished, so the
-second build starts from them. This is expected behavior, not a measured one.
-
-Repeat this step after you delete `cv-engine-state` or run `stack destroy`.
-
-## 7. Accept The Installation
+## 6. Accept The Installation
 
 In GitHub, open **Actions > Pipeline integration > Run workflow**, select
 `main`, and submit:
@@ -246,7 +234,9 @@ deployment/jenkins/bin/stack quiesce
 deployment/jenkins/bin/stack stop
 ```
 
-Use `stack start` and `verify-live` to resume; `start` also starts the runner. Follow
+Use `stack start` and `verify-live` to resume; `start` also starts the runner.
+After `stack destroy` or a deleted `cv-engine-state` volume, the next `start`
+builds the CV simulation image again, as in section 3. Follow
 `deployment/jenkins/README.md` for snapshot, restore, reconstruction, and
 one-at-a-time credential or agent replacement.
 
