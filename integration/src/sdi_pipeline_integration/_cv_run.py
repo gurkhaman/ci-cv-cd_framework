@@ -18,7 +18,7 @@ from ._contracts import ContractModel, NonBlank
 from ._cv_result import ScenarioResult
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Mapping, Sequence
+    from collections.abc import Callable, Generator, Mapping, Sequence
 
     from docker import DockerClient
     from docker.models.containers import Container
@@ -145,6 +145,20 @@ class Errored:
 RunOutcome = Blocked | Finished | Errored
 
 
+@dataclass(frozen=True)
+class SimImage:
+    tag: str
+    built: bool
+
+
+@dataclass(frozen=True)
+class SimBuildFailed:
+    detail: str
+
+
+type Progress = Callable[[str], None]
+
+
 def sim_time_command(command: Sequence[str]) -> tuple[str, ...] | None:
     match list(command):
         case ["ros2", "launch", _, *_]:
@@ -237,6 +251,15 @@ def run_composition(request: RunRequest, engine_url: str) -> RunOutcome:
         return outcome
 
 
+def prepare_engine(engine_url: str, progress: Progress) -> SimImage | SimBuildFailed:
+    import docker  # noqa: PLC0415
+
+    with closing(
+        docker.DockerClient(base_url=engine_url, timeout=ENGINE_SILENCE_SECONDS)
+    ) as client:
+        return _ensure_sim_image(client, progress)
+
+
 class _Run:
     def __init__(self, client: DockerClient, request: RunRequest) -> None:
         self.client = client
@@ -309,28 +332,11 @@ class _Run:
             self.phases[phase] = round(time.monotonic() - started, 1)
 
     def sim_image(self) -> str:
-        from docker.errors import DockerException  # noqa: PLC0415
-
-        tag = sim_image_tag(SIM_CONTEXT)
-        try:
-            if self.client.images.list(name=tag):
+        match _ensure_sim_image(self.client, _silent):
+            case SimImage(tag=tag):
                 return tag
-            detail = "the build ended without an image"
-            for chunk in self.client.api.build(
-                path=str(SIM_CONTEXT),
-                tag=tag,
-                rm=True,
-                forcerm=True,
-                decode=True,
-                timeout=ENGINE_SILENCE_SECONDS,
-            ):
-                entry = cast("dict[str, object]", chunk)
-                detail = str(entry.get("error") or entry.get("message") or detail)
-            if self.client.images.list(name=tag):
-                return tag
-        except (DockerException, *ENGINE_LOST) as error:
-            detail = str(error)
-        raise _StopRunError(error="sim-build-failed", detail=detail)
+            case SimBuildFailed(detail=detail):
+                raise _StopRunError(error="sim-build-failed", detail=detail)
 
     def pull(self) -> tuple[dict[str, tuple[str, ...]], dict[str, BlockingCause]]:
         from docker.errors import DockerException  # noqa: PLC0415
@@ -435,6 +441,39 @@ class _StopRunError(Exception):
         super().__init__(detail)
         self.error: RunError = error
         self.detail = detail
+
+
+def _ensure_sim_image(
+    client: DockerClient, progress: Progress
+) -> SimImage | SimBuildFailed:
+    from docker.errors import DockerException  # noqa: PLC0415
+
+    tag = sim_image_tag(SIM_CONTEXT)
+    try:
+        if client.images.list(name=tag):
+            return SimImage(tag, built=False)
+        detail = "the build ended without an image"
+        for chunk in client.api.build(
+            path=str(SIM_CONTEXT),
+            tag=tag,
+            rm=True,
+            forcerm=True,
+            decode=True,
+            timeout=ENGINE_SILENCE_SECONDS,
+        ):
+            entry = cast("dict[str, object]", chunk)
+            if "stream" in entry:
+                progress(str(entry["stream"]))
+            detail = str(entry.get("error") or entry.get("message") or detail)
+        if client.images.list(name=tag):
+            return SimImage(tag, built=True)
+    except (DockerException, *ENGINE_LOST) as error:
+        detail = str(error)
+    return SimBuildFailed(detail)
+
+
+def _silent(_: str) -> None:
+    return None
 
 
 def _remove(client: DockerClient, label: str) -> None:
