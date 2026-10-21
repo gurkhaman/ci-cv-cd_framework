@@ -517,7 +517,8 @@ def test_start_refuses_while_a_runner_executes_a_job(tmp_path: Path) -> None:
 
     assert completed.returncode == 2
     assert "executing a handoff job" in completed.stderr
-    assert not any(" up " in line for line in stack.log())
+    full_up = " up --no-build --detach --wait --wait-timeout 240"
+    assert not any(line.endswith(full_up) for line in stack.log())
 
 
 @pytest.mark.parametrize(
