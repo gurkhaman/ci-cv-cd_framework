@@ -464,8 +464,12 @@ def test_cv_executor_reports_an_engine_silent_during_the_sim_build(
 
 
 class _EngineProxy:
-    def __init__(self, drop_on: bytes = b"") -> None:
+    def __init__(
+        self, drop_on: bytes = b"", *, after: float = 1, withhold: bool = False
+    ) -> None:
         self.drop_on = drop_on
+        self.after = after
+        self.withhold = withhold
         self.listener = socket.create_server(("127.0.0.1", 0))
         self.url = f"tcp://127.0.0.1:{self.listener.getsockname()[1]}"
         self.connections: list[socket.socket] = []
@@ -488,9 +492,11 @@ class _EngineProxy:
     def pipe(self, source: socket.socket, target: socket.socket) -> None:
         try:
             while data := source.recv(65536):
-                target.sendall(data)
                 if self.drop_on and self.drop_on in data:
-                    threading.Timer(1, self.drop, (source, target)).start()
+                    threading.Timer(self.after, self.drop, (source, target)).start()
+                    if self.withhold:
+                        return
+                target.sendall(data)
         except OSError:
             return
 
@@ -534,6 +540,47 @@ def test_cv_executor_reports_a_pull_the_engine_dropped(
     assert "fake-node" in outcome.detail
     assert set(outcome.phases) == {"leftover-cleanup", "sim-build", "pulls"}
     assert outcome.phases["pulls"] < 30
+    assert _remaining(engine) == []
+
+
+def test_cv_executor_reports_a_pull_the_engine_left_unanswered(
+    engine: Host, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(run, "ENGINE_SILENCE_SECONDS", 2)
+    proxy = _EngineProxy(drop_on=b"/images/create?", after=20, withhold=True)
+    try:
+        outcome = run_composition(
+            _request(Placement("fake-node", "sha256:" + "0" * 64)), proxy.url
+        )
+    finally:
+        proxy.stop()
+
+    assert isinstance(outcome, Errored)
+    assert outcome.error == "pull-failed"
+    assert "fake-node" in outcome.detail
+    assert set(outcome.phases) == {"leftover-cleanup", "sim-build", "pulls"}
+    assert 2 <= outcome.phases["pulls"] < 10
+    assert _remaining(engine) == []
+
+
+def test_cv_executor_reports_a_placement_start_the_engine_dropped(
+    engine: Host, tmp_path: Path
+) -> None:
+    request = _request(_placement(engine, tmp_path, "fake-node"))
+    proxy = _EngineProxy(
+        drop_on=f"name=cv-{request.execution_id}-fake-node".encode(),
+        after=0,
+        withhold=True,
+    )
+    try:
+        outcome = run_composition(request, proxy.url)
+    finally:
+        proxy.stop()
+
+    assert isinstance(outcome, Errored)
+    assert outcome.error == "start-failed"
+    assert "fake-node" in outcome.detail
+    assert "start" in outcome.phases
     assert _remaining(engine) == []
 
 
