@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
     from docker import DockerClient
     from docker.models.containers import Container
+    from docker.models.images import Image
 
 REGISTRY = "registry:5000"
 EXECUTION_LABEL = "org.sdi.cv-execution"
@@ -290,7 +291,7 @@ class _Run:
         with self.timed("start"):
             sim = self.start_required("sim", containers.sim)
             placements = {
-                service_id: self.start_placement(options)
+                service_id: self.start_placement(service_id, options)
                 for service_id, options in containers.placements.items()
             }
             orchestrator = self.start_required("orchestrator", containers.orchestrator)
@@ -345,7 +346,7 @@ class _Run:
         causes: dict[str, BlockingCause] = {}
         for item in self.request.placements:
             try:
-                image = self.client.images.pull(item.reference)
+                image = self.pull_image(item.reference)
             except DockerException:
                 causes[item.service_id] = "image-unavailable"
                 continue
@@ -362,6 +363,26 @@ class _Run:
                 commands[item.service_id] = command
         return commands, causes
 
+    def pull_image(self, reference: str) -> Image:
+        # docker-py pulls with no read timeout, so a silent engine would hang it.
+        from docker.errors import create_api_error_from_http_exception  # noqa: PLC0415
+
+        api = self.client.api
+        repository, digest = reference.split("@")
+        with api.post(
+            f"{api.base_url}/v{api.api_version}/images/create",
+            params={"fromImage": repository, "tag": digest},
+            stream=True,
+            timeout=ENGINE_SILENCE_SECONDS,
+        ) as response:
+            try:
+                response.raise_for_status()
+            except requests.HTTPError as error:
+                raise create_api_error_from_http_exception(error) from error
+            for _ in response.iter_content(chunk_size=None):
+                pass
+        return self.client.images.get(reference)
+
     def start_required(self, role: str, options: RunOptions) -> Container:
         from docker.errors import DockerException  # noqa: PLC0415
 
@@ -372,13 +393,20 @@ class _Run:
                 error="start-failed", detail=f"the {role} did not start: {error}"
             ) from error
 
-    def start_placement(self, options: RunOptions) -> Container | FailedToStart:
+    def start_placement(
+        self, service_id: str, options: RunOptions
+    ) -> Container | FailedToStart:
         from docker.errors import APIError  # noqa: PLC0415
 
         try:
             return self.client.containers.run(**options)
         except APIError as error:
             return FailedToStart(str(error.explanation or error))
+        except ENGINE_LOST as error:
+            raise _StopRunError(
+                error="start-failed",
+                detail=f"the placement {service_id} did not start: {error}",
+            ) from error
 
     def remaining(self) -> float:
         return (
