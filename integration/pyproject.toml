@@ -55,9 +55,11 @@ select = ["ALL"]
 ignore = ["COM812", "CPY001", "D203", "D213"]
 
 [tool.ruff.lint.per-file-ignores]
+"src/sdi_pipeline_integration/_cv_sim/**" = ["INP001", "S603", "S607"]
 "tests/**" = ["D103", "PLR2004", "S101", "S603", "S607"]
 
 [tool.basedpyright]
 include = ["src", "tests"]
+exclude = ["src/sdi_pipeline_integration/_cv_sim"]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
