@@ -5,8 +5,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
+import sys
 import threading
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -94,7 +97,8 @@ def _write_fake_deployment_tools(fake_bin: Path) -> None:
         "done ;;\n"
         "  *' -T runner-'*' show') exit 3 ;;\n"
         "  *' --entrypoint sdi-cv-warm cv') "
-        '[ -z "${FAKE_WARM_FAIL:-}" ] || exit 1 ;;\n'
+        '[ -z "${FAKE_WARM_FAIL:-}" ] || exit 1; '
+        '[ -z "${FAKE_WARM_HANG:-}" ] || exec sleep 30 ;;\n'
         "  *' -T runner-'*' register '*) "
         "printf 'the registration token is empty or invalid\\n' >&2; exit 2 ;;\n"
         "esac\n"
@@ -1387,3 +1391,51 @@ def test_no_cv_warm_applies_only_to_start(tmp_path: Path, action: str) -> None:
     assert completed.returncode == 2
     assert completed.stderr == "stack: --no-cv-warm applies only to start\n"
     assert not stack.calls()
+
+
+# A launcher that backgrounds pytest leaves SIGINT ignored, and sh can trap no
+# signal it inherits as ignored, so start the stack with SIGINT at its default,
+# as a terminal's foreground job has it.
+WITH_DEFAULT_SIGINT = (
+    sys.executable,
+    "-c",
+    (
+        "import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); "
+        "os.execv(sys.argv[1], sys.argv[1:])"
+    ),
+)
+
+
+def test_interrupting_start_mid_warm_removes_the_warm_container(
+    tmp_path: Path,
+) -> None:
+    stack = _BuiltStack(tmp_path)
+    stack.docker_log.write_text("")
+    started = subprocess.Popen(
+        [
+            *WITH_DEFAULT_SIGINT,
+            JENKINS_ROOT / "bin" / "stack",
+            "--config",
+            stack.config,
+            "start",
+        ],
+        env={
+            "DOCKER_LOG": str(stack.docker_log),
+            "PATH": stack.path,
+            "FAKE_WARM_HANG": "1",
+        },
+        stderr=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    deadline = time.monotonic() + 20
+    while WARM not in stack.calls():
+        assert started.poll() is None, "start ended before the warm ran"
+        assert time.monotonic() < deadline, "the warm never ran"
+        time.sleep(0.1)
+
+    os.killpg(started.pid, signal.SIGINT)
+
+    assert started.wait(timeout=20) == 130
+    calls = stack.calls()
+    assert calls[calls.index(WARM) + 1 :] == ["rm --force sdi-jenkins-cv-warm"]

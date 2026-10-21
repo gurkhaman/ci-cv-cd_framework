@@ -806,12 +806,13 @@ refuse_active_runner_job() {
         fail 'a GitHub runner is executing a handoff job; retry after it finishes'
 }
 
-# The CV Stage's own sim build, run from the cv image so that it hashes the same
-# packaged context. A one-off and not an exec into the agent: Ctrl-C ends the
-# build client with the container, so the next start races no orphaned build.
+# The engine cancels the sim build once its client container is gone, but
+# compose run leaves that container running when Ctrl-C ends it.
 warm_cv_engine() {
-    docker rm --force "$project_name-cv-warm" >/dev/null 2>&1 || true
-    compose run --rm --no-deps -T --name "$project_name-cv-warm" \
+    warm_container=$project_name-cv-warm
+    docker rm --force "$warm_container" >/dev/null 2>&1 || true
+    trap 'docker rm --force "$warm_container" >/dev/null 2>&1; exit 130' HUP INT TERM
+    compose run --rm --no-deps -T --name "$warm_container" \
         --entrypoint sdi-cv-warm cv </dev/null
 }
 
