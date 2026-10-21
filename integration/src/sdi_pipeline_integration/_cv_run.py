@@ -23,7 +23,6 @@ if TYPE_CHECKING:
     from docker import DockerClient
     from docker.models.containers import Container
 
-ENGINE_URL = "tcp://cv-engine:2375"
 REGISTRY = "registry:5000"
 EXECUTION_LABEL = "org.sdi.cv-execution"
 SIM_CONTEXT = Path(__file__).parent / "_cv_sim" / "s-04"
@@ -218,7 +217,7 @@ def plan(
     )
 
 
-def run_composition(request: RunRequest, engine_url: str = ENGINE_URL) -> RunOutcome:
+def run_composition(request: RunRequest, engine_url: str) -> RunOutcome:
     import docker  # noqa: PLC0415
     from docker.errors import DockerException  # noqa: PLC0415
 

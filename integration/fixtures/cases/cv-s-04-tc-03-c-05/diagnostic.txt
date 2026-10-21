@@ -1,1 +1,0 @@
-CV pipeline-interface Fixture executed; no simulation or Validation was run.

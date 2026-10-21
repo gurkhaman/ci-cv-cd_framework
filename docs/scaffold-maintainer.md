@@ -97,14 +97,16 @@ not copied console output.
 
 Composition is implemented: a configured model proposes compositions over the
 supplied service descriptions, and the integration package checks and ranks them.
-The image-build, CV, and CD Stages are explicitly Fixtures. The following remain
+On Jenkins, image build pushes each composition's images and CV runs them in one
+headless Gazebo scenario. Locally, image build is a Fixture, and the CD Stage is
+explicitly a Fixture everywhere. The following remain
 deferred and must not be claimed, inferred, or quietly added as maintenance:
 
 - retrieval-based service discovery, requirement analysis beyond the declared
   requirement IDs, and composition checked against running services;
 - real multi-architecture image builds and supply-chain publication;
-- real Gazebo or Isaac Sim scenario execution, oracles, measurements, Coverage
-  Gap selection, Validation evidence, and regression verdicts;
+- Isaac Sim scenarios, Gazebo scenarios beyond the one S-04 mission, KPI
+  measurements, Coverage Gap selection, and regression verdicts;
 - real distributed CD placement, deployment, rollout, health checking, rollback,
   state migration, and degraded-network behavior;
 - an agreed KPI-7 formula or proof of any project KPI;

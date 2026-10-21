@@ -6,9 +6,11 @@ existing installation's Jenkins state or credentials. Select an approved commit
 from the upstream protected `main` branch after merge and record that exact SHA
 during acceptance.
 
-The installed system runs deterministic Fixture adapters. It proves the
-GitHub-to-Jenkins pipeline interface, not real composition, image publication,
-Continuous Validation, deployment, or KPI results.
+The installed system runs real composition, image-build, and Continuous
+Validation (CV) Stages, and a deterministic CD Fixture. It proves the
+GitHub-to-Jenkins pipeline interface, model-backed composition, image
+publication to the stack-local registry, and one CV verdict per run. It does not
+prove deployment or KPI results.
 
 ## Responsibilities
 
@@ -187,7 +189,27 @@ proxy, which admits only the GitHub Actions endpoints; the proxy limits where
 job code can connect but does not prevent data exfiltration. See the security
 review in `deployment/jenkins/README.md`.
 
-## 6. Accept The Installation
+## 6. Warm The CV Engine
+
+The first CV run on a new or reset `cv-engine-state` volume builds the
+simulation image. A cold build measured 2590 s, plus about 38 s of image pulls,
+against the CV Stage limit of 2700 s. That run ends with
+`sdi.cv.no-time-to-start` and turns the run red. Its verdict does not count.
+
+Run S-04 once to warm the engine. In GitHub, open **Actions > Pipeline
+integration > Run workflow**, select `main`, and submit:
+
+```text
+runs/s-04/s-04-tc-03-c-01-fixture.yaml
+```
+
+The next run reuses the image. If the warm-up is stopped during the build, run
+it again. The engine's classic builder keeps the layers it finished, so the
+second build starts from them. This is expected behavior, not a measured one.
+
+Repeat this step after you delete `cv-engine-state` or run `stack destroy`.
+
+## 7. Accept The Installation
 
 In GitHub, open **Actions > Pipeline integration > Run workflow**, select
 `main`, and submit:
