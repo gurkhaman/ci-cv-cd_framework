@@ -47,8 +47,9 @@ if TYPE_CHECKING:
     from ._cd_deployment import Manifest, Pin
     from ._domain_contracts import DeploymentResult, PlacementRecord
 
-TEARDOWN_MARGIN_SECONDS = 60
 KUBECTL_TIMEOUT_SECONDS = 20
+EVIDENCE_SECONDS = 20
+TEARDOWN_MARGIN_SECONDS = 2 * KUBECTL_TIMEOUT_SECONDS + EVIDENCE_SECONDS
 POLL_SECONDS = 2
 STARTING = frozenset({"", "ContainerCreating", "PodInitializing"})
 WORK_LIMIT_DETAIL = "the work limit ran out before the settle window ended"
@@ -84,6 +85,10 @@ class KubectlError(Exception):
     pass
 
 
+class OutOfTimeError(KubectlError):
+    pass
+
+
 @dataclass(frozen=True)
 class Kubectl:
     binary: str
@@ -93,10 +98,10 @@ class Kubectl:
 
     def __call__(self, *arguments: str, stdin: bytes = b"") -> bytes:
         command = f"kubectl {arguments[0]}"
-        seconds = min(KUBECTL_TIMEOUT_SECONDS, self.deadline - time.monotonic())
-        if seconds <= 0:
-            msg = f"{command}: the work limit left no time"
-            raise KubectlError(msg)
+        left = self.deadline - time.monotonic()
+        if left <= 0:
+            msg = f"{command}: no time left to run it"
+            raise OutOfTimeError(msg)
         argv = [
             self.binary,
             "--kubeconfig",
@@ -118,11 +123,14 @@ class Kubectl:
                     "LC_ALL": os.environ.get("LC_ALL", "C.UTF-8"),
                     "HOME": str(self.scratch),
                 },
-                timeout=seconds,
+                timeout=min(KUBECTL_TIMEOUT_SECONDS, left),
                 check=False,
             )
         except subprocess.TimeoutExpired as error:
-            msg = f"{command} did not answer within {seconds:.0f} s"
+            if left < KUBECTL_TIMEOUT_SECONDS:
+                msg = f"{command}: its deadline passed before it answered"
+                raise OutOfTimeError(msg) from error
+            msg = f"{command} did not answer within {KUBECTL_TIMEOUT_SECONDS} s"
             raise KubectlError(msg) from error
         except OSError as error:
             msg = f"{command}: {type(error).__name__}"
@@ -296,11 +304,16 @@ def _still_starting(
 ) -> frozenset[str]:
     started = time.monotonic()
     running: set[str] = set()
-    services = {item.service_id for item in pins}
+    services = frozenset(item.service_id for item in pins)
+    starting = services
     while True:
-        pods = _List.model_validate_json(
-            kubectl("get", "pods", "-n", namespace, "-o", "json")
-        ).items
+        try:
+            pods = _List.model_validate_json(
+                kubectl("get", "pods", "-n", namespace, "-o", "json")
+            ).items
+        except OutOfTimeError as error:
+            diagnostic.line(str(error))
+            return starting
         for pod in pods:
             service = pod.metadata.labels.get(SERVICE_LABEL, "")
             if pod.status.phase == "Running" and service not in running:
@@ -314,7 +327,7 @@ def _still_starting(
             if not _settled(pod)
         }
         if not starting or time.monotonic() + POLL_SECONDS > kubectl.deadline:
-            return frozenset(starting)
+            return starting
         time.sleep(POLL_SECONDS)
 
 
