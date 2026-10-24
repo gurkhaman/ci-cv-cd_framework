@@ -18,7 +18,7 @@ import pytest
 
 from sdi_pipeline_integration._adapter_kit import serve
 from sdi_pipeline_integration._cd_adapter import (
-    DEADLINE_MARGIN_SECONDS,
+    TEARDOWN_MARGIN_SECONDS,
     WORK_LIMIT_DETAIL,
     Cluster,
     deploy,
@@ -187,7 +187,7 @@ def test_cd_the_adapter_deadline_is_the_invocation_deadline_less_the_margin(
 ) -> None:
     settle = 5
     stage = _stage(
-        tmp_path, work_limit_seconds=DEADLINE_MARGIN_SECONDS + settle + slack
+        tmp_path, work_limit_seconds=TEARDOWN_MARGIN_SECONDS + settle + slack
     )
 
     run = stage.run(

@@ -66,7 +66,6 @@ class CdStage:
         profile: str,
         work_limit_seconds: int | None = None,
     ) -> None:
-        """Write a CD request that places each service on its host."""
         target_profile = (PROFILES / f"{profile}.yaml").read_bytes()
         blueprint = json.loads((CASE / "composition-blueprint.json").read_text())
         blueprint |= {
