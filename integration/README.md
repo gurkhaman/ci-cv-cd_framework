@@ -376,7 +376,8 @@ constructing contracts in Groovy:
 - `finalize-jenkins-run` creates typed downstream skips, assembles the exact
   archive, and validates it on the integration agent.
 - `bundle-conclusion` revalidates the bundle and derives the run's colour. The
-  run is red when Jenkins machinery failed or when CV failed the composition.
+  run is red when Jenkins machinery failed, when CV failed the composition, or
+  when CD failed to deploy it.
   Any other valid negative Domain outcome, and a composition that CV did not
   evaluate, keeps it green. `dispatch-local` exits with the same colour.
 
@@ -504,9 +505,9 @@ remains possible. Handled failures, crashes, deadline expiry, rejected candidate
 transactions, unavailable implementations, and blocked dependencies appear as
 typed attempts; skipped attempts never imply that a process ran. Adapter or
 deadline failures return status 1 after printing the result. A failed CV
-outcome also returns status 1, because CV found that the composition fails. Any
-other valid negative Domain outcome still returns status 0 because adapter
-execution succeeded.
+or CD outcome also returns status 1, because CV found that the composition
+fails or CD could not deploy it. Any other valid negative Domain outcome still
+returns status 0 because adapter execution succeeded.
 
 Candidate acceptance is transactional. A malformed, missing, changing, unsafe,
 undeclared, oversized, identity-mismatched, or schema-invalid candidate
