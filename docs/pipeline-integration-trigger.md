@@ -185,6 +185,7 @@ preflight, or timed out, it has no result, and the section gives its conclusion
 and reason in one line instead.
 
 A CV `failed` verdict is red, because CV found the composition does not work.
+A CD `failed` outcome is red, because CD could not deploy the composition.
 Any other valid negative Domain outcome, and a composition CV did not evaluate,
 can remain green because the integration machinery completed correctly. Jenkins
 machinery failure, retrieval failure, contract rejection, identity mismatch, or
