@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 from ruamel.yaml import YAML
 
+from sdi_pipeline_integration._cd_deployment import CLUSTER_HOSTS, HOST_LABEL
 from sdi_pipeline_integration._integration_code import BAKED_ROOTS
 from sdi_pipeline_integration._stage_registry import AGENTS, STAGES
 
@@ -24,8 +25,7 @@ AGENT_NAMES = {agent.node for agent in AGENTS}
 BUILDER_SERVICES = {"buildkitd", "registry"}
 CV_ENGINE = "cv-engine"
 K3S_SERVER = "k3s-xycar"
-K3S_HOSTS = {"xycar", "burger", "waffle", "orin"}
-K3S_NODES = {f"k3s-{host}" for host in K3S_HOSTS}
+K3S_NODES = {f"k3s-{host}" for host in CLUSTER_HOSTS}
 RUNNER_STACK_SERVICES = {
     "runner-upstream",
     "runner-fork",
@@ -313,6 +313,21 @@ def test_cv_engine_is_reachable_only_from_the_cv_agent() -> None:
         CV_ENGINE,
         "registry",
     }
+
+
+def test_cluster_hosts_are_the_compose_k3s_node_hosts() -> None:
+    services = _load_yaml(JENKINS_ROOT / "compose.yaml")["services"]
+    host_flag = f"--node-label={HOST_LABEL}="
+
+    compose_hosts = sorted(
+        argument.removeprefix(host_flag)
+        for service in services.values()
+        if "/rancher/k3s:" in service.get("image", "")
+        for argument in service["command"]
+        if argument.startswith(host_flag)
+    )
+
+    assert compose_hosts == sorted(CLUSTER_HOSTS)
 
 
 def test_k3s_nodes_reach_only_the_registry_and_their_api_only_the_cd_agent() -> None:

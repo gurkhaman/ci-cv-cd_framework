@@ -158,6 +158,7 @@ def manifest_yaml(manifest: Mapping[str, JsonValue]) -> bytes:
     """Return the manifest as the YAML bytes both kubectl and people read."""
     yaml = YAML(typ="safe", pure=True)
     yaml.default_flow_style = False
+    yaml.width = 4096
     # kubectl reads YAML 1.1, where a bare yes, on, or n is a boolean, so the
     # 1.1 resolver decides what to quote. kubectl splits documents on ---, so
     # the %YAML 1.1 directive and --- that ruamel then emits are stripped.
@@ -332,6 +333,8 @@ def _container_problems(pin: Pin, phase: str, container: _ContainerStatus) -> li
         problems.append(f"phase {phase or 'unknown'}")
     if not problems and state.running is None:
         problems.append("the container is not running")
+    if not problems and not _is_image_id(container.image_id):
+        problems.append("the image ID is not a digest reference")
     return problems
 
 
