@@ -253,7 +253,8 @@ STAGES: dict[StageName, Stage] = {
             ),
         ),
         agent=Agent("cd", "cd"),
-        jenkins_descriptor="deployment/jenkins/adapters/cd-fixture-v1.yaml",
+        jenkins_descriptor="deployment/jenkins/adapters/cd-v1.yaml",
+        local_override="deployment/jenkins/adapters/cd-fixture-v1.yaml",
     ),
 }
 STAGE_ORDER: tuple[StageName, ...] = tuple(STAGES)

@@ -18,7 +18,10 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 from ruamel.yaml import YAML
 
-from sdi_pipeline_integration._handoff_contracts import HANDOFF_PARAMETERS
+from sdi_pipeline_integration._handoff_contracts import (
+    DEPLOYMENT_MANIFEST_PATH,
+    HANDOFF_PARAMETERS,
+)
 from sdi_pipeline_integration._integration_code import (
     STALE_IMAGE_REASON,
     integration_code_digest,
@@ -513,6 +516,30 @@ def test_root_pipeline_is_a_thin_scheduler_over_public_cli_operations() -> None:
     assert '"execution_conclusion"' not in pipeline
     assert '"domain_outcome"' not in pipeline
     assert "lastBuild" not in pipeline
+
+
+def test_cd_finalize_archives_the_deployment_manifest_after_the_bundle() -> None:
+    pipeline = (REPOSITORY_ROOT / "Jenkinsfile").read_text()
+    finalize = pipeline[pipeline.index("stage('Finalize and archive')") :]
+    steps = (
+        "sdi-integration bundle-conclusion",
+        "artifacts: '**/*'",
+        (
+            "sdi-integration deployment-manifest \\\n"
+            "  --bundle-root bundle \\\n"
+            f"  --output {DEPLOYMENT_MANIFEST_PATH}\n"
+        ),
+        (
+            f"artifacts: '{DEPLOYMENT_MANIFEST_PATH}',\n"
+            "                            allowEmptyArchive: true,"
+        ),
+        "if (conclusion == 1)",
+    )
+
+    positions = [finalize.index(step) for step in steps]
+
+    assert positions == sorted(positions)
+    assert pipeline.count(DEPLOYMENT_MANIFEST_PATH) == 2
 
 
 def test_only_the_stack_refusal_names_a_limit_setting() -> None:
