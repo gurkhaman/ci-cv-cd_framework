@@ -540,9 +540,9 @@ incomplete evidence likewise fails with the available partial receipt.
 
 The workflow captures the command's result record rather than printing it into
 live logs, so the visible handoff output remains the native sanitized phase
-sequence. Its always-run publication step uploads the validated bundle and
-available receipt as the sole 90-day artifact named
-`pipeline-integration-<execution_id>`.
+sequence. Its always-run publication step uploads the validated bundle, the
+available receipt, and `deployment-manifest.yaml` when the handoff wrote one, as
+the sole 90-day artifact named `pipeline-integration-<execution_id>`.
 
 After publication, `github-summary` independently validates the receipt and any
 returned bundle, incorporates GitHub's handoff and publication outcomes, renders
