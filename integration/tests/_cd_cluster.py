@@ -1,5 +1,3 @@
-"""The K3s stand-in cluster that the k3s tests reach from the host."""
-
 from __future__ import annotations
 
 import os
@@ -21,7 +19,6 @@ class SessionCluster:
     registry_url: str
 
     def kubectl(self, *arguments: str) -> subprocess.CompletedProcess[str]:
-        """Run the host kubectl against this cluster and never any other."""
         with tempfile.TemporaryDirectory(prefix="sdi-k3s-test-") as cache:
             return subprocess.run(
                 [

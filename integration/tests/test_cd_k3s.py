@@ -38,22 +38,21 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.k3s
 
-# Per-platform manifest digests, so each copy is a two-platform index. render() sets
-# no command: pause runs until stopped, and busybox's sh exits at once.
-PAUSE = (
+RUNS_UNTIL_STOPPED = (
     "docker.io/rancher/mirrored-pause:3.6",
     {
         "amd64": "c2280d2f5f56cf9c9a01bb64b2db4651e35efd6d62a54dcfc12049fe6449c5e4",
         "arm64": "fd05cc99606e9180b261362fb625dc3759fc57cbb6f6bd4fecccec64cc85ddfd",
     },
 )
-BUSYBOX = (
+EXITS_AT_ONCE = (
     "docker.io/library/busybox:1.37.0",
     {
         "amd64": "66a6306db78bf2dbf3487f293aa8d6990d8e506fdffab9cc43fe422becf886e4",
         "arm64": "d82c2ab94640ded77cf76514ce6a84870761105058a4a9e51b05a8a79be97a6c",
     },
 )
+LAST_TERMINATION_SUFFIX = re.compile(r"restarted \d+ times, last Completed \(exit 0\)$")
 ABSENT = f"sha256:{'0' * 64}"
 INDEX_TYPES = (
     "application/vnd.oci.image.index.v1+json",
@@ -71,7 +70,6 @@ def cluster() -> SessionCluster:
 def _push(
     cluster: SessionCluster, service_id: str, source: tuple[str, Mapping[str, str]]
 ) -> dict[str, str]:
-    """Copy one image into sdi/<service_id> and return its digest per platform."""
     registry = cluster.registry_url.removeprefix("http://")
     subprocess.run(
         [
@@ -136,8 +134,6 @@ def _assert_detail_is_clean(detail: str) -> None:
 
 
 class _Observer:
-    """Read the run's pods and Deployments while the adapter holds them."""
-
     def __init__(self, cluster: SessionCluster, namespace: str) -> None:
         self._cluster = cluster
         self._namespace = namespace
@@ -192,7 +188,10 @@ def test_cd_a_composition_with_an_arm64_host_deploys_and_passes(
     cluster: SessionCluster, tmp_path: Path
 ) -> None:
     placed = {"k3s-pass-waffle": "waffle", "k3s-pass-xycar": "xycar"}
-    platforms = {service_id: _push(cluster, service_id, PAUSE) for service_id in placed}
+    platforms = {
+        service_id: _push(cluster, service_id, RUNS_UNTIL_STOPPED)
+        for service_id in placed
+    }
     stage = _stage(tmp_path)
     stage.write(
         placed,
@@ -270,7 +269,7 @@ def test_cd_a_bad_digest_fails_with_an_image_pull_detail(
 def test_cd_a_crashing_image_fails_with_its_last_termination_reason(
     cluster: SessionCluster, tmp_path: Path
 ) -> None:
-    platforms = _push(cluster, "k3s-crash", BUSYBOX)
+    platforms = _push(cluster, "k3s-crash", EXITS_AT_ONCE)
     stage = _stage(tmp_path)
     stage.write(
         {"k3s-crash": "xycar"},
@@ -288,12 +287,7 @@ def test_cd_a_crashing_image_fails_with_its_last_termination_reason(
     assert isinstance(record, FailedPlacement)
     assert record.restart_count is not None
     assert record.restart_count > 0
-    # Read between restarts or in back-off, the detail always ends with the
-    # restart count and the last termination; CrashLoopBackOff leads only in
-    # back-off.
-    assert re.search(
-        r"restarted \d+ times, last Completed \(exit 0\)$", record.detail
-    ), record.detail
+    assert LAST_TERMINATION_SUFFIX.search(record.detail), record.detail
     _assert_detail_is_clean(record.detail)
     _assert_namespace_gone(cluster, stage.namespace)
 
@@ -301,7 +295,7 @@ def test_cd_a_crashing_image_fails_with_its_last_termination_reason(
 def test_cd_the_namespace_is_deleted_after_an_exception_mid_run(
     cluster: SessionCluster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    platforms = _push(cluster, "k3s-exception", PAUSE)
+    platforms = _push(cluster, "k3s-exception", RUNS_UNTIL_STOPPED)
     stage = _stage(tmp_path)
     stage.write(
         {"k3s-exception": "xycar"},
@@ -329,7 +323,7 @@ def test_cd_the_namespace_is_deleted_after_an_exception_mid_run(
 def test_cd_a_node_that_never_becomes_ready_fails_execution_without_evidence(
     cluster: SessionCluster, tmp_path: Path
 ) -> None:
-    platforms = _push(cluster, "k3s-orin", PAUSE)
+    platforms = _push(cluster, "k3s-orin", RUNS_UNTIL_STOPPED)
     stage = _stage(tmp_path)
     stage.write(
         {"k3s-orin": "orin"},

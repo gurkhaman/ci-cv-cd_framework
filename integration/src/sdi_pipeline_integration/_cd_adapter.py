@@ -1,12 +1,3 @@
-"""Implemented CD Stage adapter: deploy one combination on the K3s stand-in.
-
-The adapter clears each placement for the cluster, renders the manifest, waits
-for a Ready node per placed host, applies the manifest in its own namespace,
-holds a settle window, applies the pass rule, and deletes the namespace. It
-runs on the cd agent with only PATH and LC_ALL in its environment, so every
-kubectl call names the kubeconfig, the server, and a cache directory itself.
-"""
-
 from __future__ import annotations
 
 import json
@@ -56,8 +47,7 @@ if TYPE_CHECKING:
     from ._cd_deployment import Manifest, Pin
     from ._domain_contracts import DeploymentResult, PlacementRecord
 
-# Evidence and the namespace delete still need this long after the work stops.
-DEADLINE_MARGIN_SECONDS = 60
+TEARDOWN_MARGIN_SECONDS = 60
 KUBECTL_TIMEOUT_SECONDS = 20
 POLL_SECONDS = 2
 STARTING = frozenset({"", "ContainerCreating", "PodInitializing"})
@@ -91,7 +81,7 @@ STAND_IN = Cluster("https://k3s-xycar:6443", Path("/etc/sdi/k3s/kubeconfig.yaml"
 
 
 class KubectlError(Exception):
-    """kubectl did not start, timed out, or exited non-zero."""
+    pass
 
 
 @dataclass(frozen=True)
@@ -179,18 +169,14 @@ class _List(_Kubernetes):
 
 
 def deploy(invocation: Invocation, *, cluster: Cluster) -> Verdict:
+    diagnostic = invocation.diagnostic
     inputs = _read(invocation)
     pins = pin(inputs)
     if isinstance(pins, Gap):
-        return _verdict(
-            invocation.diagnostic, deployment_result(inputs, pins.placements)
-        )
-    # The evidence is published as canonical JSON, which sorts keys. Apply the
-    # manifest in that order, so YAML made from the evidence equals the applied.
-    manifest = cast("Manifest", json.loads(canonical_json(render(pins))))
-    deadline = invocation.deadline_monotonic - DEADLINE_MARGIN_SECONDS
+        return _verdict(diagnostic, deployment_result(inputs, pins.placements))
+    manifest = _as_published(render(pins))
+    deadline = invocation.deadline_monotonic - TEARDOWN_MARGIN_SECONDS
     namespace = f"sdi-{invocation.request.correlation.execution_id}"
-    diagnostic = invocation.diagnostic
     diagnostic.fact("namespace", namespace)
     binary = shutil.which("kubectl", path=os.environ.get("PATH"))
     if binary is None:
@@ -210,7 +196,7 @@ def deploy(invocation: Invocation, *, cluster: Cluster) -> Verdict:
         try:
             kubectl("create", "namespace", namespace)
             kubectl("apply", "-n", namespace, "-f", "-", stdin=manifest_yaml(manifest))
-            held = _await_pods(kubectl, namespace, pins, deadline, diagnostic)
+            held = _pods_settle_before(kubectl, namespace, pins, deadline, diagnostic)
             if held and deadline - time.monotonic() >= cluster.settle_seconds:
                 time.sleep(cluster.settle_seconds)
                 diagnostic.line(f"settled for {cluster.settle_seconds:g} s")
@@ -226,6 +212,11 @@ def deploy(invocation: Invocation, *, cluster: Cluster) -> Verdict:
     if not held:
         records = tuple(_cut(item) for item in records)
     return _verdict(diagnostic, deployment_result(inputs, records, manifest))
+
+
+def _as_published(manifest: Manifest) -> Manifest:
+    """Sort keys as the canonical-JSON evidence will, so its YAML equals the applied."""
+    return cast("Manifest", json.loads(canonical_json(manifest)))
 
 
 def _read(invocation: Invocation) -> CdInputs:
@@ -255,37 +246,39 @@ def _read(invocation: Invocation) -> CdInputs:
 
 
 def _nodes_ready(kubectl: Kubectl, hosts: set[str], until: float) -> bool:
-    # A stale kubeconfig or a server still starting reads as not ready yet.
-    while True:
-        try:
-            nodes = _List.model_validate_json(
-                kubectl("get", "nodes", "-l", HOST_LABEL, "-o", "json")
-            ).items
-        except (KubectlError, ValidationError):
-            nodes = []
-        ready = {
-            node.metadata.labels.get(HOST_LABEL)
-            for node in nodes
-            if any(
-                item.type == "Ready" and item.status == "True"
-                for item in node.status.conditions
-            )
-        }
-        if hosts <= ready:
-            return True
+    while not hosts <= _ready_hosts(kubectl):
         if time.monotonic() + POLL_SECONDS > until:
             return False
         time.sleep(POLL_SECONDS)
+    return True
 
 
-def _await_pods(
+def _ready_hosts(kubectl: Kubectl) -> set[str]:
+    """Hosts with a Ready node; a cluster that does not answer has none yet."""
+    try:
+        nodes = _List.model_validate_json(
+            kubectl("get", "nodes", "-l", HOST_LABEL, "-o", "json")
+        ).items
+    except (KubectlError, ValidationError):
+        return set()
+    return {
+        node.metadata.labels[HOST_LABEL]
+        for node in nodes
+        if HOST_LABEL in node.metadata.labels
+        and any(
+            item.type == "Ready" and item.status == "True"
+            for item in node.status.conditions
+        )
+    }
+
+
+def _pods_settle_before(
     kubectl: Kubectl,
     namespace: str,
     pins: Sequence[Pin],
     deadline: float,
     diagnostic: Diagnostic,
 ) -> bool:
-    """Wait until every pin's pod runs or reports a problem; False at the deadline."""
     started = time.monotonic()
     running: set[str] = set()
     services = {item.service_id for item in pins}
