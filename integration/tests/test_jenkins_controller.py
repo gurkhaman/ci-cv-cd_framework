@@ -521,11 +521,15 @@ def test_cd_finalize_archives_the_deployment_manifest_after_the_bundle() -> None
     steps = (
         "sdi-integration bundle-conclusion",
         "artifacts: '**/*'",
-        "sdi-integration deployment-manifest \\\n"
-        "  --bundle-root bundle \\\n"
-        "  --output deployment-manifest.yaml\n",
-        "artifacts: 'deployment-manifest.yaml',\n"
-        "                            allowEmptyArchive: true,",
+        (
+            "sdi-integration deployment-manifest \\\n"
+            "  --bundle-root bundle \\\n"
+            "  --output deployment-manifest.yaml\n"
+        ),
+        (
+            "artifacts: 'deployment-manifest.yaml',\n"
+            "                            allowEmptyArchive: true,"
+        ),
         "if (conclusion == 1)",
     )
 
