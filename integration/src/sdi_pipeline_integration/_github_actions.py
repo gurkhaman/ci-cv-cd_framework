@@ -239,7 +239,7 @@ def render_github_summary(  # noqa: C901, PLR0912, PLR0913, PLR0915
     result_state = "not returned"
     if bundle_root.exists() or bundle_root.is_symlink():
         try:
-            candidate, candidate_documents = validate_bundle_documents(bundle_root)
+            candidate, candidate_documents, _ = validate_bundle_documents(bundle_root)
         except (InputError, OSError, ValidationError):
             result_state = "rejected"
         else:

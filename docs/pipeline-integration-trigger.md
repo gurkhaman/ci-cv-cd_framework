@@ -168,6 +168,16 @@ uv run --frozen --project integration sdi-integration validate-bundle \
   --bundle-root artifacts/pipeline-integration-<execution-id>/bundle
 ```
 
+Write the Kubernetes manifest that CD applied from a downloaded bundle. The
+command validates the bundle first. When CD was not evaluated, skipped, or
+failed before it recorded a result, it writes nothing and exits 0:
+
+```sh acceptance=deployment-manifest
+uv run --frozen --project integration sdi-integration deployment-manifest \
+  --bundle-root artifacts/pipeline-integration-<execution-id>/bundle \
+  --output artifacts/deployment-manifest-<execution-id>.yaml
+```
+
 ## Failure And Cancellation
 
 The summary is status-first. Pipeline integration succeeds only after the exact
