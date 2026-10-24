@@ -339,6 +339,14 @@ def test_cd_manifest_yaml_reads_back_as_the_same_list() -> None:
     assert manifest_yaml(copy.deepcopy(S04_MANIFEST)).decode() == text
 
 
+def test_cd_manifest_yaml_keeps_each_image_reference_on_its_own_line() -> None:
+    text = manifest_yaml(S04_MANIFEST).decode()
+
+    for item in S04_MANIFEST["items"]:
+        image = item["spec"]["template"]["spec"]["containers"][0]["image"]
+        assert f"  image: {image}\n" in text
+
+
 def test_cd_manifest_yaml_quotes_words_kubectl_reads_as_booleans() -> None:
     manifest = render([Pin("yes", "on", f"registry:5000/sdi/yes@{AMD64_DIGEST}")])
 
@@ -403,11 +411,11 @@ def _unscheduled() -> dict[str, Any]:
     }
 
 
-def _restarted() -> dict[str, Any]:
+def _running_with(phase: str | None = None, **container: object) -> dict[str, Any]:
     pod = _running()
-    status = pod["status"]["containerStatuses"][0]
-    status["restartCount"] = 1
-    status["lastState"] = {"terminated": {"reason": "Error", "exitCode": 137}}
+    if phase is not None:
+        pod["status"]["phase"] = phase
+    pod["status"]["containerStatuses"][0] |= container
     return pod
 
 
@@ -498,7 +506,10 @@ def test_cd_passes_a_pod_running_its_pinned_digest_on_its_host() -> None:
         ),
         pytest.param(
             _pinned("fixture-localization", "waffle"),
-            _restarted(),
+            _running_with(
+                restartCount=1,
+                lastState={"terminated": {"reason": "Error", "exitCode": 137}},
+            ),
             {
                 "node": "waffle",
                 "phase": "Running",
@@ -514,6 +525,44 @@ def test_cd_passes_a_pod_running_its_pinned_digest_on_its_host() -> None:
             {},
             "no pod was created",
             id="no-pod",
+        ),
+        pytest.param(
+            _pinned("fixture-localization", "waffle"),
+            _running_with("Unknown"),
+            {
+                "node": "waffle",
+                "phase": "Unknown",
+                "restart_count": 0,
+                "image_id": f"registry:5000/sdi/probe@{RECORDED_DIGEST}",
+            },
+            "phase Unknown",
+            id="running-container-in-a-pod-not-running",
+        ),
+        pytest.param(
+            _pinned("fixture-localization", "waffle"),
+            _running_with(state={}),
+            {
+                "node": "waffle",
+                "phase": "Running",
+                "restart_count": 0,
+                "image_id": f"registry:5000/sdi/probe@{RECORDED_DIGEST}",
+            },
+            "the container is not running",
+            id="container-without-a-state",
+        ),
+        pytest.param(
+            _pinned("fixture-localization", "waffle"),
+            _running_with(imageID=""),
+            {"node": "waffle", "phase": "Running", "restart_count": 0},
+            "the image ID is not a digest reference",
+            id="empty-image-id",
+        ),
+        pytest.param(
+            _pinned("fixture-localization", "waffle"),
+            _running_with(imageID="registry:5000/sdi/probe:latest"),
+            {"node": "waffle", "phase": "Running", "restart_count": 0},
+            "the image ID is not a digest reference",
+            id="unparseable-image-id",
         ),
     ],
 )
