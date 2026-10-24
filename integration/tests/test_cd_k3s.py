@@ -38,11 +38,13 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.k3s
 
+# Not pause 3.6: K3s v1.33.5 already holds it as its sandbox image, and a node
+# then reports that image's index digest as the pod's imageID.
 RUNS_UNTIL_STOPPED = (
-    "docker.io/rancher/mirrored-pause:3.6",
+    "docker.io/rancher/mirrored-pause:3.10",
     {
-        "amd64": "c2280d2f5f56cf9c9a01bb64b2db4651e35efd6d62a54dcfc12049fe6449c5e4",
-        "arm64": "fd05cc99606e9180b261362fb625dc3759fc57cbb6f6bd4fecccec64cc85ddfd",
+        "amd64": "7c38f24774e3cbd906d2d33c38354ccf787635581c122965132c9bd309754d4a",
+        "arm64": "e50b7059b633caf3c1449b8da680d11845cda4506b513ee7a2de00725f0a34a7",
     },
 )
 EXITS_AT_ONCE = (
