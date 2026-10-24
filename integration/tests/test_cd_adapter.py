@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 import uuid
 from functools import partial
 from pathlib import Path
@@ -16,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from sdi_pipeline_integration import _cd_adapter
 from sdi_pipeline_integration._adapter_kit import serve
 from sdi_pipeline_integration._cd_adapter import (
     TEARDOWN_MARGIN_SECONDS,
@@ -28,7 +30,7 @@ from sdi_pipeline_integration._cd_deployment import CLUSTER_HOSTS, manifest_yaml
 from ._cd_stage import CdStage, built
 
 if TYPE_CHECKING:
-    from collections.abc import Collection
+    from collections.abc import Collection, Mapping
 
 SERVER = "https://k3s-xycar:6443"
 AMD64 = f"sha256:{'a' * 64}"
@@ -36,7 +38,7 @@ ARM64 = f"sha256:{'b' * 64}"
 PLACED = {"cd-waffle": "waffle", "cd-xycar": "xycar"}
 DIGESTS = {"cd-waffle": ARM64, "cd-xycar": AMD64}
 FAKE_KUBECTL = """#!{python}
-import json, os, sys
+import json, os, sys, time
 from pathlib import Path
 
 state = Path({state!r})
@@ -51,6 +53,8 @@ if (state / f"{{verb}}.fails").exists():
     sys.exit(1)
 for kind in ("nodes", "pods"):
     if kind in arguments:
+        if (state / f"{{kind}}.slow").exists():
+            time.sleep(float((state / f"{{kind}}.slow").read_text()))
         sys.stdout.write((state / f"{{kind}}.json").read_text())
 """
 
@@ -67,28 +71,47 @@ def _nodes(ready: Collection[str]) -> dict[str, Any]:
     }
 
 
-def _pods() -> dict[str, Any]:
+def _pods(waiting: Mapping[str, str] | None = None) -> dict[str, Any]:
+    waiting = waiting or {}
     return {
         "items": [
             {
                 "metadata": {"labels": {"sdi/service": service_id}},
                 "spec": {"nodeName": host},
-                "status": {
-                    "phase": "Running",
-                    "containerStatuses": [
-                        {
-                            "imageID": (
-                                f"registry:5000/sdi/{service_id}@{DIGESTS[service_id]}"
-                            ),
-                            "restartCount": 0,
-                            "state": {"running": {"startedAt": "2026-10-24T00:00:00Z"}},
-                            "lastState": {},
-                        }
-                    ],
-                },
+                "status": _waiting(waiting[service_id])
+                if service_id in waiting
+                else _running(service_id),
             }
             for service_id, host in PLACED.items()
         ]
+    }
+
+
+def _running(service_id: str) -> dict[str, Any]:
+    return {
+        "phase": "Running",
+        "containerStatuses": [
+            {
+                "imageID": f"registry:5000/sdi/{service_id}@{DIGESTS[service_id]}",
+                "restartCount": 0,
+                "state": {"running": {"startedAt": "2026-10-24T00:00:00Z"}},
+                "lastState": {},
+            }
+        ],
+    }
+
+
+def _waiting(reason: str) -> dict[str, Any]:
+    return {
+        "phase": "Pending",
+        "containerStatuses": [
+            {
+                "imageID": "",
+                "restartCount": 0,
+                "state": {"waiting": {"reason": reason}},
+                "lastState": {},
+            }
+        ],
     }
 
 
@@ -109,6 +132,9 @@ class _FakeCluster:
 
     def refuse(self, verb: str) -> None:
         (self.root / f"{verb}.fails").touch()
+
+    def slow(self, kind: str, seconds: float) -> None:
+        (self.root / f"{kind}.slow").write_text(str(seconds))
 
     def cluster(self, **timing: float) -> Cluster:
         return Cluster(SERVER, self.root / "kubeconfig.yaml", **timing)
@@ -202,7 +228,7 @@ def test_cd_the_adapter_deadline_is_the_invocation_deadline_less_the_margin(
         assert {getattr(item, "detail", None) for item in run.evidence.placements} == {
             WORK_LIMIT_DETAIL
         }
-        assert "the work limit cut the settle window short" in run.diagnostic
+        assert f"short of the {settle} s settle window" in run.diagnostic
     assert fake.calls()[-1]["argv"][7] == "delete"
 
 
@@ -263,3 +289,51 @@ def test_cd_a_kubectl_failure_is_machinery_and_still_deletes_the_namespace(
     assert run.evidence is None
     assert "error: the fake cluster refused" in run.diagnostic
     assert [call["argv"][7] for call in fake.calls()][-2:] == ["apply", "delete"]
+
+
+def test_cd_a_pod_still_starting_at_the_deadline_fails_on_the_work_limit(
+    tmp_path: Path, fake: _FakeCluster
+) -> None:
+    fake.answer(
+        pods=_pods({"cd-waffle": "ErrImagePull", "cd-xycar": "ContainerCreating"})
+    )
+    stage = _stage(tmp_path, work_limit_seconds=TEARDOWN_MARGIN_SECONDS + 3)
+
+    run = stage.run(
+        serve("cd", partial(deploy, cluster=fake.cluster(settle_seconds=0)))
+    )
+
+    assert run.response.execution_conclusion == "succeeded"
+    assert run.evidence is not None
+    assert run.evidence.domain_outcome == "failed"
+    assert [
+        (item.service_id, item.status, getattr(item, "detail", None))
+        for item in run.evidence.placements
+    ] == [
+        ("cd-waffle", "failed", "ErrImagePull"),
+        ("cd-xycar", "failed", WORK_LIMIT_DETAIL),
+    ]
+    assert "the work limit ran out in the wait for Running pods: cd-xycar" in (
+        run.diagnostic
+    )
+    assert fake.calls()[-1]["argv"][7] == "delete"
+
+
+def test_cd_a_slow_cluster_cannot_carry_the_adapter_past_its_work_limit(
+    tmp_path: Path, fake: _FakeCluster, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(_cd_adapter, "KUBECTL_TIMEOUT_SECONDS", 4)
+    monkeypatch.setattr(_cd_adapter, "TEARDOWN_MARGIN_SECONDS", 12)
+    work_limit = 14
+    fake.slow("pods", 13)
+    stage = _stage(tmp_path, work_limit_seconds=work_limit)
+
+    started = time.monotonic()
+    run = stage.run(serve("cd", partial(deploy, cluster=fake.cluster())))
+
+    assert time.monotonic() - started < work_limit
+    assert run.response.reason is not None
+    assert run.response.reason.code == "sdi.cd.cluster-error"
+    assert run.evidence is None
+    assert "kubectl get did not answer within" in run.diagnostic
+    assert fake.calls()[-1]["argv"][7] == "delete"
