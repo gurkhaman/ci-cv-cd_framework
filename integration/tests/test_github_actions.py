@@ -873,7 +873,8 @@ def test_image_build_table_joins_built_and_failed_records_with_placements(
     tmp_path: Path,
 ) -> None:
     bundle_root, _ = _bundle(tmp_path)
-    result, documents, _ = validate_bundle_documents(bundle_root)
+    validated = validate_bundle_documents(bundle_root)
+    result, documents = validated.result, validated.succeeded_domain_outputs
     deployment = documents["deployment_schema"].model_dump(mode="json")
     deployment["evidence_basis"] = "implemented"
     deployment["placements"] = [

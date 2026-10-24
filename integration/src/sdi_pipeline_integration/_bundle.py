@@ -9,7 +9,7 @@ import stat
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from pydantic import BaseModel, ValidationError
 
@@ -128,33 +128,28 @@ def parse_pipeline_result(content: bytes) -> PipelineIntegrationResult:
 
 def validate_bundle(bundle_root: Path) -> PipelineIntegrationResult:
     """Validate the complete archive candidate against its authoritative result."""
-    result, _, _ = validate_bundle_documents(bundle_root)
-    return result
+    return validate_bundle_documents(bundle_root).result
 
 
 def deployment_manifest(bundle_root: Path) -> bytes | None:
-    """Return the YAML of the manifest CD applied in a valid bundle, if any."""
-    _, _, evidence = validate_bundle_documents(bundle_root)
+    evidence = validate_bundle_documents(bundle_root).succeeded_stage_evidence["cd"]
     result = next(
-        (item for item in evidence["cd"] if isinstance(item, DeploymentResult)), None
+        (item for item in evidence if isinstance(item, DeploymentResult)), None
     )
     if result is None or result.manifest is None:
         return None
     return manifest_yaml(result.manifest)
 
 
+class ValidatedBundle(NamedTuple):
+    result: PipelineIntegrationResult
+    succeeded_domain_outputs: Mapping[str, BaseModel]
+    succeeded_stage_evidence: Mapping[StageName, Sequence[BaseModel]]
+
+
 def validate_bundle_documents(  # noqa: C901, PLR0912, PLR0915
     bundle_root: Path,
-) -> tuple[
-    PipelineIntegrationResult,
-    Mapping[str, BaseModel],
-    Mapping[StageName, Sequence[BaseModel]],
-]:
-    """Validate an archive candidate and return its cross-checked documents.
-
-    Only documents of succeeded Stages are returned: Domain outputs keyed by
-    slot, and evidence keyed by Stage.
-    """
+) -> ValidatedBundle:
     if not bundle_root.is_dir() or bundle_root.is_symlink():
         msg = "archive candidate root must be a directory"
         raise InputError(msg)
@@ -270,7 +265,7 @@ def validate_bundle_documents(  # noqa: C901, PLR0912, PLR0915
     if second_paths != paths or second_capture != captured:
         msg = "archive candidate changed after validation"
         raise InputError(msg)
-    return result, available_documents, accepted_evidence
+    return ValidatedBundle(result, available_documents, accepted_evidence)
 
 
 def assemble_bundle_staging(

@@ -25,6 +25,7 @@ from requests.adapters import HTTPAdapter
 
 from ._bundle import MAX_RESULT_BYTES, parse_pipeline_result, validate_bundle
 from ._handoff_contracts import (
+    DEPLOYMENT_MANIFEST_MAX_BYTES,
     DEPLOYMENT_MANIFEST_PATH,
     HANDOFF_CONTRACT_VERSION,
     HANDOFF_PARAMETERS,
@@ -37,7 +38,7 @@ from ._integration_code import STALE_IMAGE_REASON
 from ._json_input import canonical_json, parse_json
 from ._result_contracts import PIPELINE_RESULT_PATH, PipelineIntegrationResult
 from ._run_input import identify_committed_run
-from ._stage_registry import RUN_LIMITS, STAGES
+from ._stage_registry import RUN_LIMITS
 from ._stage_runtime import ExternalCancellation
 from ._yaml_input import InputError
 
@@ -64,9 +65,6 @@ HTTP_NOT_FOUND = 404
 JOB_COMPONENT = re.compile(r"^[A-Za-z0-9_.-]+$")
 POSITIVE_DECIMAL = re.compile(r"^[1-9][0-9]{0,19}$")
 JENKINS_RESULTS = {"SUCCESS", "FAILURE", "ABORTED", "UNSTABLE", "NOT_BUILT"}
-# The YAML of a manifest measured 1.15 times the manifest's JSON in the
-# Deployment result, so twice that result's grant bounds it.
-MAX_DEPLOYMENT_MANIFEST_BYTES = 2 * STAGES["cd"].grant.evidence[0].max_bytes
 type JsonObject = dict[str, object]
 
 
@@ -1109,7 +1107,7 @@ def _retrieve_bundle(  # noqa: C901
             _download(
                 client,
                 f"{artifact_base}{_quote_artifact_path(DEPLOYMENT_MANIFEST_PATH)}",
-                max_bytes=MAX_DEPLOYMENT_MANIFEST_BYTES,
+                max_bytes=DEPLOYMENT_MANIFEST_MAX_BYTES,
                 retrieval_started=retrieval_started,
             )
             if DEPLOYMENT_MANIFEST_PATH in remote_paths
