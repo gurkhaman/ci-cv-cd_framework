@@ -343,6 +343,7 @@ def test_compose_exposes_only_loopback_http_and_persists_only_named_state() -> N
         "buildkit-state",
         "pipeline-registry",
         "cv-engine-state",
+        "k3s-kubeconfig",
     }
     assert "50000" not in (JENKINS_ROOT / "compose.yaml").read_text()
 
