@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -47,8 +47,9 @@ if TYPE_CHECKING:
     from ._cd_deployment import Manifest, Pin
     from ._domain_contracts import DeploymentResult, PlacementRecord
 
-TEARDOWN_MARGIN_SECONDS = 60
 KUBECTL_TIMEOUT_SECONDS = 20
+EVIDENCE_SECONDS = 20
+TEARDOWN_MARGIN_SECONDS = 2 * KUBECTL_TIMEOUT_SECONDS + EVIDENCE_SECONDS
 POLL_SECONDS = 2
 STARTING = frozenset({"", "ContainerCreating", "PodInitializing"})
 WORK_LIMIT_DETAIL = "the work limit ran out before the settle window ended"
@@ -84,13 +85,23 @@ class KubectlError(Exception):
     pass
 
 
+class OutOfTimeError(KubectlError):
+    pass
+
+
 @dataclass(frozen=True)
 class Kubectl:
     binary: str
     cluster: Cluster
     scratch: Path
+    deadline: float
 
     def __call__(self, *arguments: str, stdin: bytes = b"") -> bytes:
+        command = f"kubectl {arguments[0]}"
+        left = self.deadline - time.monotonic()
+        if left <= 0:
+            msg = f"{command}: no time left to run it"
+            raise OutOfTimeError(msg)
         argv = [
             self.binary,
             "--kubeconfig",
@@ -102,7 +113,6 @@ class Kubectl:
             f"--request-timeout={KUBECTL_TIMEOUT_SECONDS}s",
             *arguments,
         ]
-        command = f"kubectl {arguments[0]}"
         try:
             completed = subprocess.run(  # noqa: S603
                 argv,
@@ -113,10 +123,16 @@ class Kubectl:
                     "LC_ALL": os.environ.get("LC_ALL", "C.UTF-8"),
                     "HOME": str(self.scratch),
                 },
-                timeout=KUBECTL_TIMEOUT_SECONDS + 10,
+                timeout=min(KUBECTL_TIMEOUT_SECONDS, left),
                 check=False,
             )
-        except (OSError, subprocess.TimeoutExpired) as error:
+        except subprocess.TimeoutExpired as error:
+            if left < KUBECTL_TIMEOUT_SECONDS:
+                msg = f"{command}: its deadline passed before it answered"
+                raise OutOfTimeError(msg) from error
+            msg = f"{command} did not answer within {KUBECTL_TIMEOUT_SECONDS} s"
+            raise KubectlError(msg) from error
+        except OSError as error:
             msg = f"{command}: {type(error).__name__}"
             raise KubectlError(msg) from error
         if completed.returncode != 0:
@@ -183,10 +199,12 @@ def deploy(invocation: Invocation, *, cluster: Cluster) -> Verdict:
         diagnostic.line("kubectl is not on PATH")
         return Verdict(CLUSTER_ERROR)
     with tempfile.TemporaryDirectory(prefix="sdi-cd-") as scratch:
-        kubectl = Kubectl(binary, cluster, Path(scratch))
+        kubectl = Kubectl(binary, cluster, Path(scratch), deadline)
+        ending = replace(kubectl, deadline=invocation.deadline_monotonic)
         waited = time.monotonic()
         until = min(deadline, waited + cluster.node_wait_seconds)
-        if not _nodes_ready(kubectl, {item.host for item in pins}, until):
+        hosts = {item.host for item in pins}
+        if not _nodes_ready(replace(kubectl, deadline=until), hosts):
             diagnostic.line(
                 f"no Ready node for every placed host after "
                 f"{round(time.monotonic() - waited)} s"
@@ -196,21 +214,30 @@ def deploy(invocation: Invocation, *, cluster: Cluster) -> Verdict:
         try:
             kubectl("create", "namespace", namespace)
             kubectl("apply", "-n", namespace, "-f", "-", stdin=manifest_yaml(manifest))
-            held = _pods_settle_before(kubectl, namespace, pins, deadline, diagnostic)
-            if held and deadline - time.monotonic() >= cluster.settle_seconds:
+            starting = _still_starting(kubectl, namespace, pins, diagnostic)
+            left = deadline - time.monotonic()
+            held = not starting and left >= cluster.settle_seconds
+            if held:
                 time.sleep(cluster.settle_seconds)
                 diagnostic.line(f"settled for {cluster.settle_seconds:g} s")
+            elif starting:
+                diagnostic.line(
+                    "the work limit ran out in the wait for Running pods: "
+                    + ", ".join(sorted(starting))
+                )
             else:
-                held = False
-                diagnostic.line("the work limit cut the settle window short")
-            records = judge(pins, kubectl("get", "pods", "-n", namespace, "-o", "json"))
+                diagnostic.line(
+                    f"the work limit left {left:.0f} s, short of the "
+                    f"{cluster.settle_seconds:g} s settle window"
+                )
+            records = judge(pins, ending("get", "pods", "-n", namespace, "-o", "json"))
         except KubectlError as error:
             diagnostic.line(str(error))
             return Verdict(CLUSTER_ERROR)
         finally:
-            _delete(kubectl, namespace, diagnostic)
+            _delete(ending, namespace, diagnostic)
     if not held:
-        records = tuple(_cut(item) for item in records)
+        records = tuple(_cut(item, starting) for item in records)
     return _verdict(diagnostic, deployment_result(inputs, records, manifest))
 
 
@@ -245,9 +272,9 @@ def _read(invocation: Invocation) -> CdInputs:
     )
 
 
-def _nodes_ready(kubectl: Kubectl, hosts: set[str], until: float) -> bool:
+def _nodes_ready(kubectl: Kubectl, hosts: set[str]) -> bool:
     while not hosts <= _ready_hosts(kubectl):
-        if time.monotonic() + POLL_SECONDS > until:
+        if time.monotonic() + POLL_SECONDS > kubectl.deadline:
             return False
         time.sleep(POLL_SECONDS)
     return True
@@ -272,31 +299,35 @@ def _ready_hosts(kubectl: Kubectl) -> set[str]:
     }
 
 
-def _pods_settle_before(
-    kubectl: Kubectl,
-    namespace: str,
-    pins: Sequence[Pin],
-    deadline: float,
-    diagnostic: Diagnostic,
-) -> bool:
+def _still_starting(
+    kubectl: Kubectl, namespace: str, pins: Sequence[Pin], diagnostic: Diagnostic
+) -> frozenset[str]:
     started = time.monotonic()
     running: set[str] = set()
-    services = {item.service_id for item in pins}
+    services = frozenset(item.service_id for item in pins)
+    starting = services
     while True:
-        pods = _List.model_validate_json(
-            kubectl("get", "pods", "-n", namespace, "-o", "json")
-        ).items
+        try:
+            pods = _List.model_validate_json(
+                kubectl("get", "pods", "-n", namespace, "-o", "json")
+            ).items
+        except OutOfTimeError as error:
+            diagnostic.line(str(error))
+            return starting
         for pod in pods:
             service = pod.metadata.labels.get(SERVICE_LABEL, "")
             if pod.status.phase == "Running" and service not in running:
                 running.add(service)
                 elapsed = round(time.monotonic() - started)
                 diagnostic.line(f"{service}: Running after {elapsed} s")
-        present = {pod.metadata.labels.get(SERVICE_LABEL) for pod in pods}
-        if services <= present and all(_settled(pod) for pod in pods):
-            return True
-        if time.monotonic() + POLL_SECONDS > deadline:
-            return False
+        present = {pod.metadata.labels.get(SERVICE_LABEL, "") for pod in pods}
+        starting = (services - present) | {
+            pod.metadata.labels.get(SERVICE_LABEL, "")
+            for pod in pods
+            if not _settled(pod)
+        }
+        if not starting or time.monotonic() + POLL_SECONDS > kubectl.deadline:
+            return starting
         time.sleep(POLL_SECONDS)
 
 
@@ -322,11 +353,13 @@ def _delete(kubectl: Kubectl, namespace: str, diagnostic: Diagnostic) -> None:
         diagnostic.line(f"the namespace delete failed: {error}")
 
 
-def _cut(record: DeployedPlacement | FailedPlacement) -> FailedPlacement:
-    if isinstance(record, FailedPlacement):
+def _cut(
+    record: DeployedPlacement | FailedPlacement, starting: frozenset[str]
+) -> FailedPlacement:
+    if isinstance(record, FailedPlacement) and record.service_id not in starting:
         return record
     return FailedPlacement.model_validate(
-        record.model_dump(mode="json")
+        record.model_dump(mode="json", exclude_none=True)
         | {"status": "failed", "detail": WORK_LIMIT_DETAIL}
     )
 
