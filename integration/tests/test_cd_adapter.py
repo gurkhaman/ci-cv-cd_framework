@@ -1,0 +1,265 @@
+"""The CD adapter's run sequence against a kubectl that replays recorded state.
+
+The fake kubectl logs each call and answers `get nodes` and `get pods` with
+JSON shaped like a K3s v1.33.5 reply. It proves the calls the adapter makes and
+the bounds it keeps, not that it drives a cluster; the k3s tier proves that.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+import uuid
+from functools import partial
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+import pytest
+
+from sdi_pipeline_integration._adapter_kit import serve
+from sdi_pipeline_integration._cd_adapter import (
+    DEADLINE_MARGIN_SECONDS,
+    WORK_LIMIT_DETAIL,
+    Cluster,
+    deploy,
+)
+from sdi_pipeline_integration._cd_deployment import CLUSTER_HOSTS, manifest_yaml
+
+from ._cd_stage import CdStage, built
+
+if TYPE_CHECKING:
+    from collections.abc import Collection
+
+SERVER = "https://k3s-xycar:6443"
+AMD64 = f"sha256:{'a' * 64}"
+ARM64 = f"sha256:{'b' * 64}"
+PLACED = {"cd-waffle": "waffle", "cd-xycar": "xycar"}
+DIGESTS = {"cd-waffle": ARM64, "cd-xycar": AMD64}
+FAKE_KUBECTL = """#!{python}
+import json, os, sys
+from pathlib import Path
+
+state = Path({state!r})
+arguments = sys.argv[1:]
+call = {{"argv": arguments, "environment": sorted(os.environ)}}
+call["stdin"] = sys.stdin.read()
+with (state / "calls.jsonl").open("a") as log:
+    log.write(json.dumps(call) + "\\n")
+verb = arguments[7]
+if (state / f"{{verb}}.fails").exists():
+    sys.stderr.write("error: the fake cluster refused\\n")
+    sys.exit(1)
+for kind in ("nodes", "pods"):
+    if kind in arguments:
+        sys.stdout.write((state / f"{{kind}}.json").read_text())
+"""
+
+
+def _nodes(ready: Collection[str]) -> dict[str, Any]:
+    return {
+        "items": [
+            {
+                "metadata": {"name": host, "labels": {"sdi/host": host}},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            }
+            for host in ready
+        ]
+    }
+
+
+def _pods() -> dict[str, Any]:
+    return {
+        "items": [
+            {
+                "metadata": {"labels": {"sdi/service": service_id}},
+                "spec": {"nodeName": host},
+                "status": {
+                    "phase": "Running",
+                    "containerStatuses": [
+                        {
+                            "imageID": (
+                                f"registry:5000/sdi/{service_id}@{DIGESTS[service_id]}"
+                            ),
+                            "restartCount": 0,
+                            "state": {"running": {"startedAt": "2026-10-24T00:00:00Z"}},
+                            "lastState": {},
+                        }
+                    ],
+                },
+            }
+            for service_id, host in PLACED.items()
+        ]
+    }
+
+
+class _FakeCluster:
+    def __init__(self, root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.root = root
+        root.mkdir()
+        binary = root / "bin" / "kubectl"
+        binary.parent.mkdir()
+        binary.write_text(FAKE_KUBECTL.format(python=sys.executable, state=str(root)))
+        binary.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{binary.parent}:/usr/bin:/bin")
+        self.answer(nodes=_nodes(CLUSTER_HOSTS), pods=_pods())
+
+    def answer(self, **replies: dict[str, Any]) -> None:
+        for kind, reply in replies.items():
+            (self.root / f"{kind}.json").write_text(json.dumps(reply))
+
+    def refuse(self, verb: str) -> None:
+        (self.root / f"{verb}.fails").touch()
+
+    def cluster(self, **timing: float) -> Cluster:
+        return Cluster(SERVER, self.root / "kubeconfig.yaml", **timing)
+
+    def calls(self) -> list[dict[str, Any]]:
+        log = self.root / "calls.jsonl"
+        if not log.exists():
+            return []
+        return [json.loads(line) for line in log.read_text().splitlines()]
+
+
+@pytest.fixture
+def fake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _FakeCluster:
+    return _FakeCluster(tmp_path / "fake", monkeypatch)
+
+
+def _stage(tmp_path: Path, **request: int) -> CdStage:
+    stage = CdStage(tmp_path / "stage", str(uuid.uuid4()))
+    stage.write(
+        PLACED,
+        [built(service_id, {"amd64": AMD64, "arm64": ARM64}) for service_id in PLACED],
+        profile="waffle-xycar-amd64",
+        **request,
+    )
+    return stage
+
+
+def test_cd_every_kubectl_call_names_the_cluster_and_a_cache_directory(
+    tmp_path: Path, fake: _FakeCluster
+) -> None:
+    stage = _stage(tmp_path)
+
+    run = stage.run(
+        serve("cd", partial(deploy, cluster=fake.cluster(settle_seconds=0)))
+    )
+
+    assert run.evidence is not None
+    assert run.evidence.domain_outcome == "succeeded"
+    calls = fake.calls()
+    assert [call["argv"][7] for call in calls] == [
+        "get",
+        "create",
+        "apply",
+        "get",
+        "get",
+        "delete",
+    ]
+    for call in calls:
+        argv = call["argv"]
+        assert argv[:4] == [
+            "--kubeconfig",
+            str(fake.root / "kubeconfig.yaml"),
+            "--server",
+            SERVER,
+        ]
+        assert argv[4] == "--cache-dir"
+        assert Path(argv[5]).is_absolute()
+        assert call["environment"] == ["HOME", "LC_ALL", "PATH"]
+    assert len({call["argv"][5] for call in calls}) == 1
+    apply = calls[2]
+    assert apply["argv"][8:] == ["-n", stage.namespace, "-f", "-"]
+    assert apply["stdin"].encode() == manifest_yaml(run.evidence.manifest or {})
+    assert calls[-1]["argv"][8:] == [
+        "namespace",
+        stage.namespace,
+        "--wait=false",
+        "--ignore-not-found",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("slack", "outcome"), [(3, "succeeded"), (-3, "failed")], ids=["fits", "cut"]
+)
+def test_cd_the_adapter_deadline_is_the_invocation_deadline_less_the_margin(
+    tmp_path: Path, fake: _FakeCluster, slack: int, outcome: str
+) -> None:
+    settle = 5
+    stage = _stage(
+        tmp_path, work_limit_seconds=DEADLINE_MARGIN_SECONDS + settle + slack
+    )
+
+    run = stage.run(
+        serve("cd", partial(deploy, cluster=fake.cluster(settle_seconds=settle)))
+    )
+
+    assert run.response.execution_conclusion == "succeeded"
+    assert run.evidence is not None
+    assert run.evidence.domain_outcome == outcome
+    if outcome == "failed":
+        assert {item.status for item in run.evidence.placements} == {"failed"}
+        assert {getattr(item, "detail", None) for item in run.evidence.placements} == {
+            WORK_LIMIT_DETAIL
+        }
+        assert "the work limit cut the settle window short" in run.diagnostic
+    assert fake.calls()[-1]["argv"][7] == "delete"
+
+
+def test_cd_a_placement_gap_is_not_evaluated_without_calling_kubectl(
+    tmp_path: Path, fake: _FakeCluster
+) -> None:
+    stage = CdStage(tmp_path / "stage", str(uuid.uuid4()))
+    stage.write(
+        PLACED,
+        [
+            built("cd-waffle", {"amd64": AMD64}),
+            built("cd-xycar", {"amd64": AMD64}),
+        ],
+        profile="waffle-xycar-amd64",
+    )
+
+    run = stage.run(serve("cd", partial(deploy, cluster=fake.cluster())))
+
+    assert fake.calls() == []
+    assert run.response.domain_outcome == "not_evaluated"
+    assert run.evidence is not None
+    assert run.evidence.manifest is None
+    assert [
+        (item.service_id, getattr(item, "reason", None))
+        for item in run.evidence.placements
+    ] == [("cd-waffle", "no-image-for-architecture"), ("cd-xycar", "blocked")]
+
+
+def test_cd_hosts_without_a_ready_node_fail_execution_without_evidence(
+    tmp_path: Path, fake: _FakeCluster
+) -> None:
+    fake.answer(nodes=_nodes(["xycar"]))
+    stage = _stage(tmp_path)
+
+    run = stage.run(
+        serve("cd", partial(deploy, cluster=fake.cluster(node_wait_seconds=1)))
+    )
+
+    assert run.response.execution_conclusion == "failed"
+    assert run.response.reason is not None
+    assert run.response.reason.code == "sdi.cd.nodes-not-ready"
+    assert run.evidence is None
+    assert "no Ready node for every placed host" in run.diagnostic
+    assert {call["argv"][7] for call in fake.calls()} == {"get"}
+
+
+def test_cd_a_kubectl_failure_is_machinery_and_still_deletes_the_namespace(
+    tmp_path: Path, fake: _FakeCluster
+) -> None:
+    fake.refuse("apply")
+    stage = _stage(tmp_path)
+
+    run = stage.run(serve("cd", partial(deploy, cluster=fake.cluster())))
+
+    assert run.response.execution_conclusion == "failed"
+    assert run.response.reason is not None
+    assert run.response.reason.code == "sdi.cd.cluster-error"
+    assert run.evidence is None
+    assert "error: the fake cluster refused" in run.diagnostic
+    assert [call["argv"][7] for call in fake.calls()][-2:] == ["apply", "delete"]
