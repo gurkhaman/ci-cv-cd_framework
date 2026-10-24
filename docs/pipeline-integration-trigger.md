@@ -158,7 +158,8 @@ The artifact is retained for 90 days, subject to any shorter repository or
 organization retention cap. A completed run with a returned result contains
 `bundle/pipeline-integration-result.json`, every checksummed declared Domain
 output and diagnostic beneath `bundle/stages/`, and
-`handoff-receipt.json`. A failure before result retrieval can publish a
+`handoff-receipt.json`. When CD applied a Kubernetes manifest, the artifact
+also contains it as `deployment-manifest.yaml`. A failure before result retrieval can publish a
 receipt-only artifact under the same Execution-ID-qualified name.
 
 Revalidate a downloaded complete bundle independently:
@@ -169,7 +170,8 @@ uv run --frozen --project integration sdi-integration validate-bundle \
 ```
 
 Write the Kubernetes manifest that CD applied from a downloaded bundle. The
-command validates the bundle first. When CD was not evaluated, skipped, or
+result equals the artifact's `deployment-manifest.yaml`. The command validates
+the bundle first. When CD was not evaluated, skipped, or
 failed before it recorded a result, it writes nothing and exits 0:
 
 ```sh acceptance=deployment-manifest
