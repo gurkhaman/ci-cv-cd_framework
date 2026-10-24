@@ -71,7 +71,7 @@ class Pin:
 
 @dataclass(frozen=True)
 class Gap:
-    """The not-evaluated records of a run that a pipeline gap kept off the cluster."""
+    """The not-evaluated records of a run where a placement failed its checks."""
 
     placements: tuple[UndeployedPlacement, ...]
 
@@ -160,7 +160,7 @@ def manifest_yaml(manifest: Mapping[str, JsonValue]) -> bytes:
     yaml.default_flow_style = False
     # kubectl reads YAML 1.1, where a bare yes, on, or n is a boolean, so the
     # 1.1 resolver decides what to quote. kubectl splits documents on ---, so
-    # the directive that comes with it is dropped.
+    # the %YAML 1.1 directive and --- that ruamel then emits are stripped.
     yaml.version = (1, 1)
     yaml.representer.sort_base_mapping_type_on_output = False
     stream = io.StringIO()
