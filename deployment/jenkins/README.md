@@ -498,12 +498,14 @@ controller's Pipeline-script checkout keeps its repository between builds and
 fetches only new commits. Accepted envelopes and their declared bounded files are
 the only cross-agent Stage data, transferred through Execution-ID-qualified
 Jenkins stashes. The integration agent validates the complete bundle before
-archiving all and only its declared files from the current build.
+archiving all and only its declared files from the current build. When CD
+applied a manifest, the agent then writes `deployment-manifest.yaml` from the
+validated bundle and archives it outside the bundle.
 
 The pipeline uses the Stage registry's 10, 30, 45, and 15 minute Stage work
 limits, a 90-minute Jenkins run limit, and a two-minute finalization limit. A
-handled machinery failure or a CV `failed` verdict archives its structured
-result before Jenkins ends in `FAILURE`; any other contract-valid negative Domain
+handled machinery failure, a CV `failed` verdict, or a CD `failed` outcome
+archives its structured result before Jenkins ends in `FAILURE`; any other contract-valid negative Domain
 outcome can remain `SUCCESS`.
 External cancellation propagates immediately, cleans active workspaces and
 process trees, ends as `ABORTED`, and does not manufacture a result.

@@ -515,6 +515,26 @@ def test_root_pipeline_is_a_thin_scheduler_over_public_cli_operations() -> None:
     assert "lastBuild" not in pipeline
 
 
+def test_cd_finalize_archives_the_deployment_manifest_after_the_bundle() -> None:
+    pipeline = (REPOSITORY_ROOT / "Jenkinsfile").read_text()
+    finalize = pipeline[pipeline.index("stage('Finalize and archive')") :]
+    steps = (
+        "sdi-integration bundle-conclusion",
+        "artifacts: '**/*'",
+        "sdi-integration deployment-manifest \\\n"
+        "  --bundle-root bundle \\\n"
+        "  --output deployment-manifest.yaml\n",
+        "artifacts: 'deployment-manifest.yaml',\n"
+        "                            allowEmptyArchive: true,",
+        "if (conclusion == 1)",
+    )
+
+    positions = [finalize.index(step) for step in steps]
+
+    assert positions == sorted(positions)
+    assert pipeline.count("deployment-manifest.yaml") == 2
+
+
 def test_only_the_stack_refusal_names_a_limit_setting() -> None:
     listed = subprocess.run(
         [

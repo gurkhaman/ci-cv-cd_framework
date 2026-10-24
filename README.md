@@ -65,7 +65,8 @@ image-build Stage pushes one image per placement to the stack-local pipeline
 registry. The CV Stage then runs the composition from those images in one
 headless Gazebo scenario and publishes its verdict as Validation evidence. The
 CD Stage deploys the composition to the stack's K3s stand-in cluster and
-publishes a Deployment result.
+publishes a Deployment result, and Jenkins archives the applied Kubernetes
+manifest as `deployment-manifest.yaml`.
 `dispatch-local` keeps the image-build and CD Fixtures, so a local run with a
 successful composition ends with image build skipped and CV and CD blocked.
 Fixture output is not Validation evidence, Domain success,

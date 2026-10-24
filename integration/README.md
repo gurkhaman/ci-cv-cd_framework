@@ -414,7 +414,7 @@ six-combination verdict.
 
 ## Jenkins Pipeline Operations
 
-The root `Jenkinsfile` composes five public CLI operations rather than parsing or
+The root `Jenkinsfile` composes six public CLI operations rather than parsing or
 constructing contracts in Groovy:
 
 - `preflight-jenkins-run` takes `--integration-node` and
@@ -440,6 +440,11 @@ constructing contracts in Groovy:
   when CD failed to deploy it.
   Any other valid negative Domain outcome, and a composition that CV did not
   evaluate, keeps it green. `dispatch-local` exits with the same colour.
+- `deployment-manifest` runs after the bundle is archived. It validates the
+  bundle again and writes `deployment-manifest.yaml` from the CD Deployment
+  result's manifest, with the same YAML function the CD adapter applies. Jenkins
+  archives the file outside the bundle. When CD was not evaluated, skipped, or
+  failed as machinery, the command writes nothing.
 
 A digest mismatch exits with status 4 and the reason
 `sdi.agent.stale-image`, naming the stale agents, before any Stage work. When
