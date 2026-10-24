@@ -233,8 +233,6 @@ def _check_cd(documents: StageDocuments) -> None:
         if isinstance(record, BuiltImageRecord)
         for platform in record.platforms
     }
-    # A bundle carries no target profile, so only an attempt knows each
-    # host's architecture.
     for item in result.placements:
         host = hosts.get(item.service_id)
         if isinstance(item, UndeployedPlacement) or host is None:

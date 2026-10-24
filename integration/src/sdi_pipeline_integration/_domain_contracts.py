@@ -494,7 +494,6 @@ class ValidationEvidence(ContractModel):
         return self
 
 
-# Kubernetes reports an image as an optional repository and its digest.
 KubernetesImageId = Annotated[
     str,
     StringConstraints(
@@ -516,11 +515,9 @@ DeploymentGap = Literal[
     "host-not-in-cluster",
     "blocked",
 ]
-DEPLOYMENT_GAPS: tuple[DeploymentGap, ...] = get_args(DeploymentGap)
 
 
 def image_digest(image: str) -> str:
-    """Return the digest part of a pinned image or a Kubernetes image id."""
     return image.rpartition("@")[2]
 
 
@@ -564,7 +561,6 @@ class FailedPlacement(ContractModel):
     @model_validator(mode="before")
     @classmethod
     def reject_explicit_unknowns(cls, data: object) -> object:
-        """Require unobserved facts to be omitted rather than null."""
         return reject_explicit_nulls(
             data, ("node", "image", "image_id", "phase", "restart_count")
         )
@@ -635,7 +631,6 @@ class DeploymentResult(ContractModel):
     @model_validator(mode="before")
     @classmethod
     def reject_explicit_unknowns(cls, data: object) -> object:
-        """Require an absent manifest to be omitted rather than null."""
         return reject_explicit_nulls(data, ("manifest",))
 
     @model_validator(mode="after")

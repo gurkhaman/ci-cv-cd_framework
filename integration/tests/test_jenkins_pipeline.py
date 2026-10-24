@@ -810,7 +810,6 @@ def _select_evidence_adapter(
     evidence: dict[str, Any] | None,
     reason: dict[str, str] | None,
 ) -> None:
-    """Select an implemented adapter that publishes the Stage's evidence."""
     (grant,) = STAGES[stage].grant.evidence
     adapter = repository.parent / f"scripted-{stage}-adapter"
     write_scripted_adapter(
