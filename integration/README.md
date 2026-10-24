@@ -532,8 +532,10 @@ window when possible.
 queue and build facts become known. It contains relative Jenkins references,
 never the private base URL or credentials. A `SUCCESS` build is accepted only
 after complete schema, Execution-ID, path, size, digest, and undeclared-file
-validation. A Jenkins `FAILURE` can still return a valid diagnostic bundle, but
-the handoff exits unsuccessfully. `ABORTED`, missing, malformed, mismatched, or
+validation. The one artifact allowed outside the bundle is
+`deployment-manifest.yaml`, at most 128 KiB, which the handoff writes beside the
+bundle root. Any other extra artifact fails the handoff. A Jenkins `FAILURE` can
+still return a valid diagnostic bundle, but the handoff exits unsuccessfully. `ABORTED`, missing, malformed, mismatched, or
 incomplete evidence likewise fails with the available partial receipt.
 
 The workflow captures the command's result record rather than printing it into

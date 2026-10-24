@@ -31,6 +31,7 @@ HANDOFF_PARAMETERS = (
     "GITHUB_RUN_ATTEMPT",
 )
 HANDOFF_RECEIPT_PATH = "handoff-receipt.json"
+DEPLOYMENT_MANIFEST_PATH = "deployment-manifest.yaml"
 
 type HandoffPhase = Literal[
     "validating",

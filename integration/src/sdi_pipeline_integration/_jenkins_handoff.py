@@ -25,6 +25,7 @@ from requests.adapters import HTTPAdapter
 
 from ._bundle import MAX_RESULT_BYTES, parse_pipeline_result, validate_bundle
 from ._handoff_contracts import (
+    DEPLOYMENT_MANIFEST_PATH,
     HANDOFF_CONTRACT_VERSION,
     HANDOFF_PARAMETERS,
     HANDOFF_RECEIPT_SCHEMA_VERSION,
@@ -36,7 +37,7 @@ from ._integration_code import STALE_IMAGE_REASON
 from ._json_input import canonical_json, parse_json
 from ._result_contracts import PIPELINE_RESULT_PATH, PipelineIntegrationResult
 from ._run_input import identify_committed_run
-from ._stage_registry import RUN_LIMITS
+from ._stage_registry import RUN_LIMITS, STAGES
 from ._stage_runtime import ExternalCancellation
 from ._yaml_input import InputError
 
@@ -63,6 +64,9 @@ HTTP_NOT_FOUND = 404
 JOB_COMPONENT = re.compile(r"^[A-Za-z0-9_.-]+$")
 POSITIVE_DECIMAL = re.compile(r"^[1-9][0-9]{0,19}$")
 JENKINS_RESULTS = {"SUCCESS", "FAILURE", "ABORTED", "UNSTABLE", "NOT_BUILT"}
+# The YAML of a manifest measured 1.15 times the manifest's JSON in the
+# Deployment result, so twice that result's grant bounds it.
+MAX_DEPLOYMENT_MANIFEST_BYTES = 2 * STAGES["cd"].grant.evidence[0].max_bytes
 type JsonObject = dict[str, object]
 
 
@@ -1074,7 +1078,7 @@ def _retrieve_bundle(  # noqa: C901
     if returned_identity != expected_identity:
         raise _failure("identity_mismatch", "retrieving")
     expected_paths = {PIPELINE_RESULT_PATH, *(item.path for item in result.artifacts)}
-    if remote_paths != expected_paths:
+    if remote_paths - {DEPLOYMENT_MANIFEST_PATH} != expected_paths:
         raise _failure("invalid_artifact", "retrieving")
     if bundle_root.exists() or bundle_root.is_symlink():
         msg = "bundle root must not already exist"
@@ -1101,7 +1105,19 @@ def _retrieve_bundle(  # noqa: C901
             raise _failure("invalid_artifact", "retrieving") from error
         if validated.execution_id != identified["execution_id"]:
             raise _failure("identity_mismatch", "retrieving")
+        manifest = (
+            _download(
+                client,
+                f"{artifact_base}{_quote_artifact_path(DEPLOYMENT_MANIFEST_PATH)}",
+                max_bytes=MAX_DEPLOYMENT_MANIFEST_BYTES,
+                retrieval_started=retrieval_started,
+            )
+            if DEPLOYMENT_MANIFEST_PATH in remote_paths
+            else None
+        )
         _ = staging.replace(bundle_root)
+        if manifest is not None:
+            _write_artifact(bundle_root.parent, DEPLOYMENT_MANIFEST_PATH, manifest)
     finally:
         if staging.exists():
             shutil.rmtree(staging, ignore_errors=True)
@@ -1206,8 +1222,9 @@ def handoff_jenkins(  # noqa: C901, PLR0913, PLR0915
                 run_request_path=run_request_path,
                 execution_id=execution_id,
             )
-            if bundle_root.exists() or bundle_root.is_symlink():
-                msg = "bundle root must not already exist"
+            outputs = (bundle_root, bundle_root.parent / DEPLOYMENT_MANIFEST_PATH)
+            if any(path.exists() or path.is_symlink() for path in outputs):
+                msg = "bundle root and the manifest beside it must not already exist"
                 raise InputError(msg)
         except (InputError, OSError, ValidationError):
             writer.fail(_failure("input_validation", "validating"))
