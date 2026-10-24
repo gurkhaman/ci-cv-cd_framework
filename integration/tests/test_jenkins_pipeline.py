@@ -73,7 +73,10 @@ def _repository(
     fixture_image_build: bool = False,
     service_repository: Path = FIXTURE_SERVICE_REPOSITORY,
 ) -> tuple[Path, str]:
-    """Commit the Stage inputs; a Fixture image-build completes the chain."""
+    """Commit the Stage inputs; a Fixture image-build completes the chain.
+
+    CD runs its Fixture, since the real adapter needs the stack's cluster.
+    """
     repository = tmp_path / "repository"
     repository.mkdir()
     _git(repository, "init", "--initial-branch=main")
@@ -93,8 +96,11 @@ def _repository(
     shutil.copytree(service_repository, repository / "service-repository")
     copy_baked_integration_code(repository)
     write_fixture_composition_descriptor(repository)
+    adapters = repository / "deployment/jenkins/adapters"
+    (adapters / "cd-v1.yaml").write_bytes(
+        (adapters / "cd-fixture-v1.yaml").read_bytes()
+    )
     if fixture_image_build:
-        adapters = repository / "deployment/jenkins/adapters"
         (adapters / "image-build-v1.yaml").write_bytes(
             (adapters / "image-build-fixture-v1.yaml").read_bytes()
         )

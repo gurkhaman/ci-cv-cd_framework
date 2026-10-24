@@ -260,8 +260,7 @@ whose digest differs from the deployment schema's, and the placement limit is
 48. The builder, registry and arm64 checks run only when some placement is
 buildable, so a run with nothing to build never touches the builder. In Jenkins,
 a successful composition is followed by a real image build, after which CV runs
-the composition from the pushed images and the CD Fixture skips with
-`sdi.dependency.implemented-evidence`. A runtime hard timeout kills the adapter
+the composition from the pushed images and CD deploys it. A runtime hard timeout kills the adapter
 and its clients together and leaves its scratch directory on the agent's `/tmp`
 tmpfs until the agent restarts.
 
@@ -333,6 +332,51 @@ share the space that is left.
 
 Locally, CV never runs. After a successful composition it is blocked, and the
 Fixture chain's output makes it skip with `sdi.dependency.fixture-evidence`.
+
+## CD Adapter
+
+`sdi-cd-adapter` runs only in Jenkins, on the `cd` agent, against the stack's
+K3s stand-in cluster at `https://k3s-xycar:6443`. It reads the kubeconfig that
+the K3s server writes into the volume mounted at `/etc/sdi/k3s`. It deploys one
+composition in one attempt. A failed CV verdict skips CD, and a CV that did not
+evaluate the composition lets CD run.
+
+Before it contacts the cluster, the adapter checks every placement. For each
+placement it records the first of these reasons:
+
+1. The placement is unresolved: `unresolved-placement`.
+2. The image-build result records no built image: `image-not-built`.
+3. The built image has no platform for the profile host's architecture:
+   `no-image-for-architecture`.
+4. The host is not one of the cluster's nodes `burger`, `waffle`, `orin`, and
+   `xycar`: `host-not-in-cluster`.
+
+Any reason makes the deployment not evaluated, and every other placement is
+`blocked`.
+
+When every placement passes, the adapter renders one Deployment per placement,
+pinned to the per-platform digest for its host's architecture. It waits up to
+120 s for a Ready node for each host, creates the namespace
+`sdi-<execution id>`, applies the manifest, waits for each pod to run, and then
+waits a 60 s settle window. A placement is `deployed` when its pod runs on its
+host's node with the pinned digest and has not restarted. Otherwise the
+placement fails, and its `detail` gives the Kubernetes reason, such as
+`ImagePullBackOff` or `CrashLoopBackOff`. The adapter deletes the namespace on
+every path. Images for arm64 hosts run on the amd64 nodes under the host's
+QEMU emulation.
+
+| Outcome code | Execution | Domain outcome | Category | Published |
+| --- | --- | --- | --- | --- |
+| `sdi.cd.succeeded` | succeeded | succeeded | no reason | Deployment result |
+| `sdi.cd.failed` | succeeded | failed | domain | Deployment result |
+| `sdi.cd.not-evaluated` | succeeded | not evaluated | dependency | Deployment result |
+| `sdi.cd.nodes-not-ready` | failed | not evaluated | dependency | diagnostic |
+| `sdi.cd.cluster-error` | failed | not evaluated | dependency | diagnostic |
+
+A failed deployment turns the run red, and a deployment that is not evaluated
+leaves it green. The Deployment result records the applied manifest whenever
+the adapter applied one. Locally, CD runs its Fixture, which publishes no
+evidence.
 
 ## Dispatch A Local Run
 

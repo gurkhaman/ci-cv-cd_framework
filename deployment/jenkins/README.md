@@ -6,7 +6,7 @@ and is started only on demand. One dedicated `integration` agent performs only
 integration work; four independently replaceable agents provide the
 `composition`, `image-build`, `cv`, and `cd` scheduling labels. The root pipeline
 executes one submitted run across those five agents: implemented composition,
-image build and CV, then the CD Fixture. The image-build adapter uses a BuildKit
+image build, CV, and CD. The image-build adapter uses a BuildKit
 builder and a pipeline registry, reachable only from the `image-build` agent.
 The CV adapter uses a `docker:dind` CV engine, reachable only from the `cv`
 agent. A four-node K3s stand-in cluster for CD runs beside them, and its API
