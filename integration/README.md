@@ -10,13 +10,13 @@ environment.
 
 Tests marked `live` call a real model provider; tests marked `slow` wait out a
 real work limit or deadline. `scripts/verify` runs every test except the
-`cv_engine` tests: the non-`slow` tests in parallel, then the `slow` tests
+`cv_engine` and `k3s` tests: the non-`slow` tests in parallel, then the `slow` tests
 serially, because parallel load can push their timing past its bounds. For a
 fast check while developing, run from this directory:
 
 ```sh
 uv sync --frozen --all-groups
-uv run pytest -m "not live and not slow and not cv_engine" -n auto --dist worksteal
+uv run pytest -m "not live and not slow and not cv_engine and not k3s" -n auto --dist worksteal
 ```
 
 Tests marked `cv_engine` run real S-04 compositions in a Docker-in-Docker
@@ -30,6 +30,22 @@ uv run pytest -m cv_engine -v
 
 When those tests are selected and the engine or registry does not answer, the
 session stops with a non-zero exit before any test runs.
+
+Tests marked `k3s` run the CD adapter, `sdi-cd-adapter`, from the host against
+a K3s stand-in cluster built from the K3s services in
+`deployment/jenkins/compose.yaml`. They use the host `kubectl`, and they copy
+their images into the cluster's registry with `docker buildx imagetools`. Set
+`SDI_K3S_SERVER_URL` to the API server, `SDI_K3S_KUBECONFIG` to a kubeconfig
+for it, and `SDI_K3S_REGISTRY_URL` to the registry that the nodes see as
+`registry:5000`:
+
+```sh
+uv run pytest -m k3s -v
+```
+
+When those tests are selected and a variable is missing, or the API server or
+the registry does not answer, the session stops with a non-zero exit before
+any test runs.
 
 ## Identify A Committed Run
 
