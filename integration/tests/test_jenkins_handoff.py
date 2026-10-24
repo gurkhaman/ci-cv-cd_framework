@@ -20,9 +20,11 @@ import pytest
 import requests
 from urllib3.connectionpool import HTTPConnectionPool
 
-from sdi_pipeline_integration._handoff_contracts import DEPLOYMENT_MANIFEST_PATH
+from sdi_pipeline_integration._handoff_contracts import (
+    DEPLOYMENT_MANIFEST_MAX_BYTES,
+    DEPLOYMENT_MANIFEST_PATH,
+)
 from sdi_pipeline_integration._jenkins_handoff import (
-    MAX_DEPLOYMENT_MANIFEST_BYTES,
     HandoffError,
     _JenkinsClient,  # pyright: ignore[reportPrivateUsage]
     _preflight,  # pyright: ignore[reportPrivateUsage]
@@ -884,7 +886,7 @@ def test_cd_handoff_accepts_an_optional_deployment_manifest_beside_the_bundle(
         {"other.yaml": MANIFEST},
         {f"stages/cd/{DEPLOYMENT_MANIFEST_PATH}": MANIFEST},
         {DEPLOYMENT_MANIFEST_PATH: MANIFEST, "other.yaml": MANIFEST},
-        {DEPLOYMENT_MANIFEST_PATH: b"#" * (MAX_DEPLOYMENT_MANIFEST_BYTES + 1)},
+        {DEPLOYMENT_MANIFEST_PATH: b"#" * (DEPLOYMENT_MANIFEST_MAX_BYTES + 1)},
     ],
     ids=["other-file", "manifest-inside-the-bundle", "manifest-and-other", "oversized"],
 )
