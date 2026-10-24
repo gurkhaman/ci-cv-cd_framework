@@ -596,7 +596,8 @@ def test_restore_verifies_before_writing_an_empty_volume(tmp_path: Path) -> None
     builder_cleanup = operations.index(
         f"docker volume rm --force {staging_project}_buildkit-state "
         f"{staging_project}_pipeline-registry "
-        f"{staging_project}_cv-engine-state"
+        f"{staging_project}_cv-engine-state "
+        f"{staging_project}_k3s-kubeconfig"
     )
     assert staging_stop < builder_cleanup
     runner_configs = Path(f"{restore_log}.runners").read_text().splitlines()
