@@ -240,7 +240,10 @@ def test_cd_a_composition_with_an_arm64_host_deploys_and_passes(
     manifest = cast("dict[str, list[dict[str, Any]]]", evidence.manifest)
     for item in manifest["items"]:
         name = item["metadata"]["name"]
-        applied[name]["metadata"].pop("namespace", None)
+        # kubectl records an empty annotations map, and may record the namespace.
+        metadata = applied[name]["metadata"]
+        metadata.pop("namespace", None)
+        assert metadata.pop("annotations") == {}
         assert applied[name] == item
     _assert_namespace_gone(cluster, stage.namespace)
 
