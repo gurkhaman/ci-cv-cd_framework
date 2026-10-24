@@ -85,10 +85,14 @@ def _write_fake_deployment_tools(fake_bin: Path) -> None:
         "esac; done; "
         f"printf '%s\\n' '{'a' * 64}' ;;\n"
         "  'network inspect --format '*) cat \"$DOCKER_LOG.network-owner\" ;;\n"
+        "  *' rm --force --stop --volumes k3s-'*) : > \"$DOCKER_LOG.k3s-gone\" ;;\n"
         "  *' ps --all --quiet') "
-        "[ \"${FORCE_KILL:-}\" != 1 ] || printf 'forced-container\\n' ;;\n"
+        "[ \"${FORCE_KILL:-}\" != 1 ] || printf 'forced-container\\n'; "
+        '[ -z "${FAKE_K3S_UP:-}" ] || [ -e "$DOCKER_LOG.k3s-gone" ] || '
+        "printf 'k3s-node\\n' ;;\n"
         "  'inspect --format {{.State.ExitCode}} forced-container') "
         "printf '137\\n' ;;\n"
+        "  'inspect --format {{.State.ExitCode}} k3s-node') printf '137\\n' ;;\n"
         "  'image inspect --format {{json .Config.Volumes}}'*) "
         "printf '%s\\n' \"${FAKE_AGENT_VOLUMES:-null}\" ;;\n"
         "  'image inspect --format {{.Id}} '*) "
@@ -343,6 +347,7 @@ def test_compose_exposes_only_loopback_http_and_persists_only_named_state() -> N
         "buildkit-state",
         "pipeline-registry",
         "cv-engine-state",
+        "k3s-kubeconfig",
     }
     assert "50000" not in (JENKINS_ROOT / "compose.yaml").read_text()
 
@@ -1355,6 +1360,39 @@ def test_start_warms_the_cv_engine_before_any_run_can_reach_it(
     assert calls.index(WARM_UP) < calls.index("rm --force sdi-jenkins-cv-warm")
     assert calls.index("rm --force sdi-jenkins-cv-warm") < calls.index(WARM)
     assert calls.index(WARM) < runner_check < calls.index(FULL_UP)
+
+
+K3S_RM = "rm --force --stop --volumes k3s-xycar k3s-burger k3s-waffle k3s-orin"
+
+
+def test_start_replaces_the_k3s_cluster_after_the_runner_check(
+    tmp_path: Path,
+) -> None:
+    stack = _BuiltStack(tmp_path)
+
+    completed = stack.run("start")
+
+    assert completed.returncode == 0, completed.stderr
+    calls = stack.calls()
+    runner_check = next(
+        index for index, call in enumerate(calls) if call.startswith("ps ")
+    )
+    assert runner_check < calls.index(K3S_RM) < calls.index(FULL_UP)
+    assert (
+        "pull --quiet --policy missing buildkitd registry cv-engine"
+        " k3s-xycar k3s-burger k3s-waffle k3s-orin"
+    ) in calls
+
+
+def test_stop_removes_the_k3s_cluster_before_it_checks_for_forced_kills(
+    tmp_path: Path,
+) -> None:
+    stack = _BuiltStack(tmp_path)
+
+    completed = stack.run("stop", FAKE_K3S_UP="1")
+
+    assert completed.returncode == 0, completed.stderr
+    assert K3S_RM in stack.calls()
 
 
 def test_start_without_the_cv_warm_leaves_the_engine_cold(tmp_path: Path) -> None:
