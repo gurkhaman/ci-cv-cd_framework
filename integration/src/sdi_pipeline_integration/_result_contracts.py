@@ -73,7 +73,7 @@ INITIAL_SKIP_CODES = frozenset(
         "sdi.run.deadline-exceeded",
     }
 )
-RED_DOMAIN_FAILURE_STAGES: frozenset[StageName] = frozenset({"cv"})
+RED_DOMAIN_FAILURE_STAGES: frozenset[StageName] = frozenset({"cv", "cd"})
 RED_REASON_CODES = frozenset(
     {
         "sdi.stage.not-implemented",
