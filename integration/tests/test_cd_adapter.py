@@ -51,11 +51,17 @@ verb = arguments[7]
 if (state / f"{{verb}}.fails").exists():
     sys.stderr.write("error: the fake cluster refused\\n")
     sys.exit(1)
-for kind in ("nodes", "pods"):
-    if kind in arguments:
-        if (state / f"{{kind}}.slow").exists():
-            time.sleep(float((state / f"{{kind}}.slow").read_text()))
-        sys.stdout.write((state / f"{{kind}}.json").read_text())
+kinds = [kind for kind in ("nodes", "pods") if kind in arguments]
+for name in [verb, *kinds]:
+    count = state / f"{{name}}.count"
+    calls = int(count.read_text()) + 1 if count.exists() else 1
+    count.write_text(str(calls))
+    if (state / f"{{name}}.slow").exists():
+        seconds, first = (state / f"{{name}}.slow").read_text().split()
+        if calls >= int(first):
+            time.sleep(float(seconds))
+for kind in kinds:
+    sys.stdout.write((state / f"{{kind}}.json").read_text())
 """
 
 
@@ -133,8 +139,8 @@ class _FakeCluster:
     def refuse(self, verb: str) -> None:
         (self.root / f"{verb}.fails").touch()
 
-    def slow(self, kind: str, seconds: float) -> None:
-        (self.root / f"{kind}.slow").write_text(str(seconds))
+    def slow(self, name: str, seconds: float, *, from_call: int = 1) -> None:
+        (self.root / f"{name}.slow").write_text(f"{seconds} {from_call}")
 
     def cluster(self, **timing: float) -> Cluster:
         return Cluster(SERVER, self.root / "kubeconfig.yaml", **timing)
@@ -319,13 +325,95 @@ def test_cd_a_pod_still_starting_at_the_deadline_fails_on_the_work_limit(
     assert fake.calls()[-1]["argv"][7] == "delete"
 
 
+@pytest.mark.parametrize(
+    ("work_seconds", "round_trip"),
+    [(work, trip) for trip in (0.5, 1.5, 4) for work in range(3, 11)],
+)
+def test_cd_a_poll_the_work_limit_cuts_off_fails_the_cd_with_evidence(
+    tmp_path: Path, fake: _FakeCluster, work_seconds: int, round_trip: float
+) -> None:
+    fake.answer(pods=_pods({"cd-xycar": "ContainerCreating"}))
+    fake.slow("pods", round_trip)
+    stage = _stage(tmp_path, work_limit_seconds=TEARDOWN_MARGIN_SECONDS + work_seconds)
+
+    run = stage.run(serve("cd", partial(deploy, cluster=fake.cluster())))
+
+    assert run.response.reason is not None
+    assert run.response.reason.code == "sdi.cd.failed", run.diagnostic
+    assert run.evidence is not None
+    assert [
+        (item.service_id, getattr(item, "detail", None))
+        for item in run.evidence.placements
+    ] == [("cd-waffle", WORK_LIMIT_DETAIL), ("cd-xycar", WORK_LIMIT_DETAIL)]
+    assert fake.calls()[-1]["argv"][7] == "delete"
+
+
+def test_cd_a_poll_the_work_limit_cuts_off_keeps_the_last_observation(
+    tmp_path: Path, fake: _FakeCluster
+) -> None:
+    fake.answer(
+        pods=_pods({"cd-waffle": "ErrImagePull", "cd-xycar": "ContainerCreating"})
+    )
+    fake.slow("pods", 3, from_call=2)
+    stage = _stage(tmp_path, work_limit_seconds=TEARDOWN_MARGIN_SECONDS + 4)
+
+    run = stage.run(serve("cd", partial(deploy, cluster=fake.cluster())))
+
+    assert run.response.reason is not None
+    assert run.response.reason.code == "sdi.cd.failed", run.diagnostic
+    assert run.evidence is not None
+    assert [
+        (item.service_id, getattr(item, "detail", None))
+        for item in run.evidence.placements
+    ] == [("cd-waffle", "ErrImagePull"), ("cd-xycar", WORK_LIMIT_DETAIL)]
+    assert "kubectl get: its deadline passed before it answered" in run.diagnostic
+    assert "the work limit ran out in the wait for Running pods: cd-xycar" in (
+        run.diagnostic
+    )
+    assert [call["argv"][7] for call in fake.calls()] == [
+        "get",
+        "create",
+        "apply",
+        "get",
+        "get",
+        "get",
+        "delete",
+    ]
+
+
+def test_cd_a_cluster_silent_past_the_call_cap_with_time_left_is_machinery(
+    tmp_path: Path, fake: _FakeCluster, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(_cd_adapter, "KUBECTL_TIMEOUT_SECONDS", 4)
+    monkeypatch.setattr(_cd_adapter, "TEARDOWN_MARGIN_SECONDS", 12)
+    fake.slow("pods", 13)
+    stage = _stage(tmp_path, work_limit_seconds=12 + 30)
+
+    started = time.monotonic()
+    run = stage.run(serve("cd", partial(deploy, cluster=fake.cluster())))
+
+    assert time.monotonic() - started < 2 * 4
+    assert run.response.reason is not None
+    assert run.response.reason.code == "sdi.cd.cluster-error"
+    assert run.evidence is None
+    assert "kubectl get did not answer within 4 s" in run.diagnostic
+    assert [call["argv"][7] for call in fake.calls()] == [
+        "get",
+        "create",
+        "apply",
+        "get",
+        "delete",
+    ]
+
+
 def test_cd_a_slow_cluster_cannot_carry_the_adapter_past_its_work_limit(
     tmp_path: Path, fake: _FakeCluster, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(_cd_adapter, "KUBECTL_TIMEOUT_SECONDS", 4)
     monkeypatch.setattr(_cd_adapter, "TEARDOWN_MARGIN_SECONDS", 12)
-    work_limit = 14
+    work_limit = 15
     fake.slow("pods", 13)
+    fake.slow("delete", 13)
     stage = _stage(tmp_path, work_limit_seconds=work_limit)
 
     started = time.monotonic()
@@ -335,5 +423,16 @@ def test_cd_a_slow_cluster_cannot_carry_the_adapter_past_its_work_limit(
     assert run.response.reason is not None
     assert run.response.reason.code == "sdi.cd.cluster-error"
     assert run.evidence is None
-    assert "kubectl get did not answer within" in run.diagnostic
-    assert fake.calls()[-1]["argv"][7] == "delete"
+    assert [call["argv"][7] for call in fake.calls()] == [
+        "get",
+        "create",
+        "apply",
+        "get",
+        "get",
+        "delete",
+    ]
+    assert "kubectl get: its deadline passed before it answered" in run.diagnostic
+    assert "kubectl get did not answer within 4 s" in run.diagnostic
+    assert "the namespace delete failed: kubectl delete did not answer within 4 s" in (
+        run.diagnostic
+    )
