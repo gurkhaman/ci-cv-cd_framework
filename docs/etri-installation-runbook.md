@@ -6,11 +6,12 @@ existing installation's Jenkins state or credentials. Select an approved commit
 from the upstream protected `main` branch after merge and record that exact SHA
 during acceptance.
 
-The installed system runs real composition, image-build, and Continuous
-Validation (CV) Stages, and a deterministic CD Fixture. It proves the
-GitHub-to-Jenkins pipeline interface, model-backed composition, image
-publication to the stack-local registry, and one CV verdict per run. It does not
-prove deployment or KPI results.
+The installed system runs real composition, image-build, Continuous Validation
+(CV), and Continuous Deployment (CD) Stages. It proves the GitHub-to-Jenkins
+pipeline interface, model-backed composition, image publication to the
+stack-local registry, one CV verdict per run, and one deployment per run to the
+K3s stand-in cluster inside the stack. It does not prove deployment to real
+devices or KPI results.
 
 ## Responsibilities
 

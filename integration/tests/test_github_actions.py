@@ -18,6 +18,7 @@ from sdi_pipeline_integration._domain_contracts import (
     ImageBuildResult,
 )
 from sdi_pipeline_integration._github_actions import render_image_build_section
+from sdi_pipeline_integration._handoff_contracts import DEPLOYMENT_MANIFEST_PATH
 from sdi_pipeline_integration._stage_registry import RUN_LIMITS
 from tests._fixture_inputs import (
     FIXTURE_COMPOSITION_CONFIG,
@@ -625,6 +626,7 @@ def test_workflow_is_one_protected_main_only_handoff_job() -> None:
     assert publication["with"]["path"].splitlines() == [
         "${{ steps.identify.outputs.output_root }}/bundle",
         "${{ steps.identify.outputs.output_root }}/handoff-receipt.json",
+        f"${{{{ steps.identify.outputs.output_root }}}}/{DEPLOYMENT_MANIFEST_PATH}",
     ]
 
     summary = steps[5]
@@ -871,7 +873,8 @@ def test_image_build_table_joins_built_and_failed_records_with_placements(
     tmp_path: Path,
 ) -> None:
     bundle_root, _ = _bundle(tmp_path)
-    result, documents = validate_bundle_documents(bundle_root)
+    validated = validate_bundle_documents(bundle_root)
+    result, documents = validated.result, validated.succeeded_domain_outputs
     deployment = documents["deployment_schema"].model_dump(mode="json")
     deployment["evidence_basis"] = "implemented"
     deployment["placements"] = [

@@ -239,12 +239,13 @@ def render_github_summary(  # noqa: C901, PLR0912, PLR0913, PLR0915
     result_state = "not returned"
     if bundle_root.exists() or bundle_root.is_symlink():
         try:
-            candidate, candidate_documents = validate_bundle_documents(bundle_root)
+            candidate = validate_bundle_documents(bundle_root)
         except (InputError, OSError, ValidationError):
             result_state = "rejected"
         else:
-            if candidate.execution_id == execution_id:
-                result, documents = candidate, candidate_documents
+            if candidate.result.execution_id == execution_id:
+                result = candidate.result
+                documents = candidate.succeeded_domain_outputs
                 result_state = "validated"
             else:
                 result_state = "identity mismatch"

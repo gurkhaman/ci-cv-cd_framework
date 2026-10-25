@@ -158,7 +158,8 @@ The artifact is retained for 90 days, subject to any shorter repository or
 organization retention cap. A completed run with a returned result contains
 `bundle/pipeline-integration-result.json`, every checksummed declared Domain
 output and diagnostic beneath `bundle/stages/`, and
-`handoff-receipt.json`. A failure before result retrieval can publish a
+`handoff-receipt.json`. When CD applied a Kubernetes manifest, the artifact
+also contains it as `deployment-manifest.yaml`. A failure before result retrieval can publish a
 receipt-only artifact under the same Execution-ID-qualified name.
 
 Revalidate a downloaded complete bundle independently:
@@ -166,6 +167,17 @@ Revalidate a downloaded complete bundle independently:
 ```sh acceptance=downloaded-bundle-validation
 uv run --frozen --project integration sdi-integration validate-bundle \
   --bundle-root artifacts/pipeline-integration-<execution-id>/bundle
+```
+
+Write the Kubernetes manifest that CD applied from a downloaded bundle. The
+result equals the artifact's `deployment-manifest.yaml`. The command validates
+the bundle first. When CD was not evaluated, skipped, or
+failed before it recorded a result, it writes nothing and exits 0:
+
+```sh acceptance=deployment-manifest
+uv run --frozen --project integration sdi-integration deployment-manifest \
+  --bundle-root artifacts/pipeline-integration-<execution-id>/bundle \
+  --output artifacts/deployment-manifest-<execution-id>.yaml
 ```
 
 ## Failure And Cancellation
@@ -208,10 +220,10 @@ steps to complete.
 
 The composition Stage is implemented and calls the default generator of the
 committed composition config over the checked-out service repository, which
-image build is also given for its recipes. Image build and CV are implemented:
-a successful composition is followed by a real image build and a CV verdict. CD
-uses a deterministic Fixture, which never consumes real output, so it is
-skipped. Fixture files prove only the
+image build is also given for its recipes. Image build, CV, and CD are
+implemented: a successful composition is followed by a real image build, a CV
+verdict, and a deployment to the stack's K3s stand-in cluster. Fixture files
+prove only the
 pipeline interface and evidence handling. They are not proof of a real Domain
 capability, CV verdict, deployment outcome, supported-combination KPI, or any
 aggregate Domain result. The summary therefore always states `KPI evaluation:

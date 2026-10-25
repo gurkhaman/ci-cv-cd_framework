@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 import pytest
 
+from sdi_pipeline_integration._cd_deployment import manifest_yaml
 from sdi_pipeline_integration._integration_code import integration_code_digest
 from sdi_pipeline_integration._stage_registry import AGENTS, INTEGRATION_AGENT, STAGES
 from tests import _cd_evidence as cd
@@ -93,14 +94,21 @@ def _repository(
     shutil.copytree(service_repository, repository / "service-repository")
     copy_baked_integration_code(repository)
     write_fixture_composition_descriptor(repository)
+    adapters = repository / "deployment/jenkins/adapters"
+    _run_the_cd_fixture_without_a_cluster(adapters)
     if fixture_image_build:
-        adapters = repository / "deployment/jenkins/adapters"
         (adapters / "image-build-v1.yaml").write_bytes(
             (adapters / "image-build-fixture-v1.yaml").read_bytes()
         )
     _git(repository, "add", ".")
     _git(repository, "commit", "-m", "Add distributed Fixture inputs")
     return repository, _git(repository, "rev-parse", "HEAD")
+
+
+def _run_the_cd_fixture_without_a_cluster(adapters: Path) -> None:
+    (adapters / "cd-v1.yaml").write_bytes(
+        (adapters / "cd-fixture-v1.yaml").read_bytes()
+    )
 
 
 def _common(repository: Path, commit_sha: str, request_path: str) -> list[str]:
@@ -977,15 +985,18 @@ CD_REASONS = {
 
 
 def _implemented_cd_chain(
-    tmp_path: Path, domain_outcome: str, evidence: dict[str, Any] | None
+    tmp_path: Path,
+    domain_outcome: str,
+    evidence: dict[str, Any] | None,
+    cv_evidence: dict[str, Any] = SUCCEEDED,
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
     repository = _implemented_upstream(tmp_path, CD_IMAGES, placements=CV_PLACEMENTS)
     _select_evidence_adapter(
         repository,
         "cv",
-        "succeeded",
-        SUCCEEDED,
-        None,
+        cv_evidence["domain_outcome"],
+        cv_evidence,
+        CV_REASONS[cv_evidence["domain_outcome"]],
     )
     _select_evidence_adapter(
         repository,
@@ -1139,6 +1150,88 @@ def test_cd_check_rejects_a_result_contradicting_its_inputs(
     assert attempt["adapter_response_accepted"] is False
     assert attempt["reason"]["code"] == "sdi.adapter.candidate-rejected"
     assert conclusion.returncode == RED_RUN_EXIT
+
+
+def _deployment_manifest(
+    bundle_root: Path, output: Path
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            "sdi-integration",
+            "deployment-manifest",
+            "--bundle-root",
+            str(bundle_root),
+            "--output",
+            str(output),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "evidence", [cd.SUCCEEDED, cd.FAILED], ids=["succeeded", "failed"]
+)
+def test_cd_manifest_command_writes_the_manifest_the_evidence_records(
+    tmp_path: Path, evidence: dict[str, Any]
+) -> None:
+    _implemented_cd_chain(tmp_path, evidence["domain_outcome"], evidence)
+    bundle_root = tmp_path / "run" / "bundle"
+    output = tmp_path / "deployment-manifest.yaml"
+
+    written = _deployment_manifest(bundle_root, output)
+
+    assert written.returncode == 0, written.stderr
+    recorded = json.loads(
+        (bundle_root / "stages/cd/deployment-result.json").read_text()
+    )
+    assert output.read_bytes() == manifest_yaml(recorded["manifest"])
+
+
+@pytest.mark.parametrize(
+    ("cv_evidence", "evidence", "cd_conclusion"),
+    [
+        (SUCCEEDED, cd.NOT_EVALUATED, "succeeded"),
+        (FAILED, cd.SUCCEEDED, "skipped"),
+        (SUCCEEDED, None, "failed"),
+    ],
+    ids=["not-evaluated", "skipped", "machinery-failed"],
+)
+def test_cd_manifest_command_writes_nothing_without_a_manifest(
+    tmp_path: Path,
+    cv_evidence: dict[str, Any],
+    evidence: dict[str, Any] | None,
+    cd_conclusion: str,
+) -> None:
+    _, result = _implemented_cd_chain(
+        tmp_path,
+        "succeeded" if evidence is None else evidence["domain_outcome"],
+        evidence,
+        cv_evidence,
+    )
+    attempt = result["attempts"][3]
+    assert attempt["execution_conclusion"] == cd_conclusion
+    output = tmp_path / "deployment-manifest.yaml"
+
+    written = _deployment_manifest(tmp_path / "run" / "bundle", output)
+
+    assert written.returncode == 0, written.stderr
+    assert not output.exists()
+
+
+def test_cd_manifest_command_reads_only_a_valid_bundle(tmp_path: Path) -> None:
+    _implemented_cd_chain(tmp_path, "succeeded", cd.SUCCEEDED)
+    bundle_root = tmp_path / "run" / "bundle"
+    evidence = bundle_root / "stages/cd/deployment-result.json"
+    evidence.write_text(evidence.read_text().replace("waffle", "burger"))
+    output = tmp_path / "deployment-manifest.yaml"
+
+    written = _deployment_manifest(bundle_root, output)
+
+    assert written.returncode == 2
+    assert "does not match its inventory" in written.stderr
+    assert not output.exists()
 
 
 def test_preflight_rejects_a_key_the_composition_descriptor_does_not_bind(
