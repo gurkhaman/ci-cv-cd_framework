@@ -220,17 +220,17 @@ def deploy(invocation: Invocation, *, cluster: Cluster) -> Verdict:
             if held:
                 time.sleep(cluster.settle_seconds)
                 diagnostic.line(f"settled for {cluster.settle_seconds:g} s")
-            elif starting:
+            records = judge(pins, ending("get", "pods", "-n", namespace, "-o", "json"))
+            if starting:
                 diagnostic.line(
                     "the work limit ran out in the wait for Running pods: "
                     + ", ".join(sorted(starting))
                 )
-            else:
+            elif not held:
                 diagnostic.line(
                     f"the work limit left {left:.0f} s, short of the "
                     f"{cluster.settle_seconds:g} s settle window"
                 )
-            records = judge(pins, ending("get", "pods", "-n", namespace, "-o", "json"))
         except KubectlError as error:
             diagnostic.line(str(error))
             return Verdict(CLUSTER_ERROR)
