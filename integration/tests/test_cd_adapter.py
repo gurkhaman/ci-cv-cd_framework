@@ -20,12 +20,15 @@ import pytest
 from sdi_pipeline_integration import _cd_adapter
 from sdi_pipeline_integration._adapter_kit import serve
 from sdi_pipeline_integration._cd_adapter import (
+    KUBECTL_TIMEOUT_SECONDS,
+    STAND_IN,
     TEARDOWN_MARGIN_SECONDS,
     WORK_LIMIT_DETAIL,
     Cluster,
     deploy,
 )
 from sdi_pipeline_integration._cd_deployment import CLUSTER_HOSTS, manifest_yaml
+from sdi_pipeline_integration._stage_registry import STAGES
 
 from ._cd_stage import CdStage, built
 
@@ -435,4 +438,30 @@ def test_cd_a_slow_cluster_cannot_carry_the_adapter_past_its_work_limit(
     assert "kubectl get did not answer within 4 s" in run.diagnostic
     assert "the namespace delete failed: kubectl delete did not answer within 4 s" in (
         run.diagnostic
+    )
+    assert "the work limit" not in run.diagnostic
+
+
+def test_cd_a_cluster_silent_after_its_pods_ran_names_no_work_limit(
+    tmp_path: Path, fake: _FakeCluster, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(_cd_adapter, "KUBECTL_TIMEOUT_SECONDS", 4)
+    monkeypatch.setattr(_cd_adapter, "TEARDOWN_MARGIN_SECONDS", 12)
+    fake.slow("pods", 13, from_call=2)
+    stage = _stage(tmp_path, work_limit_seconds=12 + 5)
+
+    run = stage.run(serve("cd", partial(deploy, cluster=fake.cluster())))
+
+    assert run.response.reason is not None
+    assert run.response.reason.code == "sdi.cd.cluster-error"
+    assert run.evidence is None
+    assert "kubectl get did not answer within 4 s" in run.diagnostic
+    assert "the work limit" not in run.diagnostic
+
+
+def test_cd_the_minimum_work_limit_fits_the_longest_node_wait_and_two_calls() -> None:
+    assert STAGES["cd"].grant.minimum_work_limit_seconds == (
+        TEARDOWN_MARGIN_SECONDS
+        + STAND_IN.node_wait_seconds
+        + 2 * KUBECTL_TIMEOUT_SECONDS
     )

@@ -423,6 +423,41 @@ def test_a_work_limit_outside_the_grant_claims_no_attempt(
     assert not attempt.exists()
 
 
+CD_GRANT_SECONDS = STAGES["cd"].grant.work_limit_seconds
+
+
+def test_a_cd_work_limit_too_short_for_its_node_wait_claims_no_attempt(
+    tmp_path: Path,
+) -> None:
+    repository, commit_sha = _repository(tmp_path)
+    attempt = tmp_path / "attempt"
+
+    executed = _execute_stage(
+        repository, commit_sha, "cd", attempt, ("--work-limit-seconds", "219")
+    )
+
+    assert executed.returncode == 2
+    assert executed.stderr == (
+        "sdi-integration: --work-limit-seconds must be between 220"
+        f" and the cd Stage's granted {CD_GRANT_SECONDS} seconds\n"
+    )
+    assert not attempt.exists()
+
+
+def test_the_cd_minimum_work_limit_is_not_refused(tmp_path: Path) -> None:
+    repository, commit_sha = _repository(tmp_path)
+
+    executed = _execute_stage(
+        repository,
+        commit_sha,
+        "cd",
+        tmp_path / "attempt",
+        ("--work-limit-seconds", "220"),
+    )
+
+    assert "--work-limit-seconds" not in executed.stderr
+
+
 def test_a_stage_without_a_work_limit_gets_its_full_grant(tmp_path: Path) -> None:
     repository, _ = _repository(tmp_path)
     recorded = tmp_path / "work-limit"
