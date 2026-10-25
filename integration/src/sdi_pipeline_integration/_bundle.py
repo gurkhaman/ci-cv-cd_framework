@@ -307,7 +307,14 @@ def assemble_bundle_staging(
                 for item in executions
             ],
             "artifacts": artifact_records,
-            "fixture_notice": FIXTURE_NOTICE,
+            "fixture_notice": (
+                FIXTURE_NOTICE
+                if any(
+                    item.envelope.implementation_mode == "fixture"
+                    for item in executions
+                )
+                else None
+            ),
             "kpi_evaluation": "not_evaluated",
         },
         strict=True,

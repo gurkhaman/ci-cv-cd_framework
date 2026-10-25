@@ -19,6 +19,7 @@ from sdi_pipeline_integration._domain_contracts import (
 )
 from sdi_pipeline_integration._github_actions import render_image_build_section
 from sdi_pipeline_integration._handoff_contracts import DEPLOYMENT_MANIFEST_PATH
+from sdi_pipeline_integration._result_contracts import FIXTURE_NOTICE
 from sdi_pipeline_integration._stage_registry import RUN_LIMITS
 from tests._fixture_inputs import (
     FIXTURE_COMPOSITION_CONFIG,
@@ -311,7 +312,9 @@ def test_completed_published_bundle_renders_status_first_summary(
     assert "- Combination: `C-05`" in completed.stdout
     assert "Supported combination" not in completed.stdout
     assert "KPI evaluation: `not evaluated`" in completed.stdout
-    assert "Fixture warning" in completed.stdout
+    assert (
+        f"Fixture warning for `composition`, `image-build`, `cd`: {FIXTURE_NOTICE}\n"
+    ) in completed.stdout
     assert "aggregate Domain verdict" not in completed.stdout
     image_build = _image_build_section(completed.stdout)
     assert (

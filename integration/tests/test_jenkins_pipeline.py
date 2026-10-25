@@ -16,6 +16,7 @@ import pytest
 
 from sdi_pipeline_integration._cd_deployment import manifest_yaml
 from sdi_pipeline_integration._integration_code import integration_code_digest
+from sdi_pipeline_integration._result_contracts import FIXTURE_NOTICE
 from sdi_pipeline_integration._stage_registry import AGENTS, INTEGRATION_AGENT, STAGES
 from tests import _cd_evidence as cd
 from tests._cv_evidence import (
@@ -1232,6 +1233,67 @@ def test_cd_manifest_command_reads_only_a_valid_bundle(tmp_path: Path) -> None:
     assert written.returncode == 2
     assert "does not match its inventory" in written.stderr
     assert not output.exists()
+
+
+def test_an_all_implemented_run_summary_has_no_fixture_warning(
+    tmp_path: Path,
+) -> None:
+    _, result = _implemented_cd_chain(tmp_path, "succeeded", cd.SUCCEEDED)
+    assert {attempt["implementation_mode"] for attempt in result["attempts"]} == {
+        "implemented"
+    }
+
+    summary = subprocess.run(
+        [
+            "sdi-integration",
+            "github-summary",
+            "--execution-id",
+            EXECUTION_ID,
+            "--github-run-id",
+            "1000",
+            "--github-run-attempt",
+            "1",
+            "--receipt-path",
+            str(tmp_path / "handoff-receipt.json"),
+            "--bundle-root",
+            str(tmp_path / "run" / "bundle"),
+            "--handoff-outcome",
+            "success",
+            "--publication-outcome",
+            "success",
+            "--artifact-name",
+            f"pipeline-integration-{EXECUTION_ID}",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "- Result: `validated`" in summary.stdout, summary.stderr
+    assert "## Evidence limits" in summary.stdout
+    assert "KPI evaluation: `not evaluated`" in summary.stdout
+    assert "Fixture warning" not in summary.stdout
+
+
+def test_bundle_validation_rejects_a_fixture_notice_when_no_stage_is_a_fixture(
+    tmp_path: Path,
+) -> None:
+    _implemented_cd_chain(tmp_path, "succeeded", cd.SUCCEEDED)
+    bundle_root = tmp_path / "run" / "bundle"
+    result_path = bundle_root / "pipeline-integration-result.json"
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    result["fixture_notice"] = FIXTURE_NOTICE
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+
+    validated = subprocess.run(
+        ["sdi-integration", "validate-bundle", "--bundle-root", str(bundle_root)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert validated.returncode == 2
+    assert "fixture_notice" in validated.stderr
 
 
 def test_preflight_rejects_a_key_the_composition_descriptor_does_not_bind(
