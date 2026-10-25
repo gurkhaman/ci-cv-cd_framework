@@ -354,9 +354,15 @@ def render_github_summary(  # noqa: C901, PLR0912, PLR0913, PLR0915
                 f"- {_code(f'bundle/{PIPELINE_RESULT_PATH}')}",
                 "",
                 "## Evidence limits",
-                "",
-                f"Fixture warning: {html.escape(result.fixture_notice, quote=True)}",
             ]
         )
+        if result.fixture_notice is not None:
+            fixture_stages = ", ".join(
+                _code(attempt.correlation.stage.replace("_", "-"))
+                for attempt in result.attempts
+                if attempt.implementation_mode == "fixture"
+            )
+            notice = html.escape(result.fixture_notice, quote=True)
+            lines.extend(["", f"Fixture warning for {fixture_stages}: {notice}"])
     lines.extend(["", "KPI evaluation: `not evaluated`", ""])
     return "\n".join(lines), succeeded

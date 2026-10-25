@@ -227,4 +227,5 @@ prove only the
 pipeline interface and evidence handling. They are not proof of a real Domain
 capability, CV verdict, deployment outcome, supported-combination KPI, or any
 aggregate Domain result. The summary therefore always states `KPI evaluation:
-not evaluated`.
+not evaluated`. When a Stage reports implementation mode `fixture`, the summary
+also prints a Fixture warning that names each such Stage.
