@@ -112,6 +112,7 @@ class StageGrant:
     domain_output_max_bytes: int
     diagnostic_max_bytes: int
     evidence: tuple[EvidenceGrant, ...] = ()
+    minimum_work_limit_seconds: int = 1
 
 
 @dataclass(frozen=True)
@@ -251,6 +252,9 @@ STAGES: dict[StageName, Stage] = {
                     required=True,
                 ),
             ),
+            # The CD adapter's teardown margin, longest node wait, and a full
+            # kubectl call each for create and apply.
+            minimum_work_limit_seconds=60 + 120 + 2 * 20,
         ),
         agent=Agent("cd", "cd"),
         jenkins_descriptor="deployment/jenkins/adapters/cd-v1.yaml",
