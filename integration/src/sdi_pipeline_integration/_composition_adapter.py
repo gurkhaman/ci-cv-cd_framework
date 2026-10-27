@@ -314,7 +314,11 @@ def _compose(invocation: Invocation) -> Composed:
             diagnostic.line(f"invalid_description: {path}")
         return Composed("invalid-service-description", {}, lexical_only=False)
     inputs = AssessmentInputs(files, profile, requirements, requirements_body)
-
+    invocation.report(  # GUR-212 PROTOTYPE
+        "discovery",
+        n=len(files),
+        search="lexical" if embeddings is None else "lexical+embeddings",
+    )
     discovery = discover(
         inputs,
         embeddings=embeddings,
@@ -327,6 +331,7 @@ def _compose(invocation: Invocation) -> Composed:
     stopped, lexical_only = discovery.stop_reason(embeddings)
     if stopped is not None:
         return Composed(stopped, {}, lexical_only)
+    invocation.report("generation", provider=composition.generator)  # GUR-212 PROTOTYPE
     generation = generate_proposals(inputs=inputs, discovery=discovery, config=config)
     diagnostic.facts(generation.provider_facts())
     if generation.outcome not in {"generated", "exhausted"}:
@@ -353,6 +358,7 @@ def _compose(invocation: Invocation) -> Composed:
             },
             lexical_only,
         )
+    invocation.report("assessment", n=len(proposals.proposals))  # GUR-212 PROTOTYPE
     assessment = assess_proposals(proposals, inputs)
     assessed = assessment.to_evidence()
     if assessment.preferred is None and not discovery.complete:

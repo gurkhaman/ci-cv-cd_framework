@@ -37,6 +37,7 @@ from ._domain_contracts import (
     ValidationEvidence,
 )
 from ._git_input import CommittedBlob, GitRepository, validate_repository_path
+from . import _progress_channel_prototype as _progress  # GUR-212 PROTOTYPE
 from ._jenkins_agent_boundary import enforce_domain_execution_boundary
 from ._json_input import canonical_json, parse_json
 from ._result_contracts import (
@@ -1422,6 +1423,13 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
         tempfile.mkdtemp(prefix=f".{attempt_root.name}.work-", dir=attempt_root.parent)
     )
     process: subprocess.Popen[bytes] | None = None
+    progress: _progress.Channel | None = None  # GUR-212 PROTOTYPE
+
+    def publish(root: Path, execution: StageExecution) -> None:
+        _publish_execution(root, execution)
+        if progress is not None:
+            _progress.finish(progress, execution.envelope)
+
     try:
         input_root = work_root / "inputs"
         output_root = work_root / "candidate"
@@ -1461,6 +1469,13 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
             canonical_json(request.model_dump(mode="json")),
         )
         environment, secrets = _adapter_environment(descriptor, available_inputs)
+        progress = _progress.Channel(
+            descriptor.stage,
+            _progress.context_from_inputs(descriptor.stage, input_models),
+            limit_seconds=effective_work_limit_seconds,
+        )
+        progress.runtime("stage-started")
+        progress.runtime("adapter-running")
         started_at = datetime.now(UTC)
         try:
             process = subprocess.Popen(  # noqa: S603
@@ -1477,10 +1492,12 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                env=environment,
+                env=progress.child_environment(environment),
+                pass_fds=(progress.write_fd,),
                 start_new_session=True,
             )
         except OSError:
+            progress.abort()
             execution = _runtime_failure_execution(
                 descriptor=descriptor,
                 request=request,
@@ -1492,8 +1509,9 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
                 code="sdi.adapter.process-lost",
                 summary="The Stage adapter process could not be started.",
             )
-            _publish_execution(attempt_root, execution)
+            publish(attempt_root, execution)
             return execution
+        progress.after_spawn()
         process_group = process.pid
         timeout_seconds = float(effective_work_limit_seconds)
         timeout_code = "sdi.stage.deadline-exceeded"
@@ -1505,11 +1523,15 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
                 timeout_code = "sdi.run.deadline-exceeded"
                 timeout_summary = "The Pipeline integration run deadline expired."
         try:
-            return_code = process.wait(timeout=timeout_seconds)
+            return_code = _progress.wait_with_progress(
+                process, progress, timeout_seconds
+            )
         except ExternalCancellation:
+            progress.close_input(report=False)
             _terminate_process_group(process, process_group, immediate=True)
             raise
         except subprocess.TimeoutExpired:
+            progress.runtime("work-limit-reached")
             _terminate_process_group(process, process_group)
             execution = _runtime_failure_execution(
                 descriptor=descriptor,
@@ -1522,7 +1544,7 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
                 code=timeout_code,
                 summary=timeout_summary,
             )
-            _publish_execution(attempt_root, execution)
+            publish(attempt_root, execution)
             return execution
         finished_at = datetime.now(UTC)
         if _process_group_exists(process_group):
@@ -1542,7 +1564,7 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
                 code="sdi.adapter.descendants-survived",
                 summary="The Stage adapter left descendant processes after exit.",
             )
-            _publish_execution(attempt_root, execution)
+            publish(attempt_root, execution)
             return execution
         if return_code != 0:
             signaled = return_code < 0
@@ -1567,8 +1589,9 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
                     else "The Stage adapter process exited unsuccessfully."
                 ),
             )
-            _publish_execution(attempt_root, execution)
+            publish(attempt_root, execution)
             return execution
+        progress.runtime("checking-output")
         try:
             response, captured = _capture_candidate(
                 output_root,
@@ -1593,7 +1616,7 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
                 code=code,
                 summary=summary,
             )
-            _publish_execution(attempt_root, execution)
+            publish(attempt_root, execution)
             return execution
         envelope = _accepted_envelope(
             descriptor=descriptor,
@@ -1631,11 +1654,15 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
             files=accepted_files,
             outputs=output_sources,
         )
-        _publish_execution(attempt_root, execution)
+        publish(attempt_root, execution)
         return execution  # noqa: TRY300
     except ExternalCancellation:
+        if progress is not None:
+            progress.close_input(report=False)
         if process is not None and process.poll() is None:
             _terminate_process_group(process, process.pid, immediate=True)
         raise
     finally:
+        if progress is not None:
+            progress.abort()
         shutil.rmtree(work_root, ignore_errors=True)

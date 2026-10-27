@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ValidationError
 
+from ._progress_channel_prototype import Reporter  # GUR-212 PROTOTYPE
 from ._jenkins_agent_boundary import enforce_domain_execution_boundary
 from ._json_input import canonical_json, parse_json
 from ._stage_contracts import (
@@ -154,6 +155,11 @@ class Invocation:
     inputs: Mapping[str, bytes]
     deadline_monotonic: float
     diagnostic: Diagnostic
+    reporter: Reporter = field(default_factory=lambda: Reporter(None))  # GUR-212 PROTOTYPE
+
+    def report(self, step: str, **slots: object) -> None:
+        """Best-effort progress; a no-op without the runtime's channel."""
+        self.reporter.report(step, **slots)
 
 
 @dataclass(frozen=True)
@@ -164,6 +170,7 @@ class DomainAdapter:
     def __call__(self, argv: Sequence[str] | None = None) -> int:
         started = time.monotonic()
         slug = self.stage.replace("_", "-")
+        reporter = Reporter.from_environment()  # GUR-212 PROTOTYPE
         try:
             enforce_domain_execution_boundary(
                 expected_label=STAGES[self.stage].agent.label
@@ -182,6 +189,7 @@ class DomainAdapter:
                 _read_inputs(request, arguments.input_root),
                 started + request.work_limit_seconds,
                 Diagnostic(f"sdi.{slug}", request.diagnostic.max_bytes),
+                reporter,
             )
             _publish(output_root, invocation, self.body(invocation))
         except (InputError, OSError, ValidationError) as error:
