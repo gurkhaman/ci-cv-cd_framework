@@ -243,12 +243,18 @@ class BuiltImageRecord(ContractModel):
         return self
 
 
+FailedImageReason = Literal[
+    "unresolved-placement", "no-recipe", "build-failed", "work-limit"
+]
+FAILED_IMAGE_REASONS: tuple[FailedImageReason, ...] = get_args(FailedImageReason)
+
+
 class FailedImageRecord(ContractModel):
     """A placement that has no image, with one reason from a closed set."""
 
     service_id: Slug
     status: Literal["failed"]
-    reason: Literal["unresolved-placement", "no-recipe", "build-failed", "work-limit"]
+    reason: FailedImageReason
     detail: FailureDetail
 
 
@@ -317,12 +323,18 @@ class ParticipatingService(ContractModel):
     counting_topics: list[CountingTopic]
 
 
+DidNotParticipateReason = Literal["container-exited", "failed-to-start", "no-message"]
+DID_NOT_PARTICIPATE_REASONS: tuple[DidNotParticipateReason, ...] = get_args(
+    DidNotParticipateReason
+)
+
+
 class NonParticipatingService(ContractModel):
     """A service that failed to start, exited, or sent no counted message."""
 
     service_id: Slug
     participation: Literal["did_not_participate"]
-    reason: Literal["container-exited", "failed-to-start", "no-message"]
+    reason: DidNotParticipateReason
     exit_code: int | SkipJsonSchema[None] = None
     detail: FailureDetail | SkipJsonSchema[None] = None
     image_digest: ImageDigest | SkipJsonSchema[None] = None
@@ -515,6 +527,11 @@ DeploymentGap = Literal[
     "host-not-in-cluster",
     "blocked",
 ]
+DEPLOYMENT_GAPS: tuple[DeploymentGap, ...] = get_args(DeploymentGap)
+K8sReason = Literal[
+    "CrashLoopBackOff", "ErrImagePull", "ImagePullBackOff", "Unschedulable", "other"
+]
+K8S_REASONS: tuple[K8sReason, ...] = get_args(K8sReason)
 
 
 def image_digest(image: str) -> str:
