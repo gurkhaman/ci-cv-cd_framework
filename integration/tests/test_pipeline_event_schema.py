@@ -131,3 +131,13 @@ def test_open_codes_list_their_examples() -> None:
     examples = cast("list[str]", placement["reason"]["examples"])
     assert set(K8S_REASONS) <= set(examples)
     assert "blocked" not in examples
+
+
+def test_pipeline_events_doc_names_every_field_and_step() -> None:
+    doc = (SCHEMA_DIRECTORY.parents[1] / "docs" / "pipeline-events.md").read_text()
+    missing = [
+        name
+        for name in (*PipelineEventRow.model_fields, *STEP_CODES)
+        if f"`{name}`" not in doc
+    ]
+    assert missing == [], f"docs/pipeline-events.md does not name {missing}"
