@@ -685,6 +685,44 @@ def test_cd_passes_a_pod_running_its_pinned_digest_on_its_host() -> None:
             "other",
             id="unscheduled-for-another-reason",
         ),
+        pytest.param(
+            _pinned("fixture-localization", "orin"),
+            _running()
+            | {
+                "status": _running()["status"]
+                | {
+                    "conditions": [
+                        {
+                            "type": "PodScheduled",
+                            "status": "False",
+                            "reason": "Unschedulable",
+                        }
+                    ]
+                }
+            },
+            {
+                "node": "waffle",
+                "phase": "Running",
+                "restart_count": 0,
+                "image_id": f"registry:5000/sdi/probe@{RECORDED_DIGEST}",
+            },
+            "on node waffle, not orin",
+            "other",
+            id="unschedulable-condition-on-a-scheduled-pod",
+        ),
+        pytest.param(
+            _pinned("fixture-localization", "waffle"),
+            _running_with(state={"waiting": {"reason": "CrashLoopBackOff"}}),
+            {
+                "node": "waffle",
+                "phase": "Running",
+                "restart_count": 0,
+                "image_id": f"registry:5000/sdi/probe@{RECORDED_DIGEST}",
+            },
+            "CrashLoopBackOff",
+            "CrashLoopBackOff",
+            id="crash-loop-back-off-before-a-restart-is-counted",
+        ),
     ],
 )
 def test_cd_fails_a_pod_that_breaks_the_pass_rule_with_its_reason(
