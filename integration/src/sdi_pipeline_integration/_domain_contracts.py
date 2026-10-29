@@ -508,6 +508,9 @@ PinnedImage = Annotated[
     ),
 ]
 PodPhase = Literal["Pending", "Running", "Succeeded", "Failed", "Unknown"]
+K8sReason = Literal[
+    "CrashLoopBackOff", "ErrImagePull", "ImagePullBackOff", "Unschedulable", "other"
+]
 DeploymentGap = Literal[
     "unresolved-placement",
     "image-not-built",
@@ -557,12 +560,13 @@ class FailedPlacement(ContractModel):
     image_id: KubernetesImageId | SkipJsonSchema[None] = None
     phase: PodPhase | SkipJsonSchema[None] = None
     restart_count: NonNegativeInt | SkipJsonSchema[None] = None
+    k8s_reason: K8sReason | SkipJsonSchema[None] = None
 
     @model_validator(mode="before")
     @classmethod
     def reject_explicit_unknowns(cls, data: object) -> object:
         return reject_explicit_nulls(
-            data, ("node", "image", "image_id", "phase", "restart_count")
+            data, ("node", "image", "image_id", "phase", "restart_count", "k8s_reason")
         )
 
     @model_validator(mode="after")
