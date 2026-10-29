@@ -271,6 +271,14 @@ ImageRecord = Annotated[
 ]
 
 
+REGISTRY = "registry:5000"
+
+
+def image_tag(*, service_id: str, artifact_id: str, execution_id: str) -> str:
+    """Return the tag the image build pushes one placement's image under."""
+    return f"{REGISTRY}/sdi/{service_id}:{artifact_id}-{execution_id}"
+
+
 class ImageBuildResult(ContractModel):
     """One image-build record per placement of one composition."""
 
