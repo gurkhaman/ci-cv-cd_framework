@@ -63,18 +63,12 @@ control character, DEL or the sequence `##[`.
 
 `\u005b` is a valid JSON escape, so a JSON parser reads `##[` back.
 
-- A `PRISM_EVENT` line is at most 4096 bytes, counting the prefix and not the
-  LF. An over-long line sets whole fields to null, one at a time, and keeps
-  their keys: `image_build_result_ref`, `validation_evidence_ref`,
-  `deployment_result_ref`, `image_failures`, `placement_issues`,
-  `cv_service_issues`, `mission_steps`, `image_digest`, then `image_ref`.
-  It skips a field that is already null or an empty list. A value is never
-  cut. The writer adds a `sdi-integration: internal error:` line that names
-  the nulled fields.
-- An `[sdi]` line is at most 1024 bytes. Every template fits with
-  maximum-length slots. If a message is still too long, its identifier slots
-  (Combination ID, profile id, generator, service id, host and Reason code) are
-  shown as `-`, and an internal error line is printed.
+A `PRISM_EVENT` line has no size limit, so a row is always written whole.
+
+An `[sdi]` line is at most 1024 bytes. Every template fits with
+maximum-length slots. If a message is still too long, its identifier slots
+(Combination ID, profile id, generator, service id, host and Reason code) are
+shown as `-`, and an internal error line is printed.
 
 A failed write to stderr is ignored. It never raises, and it never changes a
 result or an exit code.
