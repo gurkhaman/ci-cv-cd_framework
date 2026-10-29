@@ -323,7 +323,8 @@ def test_size_guard_drops_are_the_spec_order() -> None:
         ("placement_issues",),
         ("cv_service_issues",),
         ("mission_steps",),
-        ("image_ref", "image_digest"),
+        ("image_digest",),
+        ("image_ref",),
     )
 
 
@@ -339,6 +340,25 @@ def test_prism_guard_skips_fields_that_are_already_null() -> None:
         "deployment_result_ref",
         "image_failures",
     )
+
+
+def test_prism_guard_keeps_empty_lists() -> None:
+    fields = {**_guarded_fields(), "image_failures": [], "placement_issues": []}
+    saved_refs = _saved_by_nulling(
+        fields,
+        ("image_build_result_ref", "validation_evidence_ref", "deployment_result_ref"),
+    )
+    fields = _with_line_length(fields, PRISM_LINE_MAX_BYTES + 1 + saved_refs)
+    encoded = encode_event(PipelineEventRow.model_validate(fields))
+    prism = _payload(encoded.data.split(b"\n")[1].decode())
+    assert encoded.nulled == (
+        "image_build_result_ref",
+        "validation_evidence_ref",
+        "deployment_result_ref",
+        "cv_service_issues",
+    )
+    assert prism["image_failures"] == []
+    assert prism["placement_issues"] == []
 
 
 def test_worst_case_row_fits_4096_after_every_drop() -> None:
