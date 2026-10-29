@@ -520,9 +520,6 @@ PinnedImage = Annotated[
     ),
 ]
 PodPhase = Literal["Pending", "Running", "Succeeded", "Failed", "Unknown"]
-K8sReason = Literal[
-    "CrashLoopBackOff", "ErrImagePull", "ImagePullBackOff", "Unschedulable", "other"
-]
 DeploymentGap = Literal[
     "unresolved-placement",
     "image-not-built",
