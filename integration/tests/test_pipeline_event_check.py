@@ -16,14 +16,13 @@ from sdi_pipeline_integration._pipeline_event_check import (
     load_golden,
 )
 from sdi_pipeline_integration._yaml_input import InputError
+from tests._pipeline_event_scenarios import golden_console, golden_rows
 from tests._pipeline_events import (
     GOLDEN_DIRECTORY,
     SCHEMA_PATH,
     console,
     golden,
-    golden_console,
     golden_names,
-    golden_rows,
     row,
     with_row,
 )
