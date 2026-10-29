@@ -1,4 +1,4 @@
-"""The pipeline-event renderer, size guards and writer."""
+"""The pipeline-event renderers and writer."""
 
 from __future__ import annotations
 
@@ -7,13 +7,11 @@ import json
 import os
 import sys
 from datetime import UTC, datetime, timedelta, timezone
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import pytest
 
 from sdi_pipeline_integration._pipeline_events import (
-    PRISM_LINE_MAX_BYTES,
-    SIZE_GUARD_DROPS,
     PipelineEventRow,
     derive_ci_status,
     encode_event,
@@ -23,7 +21,7 @@ from sdi_pipeline_integration._pipeline_events import (
     render_sdi_line,
     write_event,
 )
-from tests._pipeline_events import row, worst_case_fields
+from tests._pipeline_events import row
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -76,7 +74,7 @@ def test_prism_line_keeps_every_key_when_values_are_null() -> None:
 
 
 def test_both_lines_escape_bracket_after_hashes_and_del() -> None:
-    data = encode_event(row(**{**CV_RUNNING, "message": "see ##[x and \x7f"})).data
+    data = encode_event(row(**{**CV_RUNNING, "message": "see ##[x and \x7f"}))
     sdi_line, prism_line, end = data.split(b"\n")
     assert end == b"", "the pair does not end with one LF"
     for line in (sdi_line, prism_line):
@@ -252,136 +250,6 @@ def test_over_long_message_leaves_optional_slots_out_and_logs(
     assert errors[0].startswith("sdi-integration: internal error: "), errors
 
 
-LONG_REFS: dict[str, JsonValue] = {
-    "image_build_result_ref": "stages/image-build/" + "r" * 200,
-    "validation_evidence_ref": "stages/cv/" + "r" * 200,
-    "deployment_result_ref": "stages/cd/" + "r" * 200,
-}
-FLAT_DROPS = tuple(name for group in SIZE_GUARD_DROPS for name in group)
-PADDING_IMAGE_REF_BYTES = 200
-JSON_QUOTES_BYTES = len('""')
-JSON_COMMA_BYTES = len(",")
-
-
-def _prism_length(fields: dict[str, JsonValue]) -> int:
-    return len(render_prism_line(PipelineEventRow.model_validate(fields)))
-
-
-def _guarded_fields() -> dict[str, JsonValue]:
-    fields = worst_case_fields()
-    fields["message"] = "CD finished: NOT_EVALUATED"
-    fields.update(LONG_REFS)
-    return fields
-
-
-def _with_line_length(
-    fields: dict[str, JsonValue], length: int
-) -> dict[str, JsonValue]:
-    padded: dict[str, JsonValue] = {**fields, "image_ref": []}
-    missing = length - _prism_length(padded)
-    entry = "registry:5000/sdi/".ljust(PADDING_IMAGE_REF_BYTES, "x")
-    first_entry_bytes = len(entry) + JSON_QUOTES_BYTES
-    next_entry_bytes = len(entry) + JSON_QUOTES_BYTES + JSON_COMMA_BYTES
-    if missing >= first_entry_bytes:
-        count = 1 + (missing - first_entry_bytes) // next_entry_bytes
-        padded["image_ref"] = cast("list[JsonValue]", [entry] * count)
-        missing -= first_entry_bytes + next_entry_bytes * (count - 1)
-    padded["message"] = f"{fields['message']}{'x' * missing}"
-    assert _prism_length(padded) == length
-    return padded
-
-
-def _saved_by_nulling(fields: dict[str, JsonValue], group: tuple[str, ...]) -> int:
-    return _prism_length(fields) - _prism_length({**fields, **dict.fromkeys(group)})
-
-
-@pytest.mark.parametrize("index", range(len(SIZE_GUARD_DROPS)))
-def test_prism_guard_nulls_fields_in_drop_order(index: int) -> None:
-    fields = _guarded_fields()
-    saved_first = sum(
-        _saved_by_nulling(fields, group) for group in SIZE_GUARD_DROPS[:index]
-    )
-    fields = _with_line_length(fields, PRISM_LINE_MAX_BYTES + 1 + saved_first)
-    encoded = encode_event(PipelineEventRow.model_validate(fields))
-    expected = tuple(name for group in SIZE_GUARD_DROPS[: index + 1] for name in group)
-    assert encoded.nulled == expected
-    prism = _payload(encoded.data.split(b"\n")[1].decode())
-    assert list(prism) == list(PipelineEventRow.model_fields), "the guard removed a key"
-    assert all(prism[name] is None for name in expected)
-    assert all(prism[name] == fields[name] for name in FLAT_DROPS[len(expected) :]), (
-        "the guard nulled a field it did not need to"
-    )
-    assert len(encoded.data.split(b"\n")[1]) <= PRISM_LINE_MAX_BYTES
-
-
-def test_size_guard_drops_are_the_spec_order() -> None:
-    assert SIZE_GUARD_DROPS == (
-        ("image_build_result_ref",),
-        ("validation_evidence_ref",),
-        ("deployment_result_ref",),
-        ("image_failures",),
-        ("placement_issues",),
-        ("cv_service_issues",),
-        ("mission_steps",),
-        ("image_digest",),
-        ("image_ref",),
-    )
-
-
-def test_prism_guard_skips_fields_that_are_already_null() -> None:
-    fields = {**_guarded_fields(), "image_build_result_ref": None}
-    saved_refs = _saved_by_nulling(
-        fields, ("validation_evidence_ref", "deployment_result_ref")
-    )
-    fields = _with_line_length(fields, PRISM_LINE_MAX_BYTES + 1 + saved_refs)
-    encoded = encode_event(PipelineEventRow.model_validate(fields))
-    assert encoded.nulled == (
-        "validation_evidence_ref",
-        "deployment_result_ref",
-        "image_failures",
-    )
-
-
-def test_prism_guard_keeps_empty_lists() -> None:
-    fields = {**_guarded_fields(), "image_failures": [], "placement_issues": []}
-    saved_refs = _saved_by_nulling(
-        fields,
-        ("image_build_result_ref", "validation_evidence_ref", "deployment_result_ref"),
-    )
-    fields = _with_line_length(fields, PRISM_LINE_MAX_BYTES + 1 + saved_refs)
-    encoded = encode_event(PipelineEventRow.model_validate(fields))
-    prism = _payload(encoded.data.split(b"\n")[1].decode())
-    assert encoded.nulled == (
-        "image_build_result_ref",
-        "validation_evidence_ref",
-        "deployment_result_ref",
-        "cv_service_issues",
-    )
-    assert prism["image_failures"] == []
-    assert prism["placement_issues"] == []
-
-
-def test_worst_case_row_fits_4096_after_every_drop() -> None:
-    fields = worst_case_fields()
-    fields.update(LONG_REFS)
-    for name in FLAT_DROPS[3:]:
-        element = cast("list[JsonValue]", fields[name])[:1] or ["x" * 255]
-        fields[name] = element * 80
-    encoded = encode_event(PipelineEventRow.model_validate(fields))
-    prism_line = encoded.data.split(b"\n")[1]
-    assert encoded.nulled == FLAT_DROPS
-    assert len(prism_line) <= PRISM_LINE_MAX_BYTES, len(prism_line)
-
-
-def test_a_row_that_fits_is_written_unchanged() -> None:
-    fitting = PipelineEventRow.model_validate(worst_case_fields())
-    encoded = encode_event(fitting)
-    assert encoded.nulled == ()
-    assert encoded.data == (
-        f"{render_sdi_line(fitting)}\n{render_prism_line(fitting)}\n".encode()
-    )
-
-
 class _Recorder:
     def __init__(self, fd: int, *, chunk: int | None = None) -> None:
         self.fd = fd
@@ -405,24 +273,7 @@ def test_write_event_writes_the_pair_in_one_call(
     started = row(**CV_RUNNING)
     write_event(started)
     monkeypatch.undo()
-    assert recorder.writes == [encode_event(started).data]
-
-
-def test_write_event_appends_the_internal_error_line_to_the_same_write(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    recorder = _Recorder(fd=2)
-    monkeypatch.setattr(os, "write", recorder)
-    oversized = _with_line_length(_guarded_fields(), PRISM_LINE_MAX_BYTES + 1)
-    write_event(PipelineEventRow.model_validate(oversized))
-    monkeypatch.undo()
-    assert len(recorder.writes) == 1
-    lines = recorder.writes[0].decode().splitlines()
-    assert len(lines) == 3, lines
-    assert lines[0].startswith("[sdi] ")
-    assert lines[1].startswith("PRISM_EVENT ")
-    assert lines[2].startswith("sdi-integration: internal error: ")
-    assert "image_build_result_ref" in lines[2]
+    assert recorder.writes == [encode_event(started)]
 
 
 def test_write_event_finishes_a_partial_write(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -431,7 +282,7 @@ def test_write_event_finishes_a_partial_write(monkeypatch: pytest.MonkeyPatch) -
     started = row(**CV_RUNNING)
     write_event(started)
     monkeypatch.undo()
-    assert b"".join(recorder.writes) == encode_event(started).data
+    assert b"".join(recorder.writes) == encode_event(started)
     assert len(recorder.writes) > 1
 
 

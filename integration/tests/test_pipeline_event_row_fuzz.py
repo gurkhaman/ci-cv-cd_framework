@@ -191,7 +191,7 @@ def test_build_row_never_raises(seed: int) -> None:
         )
 
         assert PipelineEventRow.model_validate(row.model_dump()) == row
-        assert encode_event(row).data.endswith(b"\n")
+        assert encode_event(row).endswith(b"\n")
         stages = [item.envelope.correlation.stage for item in executions]
         if len(set(stages)) == len(stages):
             shuffled = rng.sample(executions, len(executions))

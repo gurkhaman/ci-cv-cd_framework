@@ -7,7 +7,6 @@ import json
 import os
 import string
 import sys
-from dataclasses import dataclass
 from datetime import UTC
 from typing import TYPE_CHECKING, Annotated, Literal, cast
 
@@ -231,18 +230,6 @@ class PipelineEventRow(EventModel):
                 return self.cd_status
 
 
-SIZE_GUARD_DROPS: tuple[tuple[str, ...], ...] = (
-    ("image_build_result_ref",),
-    ("validation_evidence_ref",),
-    ("deployment_result_ref",),
-    ("image_failures",),
-    ("placement_issues",),
-    ("cv_service_issues",),
-    ("mission_steps",),
-    ("image_digest",),
-    ("image_ref",),
-)
-
 _CI_SEVERITY: dict[PipelineStatus, int] = {
     "SUCCEEDED": 0,
     "NOT_EVALUATED": 1,
@@ -381,7 +368,7 @@ def render_sdi_line(row: PipelineEventRow) -> str:
 
 
 def render_prism_line(row: PipelineEventRow) -> str:
-    """Render the `PRISM_EVENT` line for a row, without its LF or the size guard."""
+    """Render the `PRISM_EVENT` line for a row, without its LF."""
     payload = json.dumps(
         row.model_dump(mode="json"),
         separators=(",", ":"),
@@ -391,41 +378,14 @@ def render_prism_line(row: PipelineEventRow) -> str:
     return f"{PRISM_PREFIX}{payload}".replace("##[", BRACKET_AFTER_HASHES)
 
 
-@dataclass(frozen=True)
-class EncodedEvent:
-    """One line pair as it is written, and the fields the size guard nulled."""
-
-    data: bytes
-    nulled: tuple[str, ...]
-
-
-def encode_event(row: PipelineEventRow) -> EncodedEvent:
-    """Render both lines, nulling `SIZE_GUARD_DROPS` until the JSON line fits."""
-    current = row
-    line = render_prism_line(current)
-    nulled: list[str] = []
-    for group in SIZE_GUARD_DROPS:
-        if len(line) <= PRISM_LINE_MAX_BYTES:
-            break
-        present = [name for name in group if getattr(current, name) not in (None, [])]
-        if present:
-            current = current.model_copy(update=dict.fromkeys(present))
-            nulled.extend(present)
-            line = render_prism_line(current)
-    data = f"{render_sdi_line(current)}\n{line}\n".encode("ascii")
-    return EncodedEvent(data, tuple(nulled))
+def encode_event(row: PipelineEventRow) -> bytes:
+    """Render both lines as they are written."""
+    return f"{render_sdi_line(row)}\n{render_prism_line(row)}\n".encode("ascii")
 
 
 def write_event(row: PipelineEventRow, *, fd: int = 2) -> None:
     """Write one line pair to stderr in one `os.write`, ignoring failures."""
-    encoded = encode_event(row)
-    data = encoded.data
-    if encoded.nulled:
-        data += (
-            f"{INTERNAL_ERROR_PREFIX}PRISM_EVENT line over {PRISM_LINE_MAX_BYTES} "
-            f"bytes; set {', '.join(encoded.nulled)} to null\n"
-        ).encode()
-    _write_stderr(data, fd=fd)
+    _write_stderr(encode_event(row), fd=fd)
 
 
 def _write_stderr(data: bytes, *, fd: int = 2) -> None:
