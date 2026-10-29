@@ -137,6 +137,7 @@ class Stage:
 
     name: StageName
     display_name: str
+    event_label: str
     grant: StageGrant
     agent: Agent
     jenkins_descriptor: str
@@ -148,11 +149,17 @@ class Stage:
         """The descriptor dispatch-local runs."""
         return self.local_override or self.jenkins_descriptor
 
+    @property
+    def event_tag(self) -> str:
+        """The `[sdi]` line's Stage column, such as `IMAGE-BUILD`."""
+        return self.event_label.upper().replace(" ", "-")
+
 
 STAGES: dict[StageName, Stage] = {
     "composition": Stage(
         "composition",
         "Composition",
+        event_label="Composition",
         grant=StageGrant(
             "sdi.composition-stage-profile/v1",
             (
@@ -182,6 +189,7 @@ STAGES: dict[StageName, Stage] = {
     "image_build": Stage(
         "image_build",
         "Image build",
+        event_label="Image build",
         grant=StageGrant(
             "sdi.image-build-stage-profile/v1",
             (
@@ -201,6 +209,7 @@ STAGES: dict[StageName, Stage] = {
     "cv": Stage(
         "cv",
         "Continuous Validation",
+        event_label="CV",
         grant=StageGrant(
             "sdi.cv-stage-profile/v1",
             (
@@ -231,6 +240,7 @@ STAGES: dict[StageName, Stage] = {
     "cd": Stage(
         "cd",
         "Continuous Deployment",
+        event_label="CD",
         grant=StageGrant(
             "sdi.cd-stage-profile/v1",
             (
