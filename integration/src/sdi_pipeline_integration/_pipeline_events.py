@@ -239,7 +239,8 @@ SIZE_GUARD_DROPS: tuple[tuple[str, ...], ...] = (
     ("placement_issues",),
     ("cv_service_issues",),
     ("mission_steps",),
-    ("image_ref", "image_digest"),
+    ("image_digest",),
+    ("image_ref",),
 )
 
 _CI_SEVERITY: dict[PipelineStatus, int] = {
@@ -406,7 +407,7 @@ def encode_event(row: PipelineEventRow) -> EncodedEvent:
     for group in SIZE_GUARD_DROPS:
         if len(line) <= PRISM_LINE_MAX_BYTES:
             break
-        present = [name for name in group if getattr(current, name) is not None]
+        present = [name for name in group if getattr(current, name) not in (None, [])]
         if present:
             current = current.model_copy(update=dict.fromkeys(present))
             nulled.extend(present)

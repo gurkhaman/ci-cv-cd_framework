@@ -67,9 +67,10 @@ control character, DEL or the sequence `##[`.
   LF. An over-long line sets whole fields to null, one at a time, and keeps
   their keys: `image_build_result_ref`, `validation_evidence_ref`,
   `deployment_result_ref`, `image_failures`, `placement_issues`,
-  `cv_service_issues`, `mission_steps`, then `image_ref` and `image_digest`
-  together. A value is never cut. The writer adds a
-  `sdi-integration: internal error:` line that names the nulled fields.
+  `cv_service_issues`, `mission_steps`, `image_digest`, then `image_ref`.
+  It skips a field that is already null or an empty list. A value is never
+  cut. The writer adds a `sdi-integration: internal error:` line that names
+  the nulled fields.
 - An `[sdi]` line is at most 1024 bytes. Every template fits with
   maximum-length slots. If a message is still too long, its identifier slots
   (Combination ID, profile id, generator, service id, host and Reason code) are
