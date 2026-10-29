@@ -170,6 +170,62 @@ except possibly the final one.
 A failed placement's reason is `CrashLoopBackOff`, `ErrImagePull`,
 `ImagePullBackOff`, `Unschedulable` or `other`.
 
+## Where Values Come From
+
+`build_row` in
+`integration/src/sdi_pipeline_integration/_pipeline_event_rows.py` builds
+every row. It reads the run's identity, the committed target profile, and the
+accepted Stage attempts its caller holds. The caller names only the line: its
+Stage, its step, and the slots only the caller knows, such as `{limit_min}`.
+The row fills every other slot, so a message cannot contradict its row.
+
+`target` is the profile's robot kind, upper-cased. `architecture` is the one
+all hosts share, or else the one that differs from the `native` host's. When
+the profile cannot be read, or its architecture is ambiguous, both are null.
+
+A Stage's status comes from its accepted attempt:
+
+| Attempt | Status |
+| -- | -- |
+| none yet | `PENDING` |
+| none yet, on the Stage's own lines before `stage-finished` | `RUNNING` |
+| none yet, after an attempt that blocks later Stages | `SKIPPED` until the final line |
+| succeeded, Domain succeeded | `SUCCEEDED` |
+| succeeded, Domain failed | `FAILED` |
+| failed or timed out | `FAILED` |
+| skipped because the run deadline passed | `FAILED` |
+| succeeded, Domain not evaluated | `NOT_EVALUATED` |
+| any other skip | `SKIPPED` |
+
+`failure_reason` is the Reason of the first group that has a Stage with one:
+
+1. a `FAILED` Stage;
+2. a Stage skipped with `sdi.stage.not-implemented` or
+   `sdi.dependency.fixture-evidence`;
+3. a `NOT_EVALUATED` Stage, or any other skip.
+
+Within a group the earliest Stage wins. `sdi.dependency.prerequisite-blocked`
+is never chosen.
+
+Counts, durations, refs and the image fields come only from accepted result
+files. A ref is set when its Stage accepted the file. The image tags need the
+deployment schema, so `image_ref`, `platform_status` and `detected_platform`
+are null in an `execute-stage image_build` row.
+
+While a Stage runs, its accepted adapter reports fill item fields. The first
+report for an item wins.
+
+| Report | Fills |
+| -- | -- |
+| `service-unfit`, `pull-blocked` | a `cv_service_issues` entry, `not_evaluated` |
+| `mission-setup-done` | `mission_setup`, and `mission_steps` with every step null |
+| `mission-step` | that step in `mission_steps`; a scripted step reads `scripted` |
+| `pod-not-running` | a `placement_issues` entry, `failed` |
+
+From the Stage's `stage-finished` line on, its result files win. A Stage that
+ended without a result file, such as a CV that timed out, shows null there,
+even where its live lines showed values.
+
 ## Steps
 
 The runtime prints the run-level and every-Stage steps. A Stage's adapter
