@@ -23,7 +23,6 @@ from ._pipeline_event_catalogue import (
     Step,
 )
 from ._pipeline_events import (
-    PRISM_LINE_MAX_BYTES,
     PRISM_PREFIX,
     SDI_PREFIX,
     PipelineEventRow,
@@ -375,12 +374,12 @@ def _character_problem(line: bytes) -> str | None:
 
 
 def _line_problems(
-    number: int, line: bytes, kind: str, max_bytes: int
+    number: int, line: bytes, kind: str, max_bytes: int | None = None
 ) -> list[Violation]:
     problems: list[Violation] = []
     if (character := _character_problem(line)) is not None:
         problems.append(Violation("characters", f"{kind} line has {character}", number))
-    if len(line) > max_bytes:
+    if max_bytes is not None and len(line) > max_bytes:
         detail = f"{kind} line is {len(line)} bytes, over {max_bytes}"
         problems.append(Violation("size", detail, number))
     return problems
@@ -449,7 +448,7 @@ def _read_event(
     line: bytes,
     violations: list[Violation],
 ) -> ConsoleEvent | None:
-    problems = _line_problems(number, line, "PRISM_EVENT", PRISM_LINE_MAX_BYTES)
+    problems = _line_problems(number, line, "PRISM_EVENT")
     if sdi is not None:
         problems += _line_problems(*sdi, "[sdi]", SDI_LINE_MAX_BYTES)
     violations.extend(problems)

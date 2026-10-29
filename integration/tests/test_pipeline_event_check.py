@@ -272,21 +272,27 @@ def test_rejects_a_prism_line_that_is_not_the_renderers() -> None:
     assert _rules(check_events(b"".join(lines), None)) == {"prism-line"}
 
 
-def test_rejects_oversized_lines() -> None:
+def test_rejects_an_oversized_sdi_line() -> None:
     lines = golden_console("g1", noise=False).splitlines(keepends=True)
     lines[0] = lines[0].rstrip(b"\n") + b"x" * 1024 + b"\n"
-    payload = json.loads(lines[1].removeprefix(b"PRISM_EVENT "))
-    lines[1] = (
-        b"PRISM_EVENT "
-        + json.dumps({**payload, "padding": "x" * 4096}, separators=(",", ":")).encode()
-        + b"\n"
-    )
     violations = check_events(b"".join(lines), None)
-    assert "size" in _rules(violations), violations
-    assert {violation.line for violation in violations if violation.rule == "size"} == {
-        1,
-        2,
-    }
+    assert [(violation.rule, violation.line) for violation in violations] == [
+        ("size", 1)
+    ], violations
+
+
+def test_accepts_a_prism_line_of_any_length() -> None:
+    rows = golden_rows("g1")
+    images = 200
+    rows = with_row(
+        rows,
+        len(rows) - 1,
+        image_ref=[f"registry:5000/sdi/service-{i:03d}:tag" for i in range(images)],
+        image_digest=["sha256:" + "0" * 64 for _ in range(images)],
+    )
+    data = console(rows)
+    assert max(map(len, data.splitlines())) > 16 * 1024
+    assert check_events(data, None) == []
 
 
 @pytest.mark.parametrize("raw", [b"\x7f", b"\x1b", b"##["])

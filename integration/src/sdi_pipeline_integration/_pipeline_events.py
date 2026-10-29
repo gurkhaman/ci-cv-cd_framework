@@ -48,7 +48,6 @@ if TYPE_CHECKING:
 SCHEMA_VERSION = "sdi.pipeline-event/v1"
 PRISM_PREFIX = "PRISM_EVENT "
 SDI_PREFIX = "[sdi] "
-PRISM_LINE_MAX_BYTES = 4096
 # GitHub Actions reads "##[" in a log line as a workflow command (spec 2).
 BRACKET_AFTER_HASHES = "##\\u005b"
 INTERNAL_ERROR_PREFIX = "sdi-integration: internal error: "
