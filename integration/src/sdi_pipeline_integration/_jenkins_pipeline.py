@@ -14,6 +14,7 @@ from ._git_input import GitRepository
 from ._handoff_contracts import HANDOFF_CONTRACT_VERSION
 from ._integration_code import integration_code_digest, require_fresh_agent_images
 from ._jenkins_agent_boundary import enforce_integration_execution_boundary
+from ._pipeline_event_printer import EventPrinter
 from ._result_contracts import run_is_red
 from ._run_input import identify_committed_run
 from ._service_descriptions import SERVICE_REPOSITORY_ROOT
@@ -377,6 +378,9 @@ def execute_jenkins_stage(  # noqa: PLR0913
         descriptor_path=definition.jenkins_descriptor,
         attempt_root=attempt_root,
         available_inputs=granted | outputs,
+        events=EventPrinter.for_run(
+            identified, committed, scope="run", executions=executions
+        ),
         work_limit_seconds=work_limit_seconds,
         deadline_monotonic=time.monotonic() + remaining_seconds,
     )

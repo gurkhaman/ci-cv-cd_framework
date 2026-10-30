@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from ._bundle import assemble_bundle_staging
 from ._git_input import GitRepository
+from ._pipeline_event_printer import EventPrinter
 from ._run_input import identify_committed_run
 from ._stage_registry import RUN_LIMITS, STAGES, StageName
 from ._stage_runtime import (
@@ -19,6 +20,7 @@ from ._stage_runtime import (
     StageInputSource,
     SuppliedInputs,
     check_key_bindings,
+    committed_stage_sources,
     composition_key_names,
     execute_identified_stage,
     load_stage_adapter,
@@ -77,6 +79,9 @@ def dispatch_local(  # noqa: PLR0913, PLR0915
     descriptor_modes = _descriptor_modes(
         repository, composition_key_names(repository, supplied)
     )
+    events = EventPrinter.for_run(
+        identified, committed_stage_sources(repository, identified), scope="run"
+    )
     run_deadline = (
         run_started_monotonic
         + RUN_LIMITS.run_seconds
@@ -121,6 +126,7 @@ def dispatch_local(  # noqa: PLR0913, PLR0915
                     descriptor_path=STAGES[stage].local_descriptor,
                     attempt_root=work_root / stage,
                     available_inputs=granted_inputs[stage] | outputs,
+                    events=events.with_executions(executions),
                     deadline_monotonic=run_deadline,
                 )
             else:

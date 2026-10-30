@@ -11,7 +11,7 @@ import stat
 import subprocess
 import tempfile
 import time
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -40,7 +40,8 @@ from ._domain_contracts import (
 from ._git_input import CommittedBlob, GitRepository, validate_repository_path
 from ._jenkins_agent_boundary import enforce_domain_execution_boundary
 from ._json_input import canonical_json, parse_json
-from ._pipeline_event_rows import EventLine
+from ._pipeline_event_printer import EventPrinter
+from ._pipeline_event_rows import EventLine, StageFinished
 from ._result_contracts import (
     MAX_TRANSFER_DIAGNOSTIC_BYTES,
     MAX_TRANSFER_DOMAIN_BYTES,
@@ -87,7 +88,7 @@ from ._yaml_input import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Generator, Mapping, Sequence
 
 MAX_RESPONSE_BYTES = 64 * 1024
 MAX_ACCEPTED_ENVELOPE_BYTES = 64 * 1024
@@ -1349,6 +1350,11 @@ def execute_stage(  # noqa: PLR0913
         available_inputs=stage_inputs(
             repository, identified, supplied, stage=descriptor.stage
         ),
+        events=EventPrinter.for_run(
+            identified,
+            committed_stage_sources(repository, identified),
+            scope="single_stage",
+        ),
     )
     return execution.envelope.model_dump(mode="json", exclude_none=True)
 
@@ -1408,17 +1414,22 @@ def _adapter_environment(
     return environment, tuple(secrets)
 
 
-def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
+def execute_identified_stage(  # noqa: PLR0913
     *,
     repository: GitRepository,
     identified: Mapping[str, Any],
     descriptor_path: str,
     attempt_root: Path,
     available_inputs: Mapping[str, StageInputSource],
+    events: EventPrinter,
     work_limit_seconds: int | None = None,
     deadline_monotonic: float | None = None,
 ) -> StageExecution:
-    """Execute one Stage while preserving an already assigned Execution ID."""
+    """Execute one Stage while preserving an already assigned Execution ID.
+
+    Every attempt it returns is published and printed as `stage-finished`. A
+    Stage that raises prints nothing more.
+    """
     if attempt_root.exists():
         msg = "attempt root must not already exist"
         raise InputError(msg)
@@ -1434,90 +1445,135 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
         raise InputError(msg)
 
     attempt_root.parent.mkdir(parents=True, exist_ok=True)
+    execution = _pre_spawn_skip(descriptor, identified, available_inputs)
+    if execution is None:
+        with _attempt_work_root(attempt_root) as work_root:
+            execution = _run_adapter(
+                work_root=work_root,
+                descriptor=descriptor,
+                profile=profile,
+                identified=identified,
+                available_inputs=available_inputs,
+                work_limit_seconds=effective_work_limit_seconds,
+                deadline_monotonic=deadline_monotonic,
+                events=events,
+            )
+        events.emit(EventLine(descriptor.stage, "publishing"))
+    _publish_execution(attempt_root, execution)
+    events.emit(StageFinished(execution))
+    return execution
+
+
+def _pre_spawn_skip(
+    descriptor: AdapterDescriptor,
+    identified: Mapping[str, Any],
+    available_inputs: Mapping[str, StageInputSource],
+) -> StageExecution | None:
+    """Return the skip of a Stage whose adapter must not start, if it is one."""
     if descriptor.implementation_mode == "not_implemented":
-        execution = skipped_stage_execution(
+        return skipped_stage_execution(
             execution_id=identified["execution_id"],
             stage=descriptor.stage,
             implementation_mode="not_implemented",
             code="sdi.stage.not-implemented",
             summary="No reviewed implementation is available for this Stage.",
         )
-        _publish_execution(attempt_root, execution)
-        return execution
     if descriptor.implementation_mode == "implemented" and any(
         source.producer_implementation_mode == "fixture"
         and source.producer_domain_outcome == "not_evaluated"
         for source in available_inputs.values()
     ):
-        execution = skipped_stage_execution(
+        return skipped_stage_execution(
             execution_id=identified["execution_id"],
             stage=descriptor.stage,
             implementation_mode="implemented",
             code="sdi.dependency.fixture-evidence",
             summary="Implemented work cannot consume unevaluated Fixture output.",
         )
-        _publish_execution(attempt_root, execution)
-        return execution
     if descriptor.implementation_mode == "fixture" and any(
         source.producer_implementation_mode == "implemented"
         for source in available_inputs.values()
     ):
         # Fixture cases match exact digests, so they can never recognize real
         # output; running one would only report a Fixture input mismatch.
-        execution = skipped_stage_execution(
+        return skipped_stage_execution(
             execution_id=identified["execution_id"],
             stage=descriptor.stage,
             implementation_mode="fixture",
             code="sdi.dependency.implemented-evidence",
             summary="Fixture work cannot consume implemented output.",
         )
-        _publish_execution(attempt_root, execution)
-        return execution
+    return None
 
+
+@contextmanager
+def _attempt_work_root(attempt_root: Path) -> Generator[Path]:
     work_root = Path(
         tempfile.mkdtemp(prefix=f".{attempt_root.name}.work-", dir=attempt_root.parent)
     )
+    try:
+        yield work_root
+    finally:
+        shutil.rmtree(work_root, ignore_errors=True)
+
+
+def _run_adapter(  # noqa: PLR0913
+    *,
+    work_root: Path,
+    descriptor: AdapterDescriptor,
+    profile: StageProfile,
+    identified: Mapping[str, Any],
+    available_inputs: Mapping[str, StageInputSource],
+    work_limit_seconds: int,
+    deadline_monotonic: float | None,
+    events: EventPrinter,
+) -> StageExecution:
+    """Run the adapter once and return its attempt, unpublished.
+
+    It has no attempt root, so only the caller can publish what it returns.
+    """
+    input_root = work_root / "inputs"
+    output_root = work_root / "candidate"
+    input_root.mkdir()
+    output_root.mkdir()
+    output_root_metadata = output_root.lstat()
+    output_root_identity = (
+        output_root_metadata.st_dev,
+        output_root_metadata.st_ino,
+    )
+    declared_inputs, input_models = _materialize_stage_inputs(
+        profile,
+        input_root,
+        available_inputs,
+        descriptor.implementation_mode,
+    )
+    request = AdapterRequest.model_validate(
+        {
+            "schema_version": "sdi.stage-adapter-request/v1",
+            "correlation": {
+                "execution_id": identified["execution_id"],
+                "stage": descriptor.stage,
+                "attempt_number": 1,
+            },
+            "work_limit_seconds": work_limit_seconds,
+            "inputs": declared_inputs,
+            "outputs": [item.model_dump(mode="json") for item in profile.outputs],
+            "diagnostic": profile.diagnostic.model_dump(mode="json"),
+        },
+        strict=True,
+        extra="forbid",
+    )
+    request_path = work_root / "request.json"
+    _write_file(
+        work_root,
+        "request.json",
+        canonical_json(request.model_dump(mode="json")),
+    )
+    environment, secrets = _adapter_environment(descriptor, available_inputs)
+    events.emit(EventLine(descriptor.stage, "stage-started"))
+    started_at = datetime.now(UTC)
     process: subprocess.Popen[bytes] | None = None
     try:
-        input_root = work_root / "inputs"
-        output_root = work_root / "candidate"
-        input_root.mkdir()
-        output_root.mkdir()
-        output_root_metadata = output_root.lstat()
-        output_root_identity = (
-            output_root_metadata.st_dev,
-            output_root_metadata.st_ino,
-        )
-        declared_inputs, input_models = _materialize_stage_inputs(
-            profile,
-            input_root,
-            available_inputs,
-            descriptor.implementation_mode,
-        )
-        request = AdapterRequest.model_validate(
-            {
-                "schema_version": "sdi.stage-adapter-request/v1",
-                "correlation": {
-                    "execution_id": identified["execution_id"],
-                    "stage": descriptor.stage,
-                    "attempt_number": 1,
-                },
-                "work_limit_seconds": effective_work_limit_seconds,
-                "inputs": declared_inputs,
-                "outputs": [item.model_dump(mode="json") for item in profile.outputs],
-                "diagnostic": profile.diagnostic.model_dump(mode="json"),
-            },
-            strict=True,
-            extra="forbid",
-        )
-        request_path = work_root / "request.json"
-        _write_file(
-            work_root,
-            "request.json",
-            canonical_json(request.model_dump(mode="json")),
-        )
-        environment, secrets = _adapter_environment(descriptor, available_inputs)
-        started_at = datetime.now(UTC)
         try:
             process = subprocess.Popen(  # noqa: S603
                 [
@@ -1537,7 +1593,7 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
                 start_new_session=True,
             )
         except OSError:
-            execution = _runtime_failure_execution(
+            return _runtime_failure_execution(
                 descriptor=descriptor,
                 request=request,
                 input_sources=available_inputs,
@@ -1548,20 +1604,21 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
                 code="sdi.adapter.process-lost",
                 summary="The Stage adapter process could not be started.",
             )
-            _publish_execution(attempt_root, execution)
-            return execution
         process_group = process.pid
         limit = adapter_time_limit(
-            effective_work_limit_seconds, deadline_monotonic, time.monotonic()
+            work_limit_seconds, deadline_monotonic, time.monotonic()
         )
+        events.emit(limit.running_line(descriptor.stage))
         try:
             return_code = process.wait(timeout=limit.seconds)
         except ExternalCancellation:
             _terminate_process_group(process, process_group, immediate=True)
             raise
         except subprocess.TimeoutExpired:
+            events.emit(limit.reached_line(descriptor.stage))
             _terminate_process_group(process, process_group)
-            execution = _runtime_failure_execution(
+            code, summary = limit.reason
+            return _runtime_failure_execution(
                 descriptor=descriptor,
                 request=request,
                 input_sources=available_inputs,
@@ -1569,22 +1626,19 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
                 finished_at=datetime.now(UTC),
                 conclusion="timed_out",
                 termination="timed_out",
-                code=limit.reason[0],
-                summary=limit.reason[1],
+                code=code,
+                summary=summary,
             )
-            _publish_execution(attempt_root, execution)
-            return execution
         finished_at = datetime.now(UTC)
         if _process_group_exists(process_group):
             _terminate_process_group(process, process_group)
-            finished_at = datetime.now(UTC)
             signaled = return_code < 0
-            execution = _runtime_failure_execution(
+            return _runtime_failure_execution(
                 descriptor=descriptor,
                 request=request,
                 input_sources=available_inputs,
                 started_at=started_at,
-                finished_at=finished_at,
+                finished_at=datetime.now(UTC),
                 conclusion="failed",
                 termination="signaled" if signaled else "exited",
                 exit_code=None if signaled else return_code,
@@ -1592,11 +1646,9 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
                 code="sdi.adapter.descendants-survived",
                 summary="The Stage adapter left descendant processes after exit.",
             )
-            _publish_execution(attempt_root, execution)
-            return execution
         if return_code != 0:
             signaled = return_code < 0
-            execution = _runtime_failure_execution(
+            return _runtime_failure_execution(
                 descriptor=descriptor,
                 request=request,
                 input_sources=available_inputs,
@@ -1617,8 +1669,7 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
                     else "The Stage adapter process exited unsuccessfully."
                 ),
             )
-            _publish_execution(attempt_root, execution)
-            return execution
+        events.emit(EventLine(descriptor.stage, "checking-output"))
         try:
             response, captured = _capture_candidate(
                 output_root,
@@ -1631,7 +1682,7 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
             )
         except (InputError, OSError) as error:
             code, summary = _candidate_rejection_reason(str(error))
-            execution = _runtime_failure_execution(
+            return _runtime_failure_execution(
                 descriptor=descriptor,
                 request=request,
                 input_sources=available_inputs,
@@ -1643,49 +1694,39 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
                 code=code,
                 summary=summary,
             )
-            _publish_execution(attempt_root, execution)
-            return execution
-        envelope = _accepted_envelope(
-            descriptor=descriptor,
-            request=request,
-            response=response,
-            input_sources=available_inputs,
-            captured=captured,
-            started_at=started_at,
-            finished_at=finished_at,
-        )
-
-        output_by_slot = {
-            item.slot: item for item in request.outputs if item.role == "domain_output"
-        }
-        output_sources = {
-            slot: StageInputSource(
-                source_path=(
-                    f"stages/{descriptor.stage.replace('_', '-')}/"
-                    f"{output_by_slot[slot].path.removeprefix('outputs/')}"
-                ),
-                media_type=output_by_slot[slot].media_type,
-                schema_version=output_by_slot[slot].schema_version,
-                content=captured[output_by_slot[slot].path],
-                producer_implementation_mode=descriptor.implementation_mode,
-                producer_domain_outcome=response.domain_outcome,
-            )
-            for slot in response.produced_outputs
-            if slot in output_by_slot
-        }
-        accepted_files = {
-            item.path: captured[item.path] for item in envelope.accepted_files
-        }
-        execution = StageExecution(
-            envelope=envelope,
-            files=accepted_files,
-            outputs=output_sources,
-        )
-        _publish_execution(attempt_root, execution)
-        return execution  # noqa: TRY300
     except ExternalCancellation:
         if process is not None and process.poll() is None:
             _terminate_process_group(process, process.pid, immediate=True)
         raise
-    finally:
-        shutil.rmtree(work_root, ignore_errors=True)
+    envelope = _accepted_envelope(
+        descriptor=descriptor,
+        request=request,
+        response=response,
+        input_sources=available_inputs,
+        captured=captured,
+        started_at=started_at,
+        finished_at=finished_at,
+    )
+    output_by_slot = {
+        item.slot: item for item in request.outputs if item.role == "domain_output"
+    }
+    output_sources = {
+        slot: StageInputSource(
+            source_path=(
+                f"stages/{descriptor.stage.replace('_', '-')}/"
+                f"{output_by_slot[slot].path.removeprefix('outputs/')}"
+            ),
+            media_type=output_by_slot[slot].media_type,
+            schema_version=output_by_slot[slot].schema_version,
+            content=captured[output_by_slot[slot].path],
+            producer_implementation_mode=descriptor.implementation_mode,
+            producer_domain_outcome=response.domain_outcome,
+        )
+        for slot in response.produced_outputs
+        if slot in output_by_slot
+    }
+    return StageExecution(
+        envelope=envelope,
+        files={item.path: captured[item.path] for item in envelope.accepted_files},
+        outputs=output_sources,
+    )
