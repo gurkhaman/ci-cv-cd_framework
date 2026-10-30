@@ -1,5 +1,3 @@
-"""Collect the stderr of real `sdi-integration` processes and check its events."""
-
 from __future__ import annotations
 
 import json
@@ -21,19 +19,15 @@ EVENT_PREFIXES = (SDI_PREFIX.encode(), PRISM_PREFIX.encode())
 
 @dataclass
 class Console:
-    """Each process's stderr, in the order a Jenkins console shows it."""
-
     parts: list[bytes] = field(default_factory=list)
 
     @property
     def stderr(self) -> bytes:
-        """Return every process's stderr, concatenated."""
         return b"".join(self.parts)
 
     def run(
         self, *arguments: str, env: Mapping[str, str] | None = None
     ) -> subprocess.CompletedProcess[str]:
-        """Run `sdi-integration` and keep its stderr."""
         completed = subprocess.run(
             ["sdi-integration", *arguments],
             check=False,
@@ -47,7 +41,6 @@ class Console:
     def interrupt(
         self, *arguments: str, after: str
     ) -> subprocess.CompletedProcess[str]:
-        """Run `sdi-integration` and SIGTERM it once its stderr shows `after`."""
         process = subprocess.Popen(
             ["sdi-integration", *arguments],
             stdout=subprocess.PIPE,
@@ -72,7 +65,6 @@ class Console:
         )
 
     def add(self, stdout: str, stderr: str) -> None:
-        """Keep one finished process's stderr, after checking its stdout."""
         assert "PRISM_EVENT" not in stdout, stdout
         assert SDI_PREFIX not in stdout, stdout
         if stdout:
@@ -84,25 +76,24 @@ def _event_lines(stderr: bytes) -> list[bytes]:
     return [line for line in stderr.splitlines() if line.startswith(EVENT_PREFIXES)]
 
 
-def assert_conforms(console: Console, golden: Golden | None) -> None:
-    """Assert the console's events conform, and match `golden` when given.
+def _assert_only_events(stderr: bytes) -> None:
+    if _event_lines(stderr):
+        assert _event_lines(stderr) == stderr.splitlines(), stderr.decode()
 
-    A process that prints events prints nothing else on stderr.
-    """
+
+def assert_conforms(console: Console, golden: Golden | None) -> None:
     stderr = console.stderr
     violations = check_events(stderr, golden)
     assert violations == [], "\n".join(
         [*(violation.render("stderr") for violation in violations), stderr.decode()]
     )
     for part in console.parts:
-        if _event_lines(part):
-            assert _event_lines(part) == part.splitlines(), part.decode()
+        _assert_only_events(part)
     if golden is not None:
         assert len(_event_lines(stderr)) == 2 * len(golden.lines), stderr.decode()
 
 
 def assert_no_events(stderr: str | bytes) -> None:
-    """Assert a process printed no pipeline event."""
     text = stderr.encode("ascii") if isinstance(stderr, str) else stderr
     assert b"PRISM_EVENT" not in text, text.decode()
     assert _event_lines(text) == [], text.decode()

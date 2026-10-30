@@ -59,10 +59,7 @@ def dispatch_local(  # noqa: PLR0913, PLR0915
     supplied: SuppliedInputs,
     run_deadline_monotonic: float | None = None,
 ) -> dict[str, Any]:
-    """Execute and atomically publish one complete local four-Stage run.
-
-    `run_deadline_monotonic` replaces the run deadline the run limits give.
-    """
+    """Execute and atomically publish one complete local four-Stage run."""
     run_started_at = datetime.now(UTC)
     run_started_monotonic = time.monotonic()
     if bundle_root.exists() or bundle_root.is_symlink():

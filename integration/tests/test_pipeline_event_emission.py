@@ -273,7 +273,6 @@ G17_REASONS = {
 
 
 def _golden(case: str) -> Golden:
-    """Return a case's golden; G17's variants differ from it only in the code."""
     if case not in G17_REASONS:
         return golden(case)
     base = golden("g17")

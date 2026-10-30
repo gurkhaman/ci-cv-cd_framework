@@ -1,9 +1,3 @@
-"""Scripted Stage adapters in a committed repository, and the Jenkins chain.
-
-`JenkinsRun` calls the public CLI in the order the Jenkinsfile does and keeps
-every process's stderr in one `Console`, as the Jenkins console would.
-"""
-
 from __future__ import annotations
 
 import json
@@ -93,10 +87,7 @@ def jenkins_repository(
     copy_baked_integration_code(repository)
     write_fixture_composition_descriptor(repository)
     adapters = repository / "deployment/jenkins/adapters"
-    # Run the CD Fixture without a cluster.
-    (adapters / "cd-v1.yaml").write_bytes(
-        (adapters / "cd-fixture-v1.yaml").read_bytes()
-    )
+    _run_the_cd_fixture_without_a_cluster(adapters)
     if fixture_image_build:
         (adapters / "image-build-v1.yaml").write_bytes(
             (adapters / "image-build-fixture-v1.yaml").read_bytes()
@@ -104,6 +95,12 @@ def jenkins_repository(
     git(repository, "add", ".")
     git(repository, "commit", "-m", "Add distributed Fixture inputs")
     return repository, git(repository, "rev-parse", "HEAD")
+
+
+def _run_the_cd_fixture_without_a_cluster(adapters: Path) -> None:
+    (adapters / "cd-v1.yaml").write_bytes(
+        (adapters / "cd-fixture-v1.yaml").read_bytes()
+    )
 
 
 def common_arguments(repository: Path, commit_sha: str, request_path: str) -> list[str]:
@@ -177,8 +174,6 @@ def millis_from_now(seconds: float) -> str:
 
 @dataclass
 class JenkinsRun:
-    """One Jenkins run of a committed repository, driven through the CLI."""
-
     repository: Path
     commit_sha: str
     root: Path
@@ -208,7 +203,6 @@ class JenkinsRun:
         work_limit: str | None = None,
         baked: str | None = None,
     ) -> list[str]:
-        """Return `execute-jenkins-stage` arguments after the earlier attempts."""
         return [
             "execute-jenkins-stage",
             *common_arguments(self.repository, self.commit_sha, self.request_path),
@@ -237,7 +231,6 @@ class JenkinsRun:
         work_limit: str | None = None,
         baked: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        """Run one Stage; a Stage that exits 0 left its attempt for the next."""
         executed = self.console.run(
             *self.stage_arguments(
                 stage,
@@ -298,7 +291,6 @@ class JenkinsRun:
         run_limit_seconds: int = 60,
         work_limits: dict[str, str] | None = None,
     ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
-        """Run every Stage, each given the supplied inputs it is granted."""
         preflighted = self.preflight()
         assert preflighted.returncode == 0, preflighted.stderr
         assert json.loads(preflighted.stdout)["execution_id"] == EXECUTION_ID
@@ -437,7 +429,6 @@ def implemented_upstream(
 
 
 def script_stage(repository: Path, stage: StageName, entrypoint: Path) -> None:
-    """Select an implemented adapter at `entrypoint` in the Stage's descriptor."""
     descriptor = repository / STAGES[stage].jenkins_descriptor
     committed = descriptor.read_text()
     scripted = re.sub(
@@ -542,14 +533,12 @@ CD_REASONS = {
 
 
 def script_adapter(repository: Path, stage: StageName, body: str) -> None:
-    """Select an implemented adapter for `stage` that runs `body`."""
     adapter = repository.parent / f"{stage}-adapter-body"
     write_scripted_adapter(adapter, body)
     script_stage(repository, stage, adapter)
 
 
 def mirror_local_overrides(repository: Path) -> None:
-    """Make dispatch-local run the adapters the Jenkins descriptors select."""
     for stage in STAGES.values():
         if stage.local_override is not None:
             (repository / stage.local_override).write_bytes(
@@ -564,7 +553,6 @@ def respond(
     *,
     documents: dict[str, str] | None = None,
 ) -> str:
-    """Return a body that publishes `documents` as they are and one response."""
     return f"""documents = {documents or {}!r}
 for name, document in documents.items():
     (output / "outputs").mkdir(exist_ok=True)

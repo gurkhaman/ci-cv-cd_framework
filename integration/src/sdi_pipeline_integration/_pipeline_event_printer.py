@@ -22,15 +22,6 @@ RUN_FINISHED: Final = EventLine(None, "run-finished")
 
 @dataclass(frozen=True)
 class EventPrinter:
-    """Prints one run's pipeline events on stderr.
-
-    It holds what every row needs apart from its head: the run's identity, its
-    committed target profile, its scope, and the accepted attempts its holder
-    already has. A holder that learns of more attempts derives a new printer.
-    A failed write is ignored and `build_row` never raises, so printing never
-    changes a result.
-    """
-
     identified: Mapping[str, Any]
     target_profile: StageInputSource
     scope: EventScope
@@ -45,15 +36,12 @@ class EventPrinter:
         scope: EventScope,
         executions: Sequence[StageExecution] = (),
     ) -> EventPrinter:
-        """Build a printer from `committed_stage_sources` and earlier attempts."""
         return cls(identified, committed["target_profile"], scope, tuple(executions))
 
     def with_executions(self, executions: Sequence[StageExecution]) -> EventPrinter:
-        """Return this printer holding `executions` as the run's attempts."""
         return replace(self, executions=tuple(executions))
 
     def emit(self, head: LineHead) -> None:
-        """Print one event line pair now."""
         write_event(
             build_row(
                 self.identified,

@@ -1248,19 +1248,15 @@ type TimeLimitStep = Literal["work-limit-reached", "run-deadline-reached"]
 
 @dataclass(frozen=True)
 class AdapterTimeLimit:
-    """How long the runtime waits for an adapter, and the line that ends the wait."""
-
     seconds: float
     reached: TimeLimitStep
 
     @property
     def limit_min(self) -> int:
-        """Return the limit in whole minutes, rounded down and at least 1."""
         return max(1, math.floor(self.seconds / 60))
 
     @property
     def reason(self) -> tuple[str, str]:
-        """Return the reason code and summary of an adapter stopped at the limit."""
         match self.reached:
             case "work-limit-reached":
                 return (
@@ -1274,11 +1270,9 @@ class AdapterTimeLimit:
                 )
 
     def running_line(self, stage: StageName) -> EventLine:
-        """Return the `adapter-running` line that announces this limit."""
         return EventLine(stage, "adapter-running", {"limit_min": self.limit_min})
 
     def reached_line(self, stage: StageName) -> EventLine:
-        """Return the line printed when the adapter reaches this limit."""
         match self.reached:
             case "work-limit-reached":
                 return EventLine(stage, self.reached, {"limit_min": self.limit_min})
@@ -1289,7 +1283,6 @@ class AdapterTimeLimit:
 def adapter_time_limit(
     work_limit_seconds: int, deadline_monotonic: float | None, now_monotonic: float
 ) -> AdapterTimeLimit:
-    """Return the work limit, unless the time left before the deadline is shorter."""
     if deadline_monotonic is not None:
         remaining = max(0.0, deadline_monotonic - now_monotonic)
         if remaining < work_limit_seconds:
@@ -1425,11 +1418,7 @@ def execute_identified_stage(  # noqa: PLR0913
     work_limit_seconds: int | None = None,
     deadline_monotonic: float | None = None,
 ) -> StageExecution:
-    """Execute one Stage while preserving an already assigned Execution ID.
-
-    Every attempt it returns is published and printed as `stage-finished`. A
-    Stage that raises prints nothing more.
-    """
+    """Execute one Stage while preserving an already assigned Execution ID."""
     if attempt_root.exists():
         msg = "attempt root must not already exist"
         raise InputError(msg)
@@ -1469,7 +1458,6 @@ def _pre_spawn_skip(
     identified: Mapping[str, Any],
     available_inputs: Mapping[str, StageInputSource],
 ) -> StageExecution | None:
-    """Return the skip of a Stage whose adapter must not start, if it is one."""
     if descriptor.implementation_mode == "not_implemented":
         return skipped_stage_execution(
             execution_id=identified["execution_id"],
@@ -1528,10 +1516,6 @@ def _run_adapter(  # noqa: PLR0913
     deadline_monotonic: float | None,
     events: EventPrinter,
 ) -> StageExecution:
-    """Run the adapter once and return its attempt, unpublished.
-
-    It has no attempt root, so only the caller can publish what it returns.
-    """
     input_root = work_root / "inputs"
     output_root = work_root / "candidate"
     input_root.mkdir()
