@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import shutil
 import signal
@@ -14,7 +15,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, get_args
+from typing import TYPE_CHECKING, Any, Literal, get_args
 
 from pydantic import BaseModel, ValidationError
 
@@ -39,6 +40,7 @@ from ._domain_contracts import (
 from ._git_input import CommittedBlob, GitRepository, validate_repository_path
 from ._jenkins_agent_boundary import enforce_domain_execution_boundary
 from ._json_input import canonical_json, parse_json
+from ._pipeline_event_rows import EventLine
 from ._result_contracts import (
     MAX_TRANSFER_DIAGNOSTIC_BYTES,
     MAX_TRANSFER_DOMAIN_BYTES,
@@ -1240,6 +1242,60 @@ def _candidate_rejection_reason(message: str) -> tuple[str, str]:  # noqa: PLR09
     )
 
 
+type TimeLimitStep = Literal["work-limit-reached", "run-deadline-reached"]
+
+
+@dataclass(frozen=True)
+class AdapterTimeLimit:
+    """How long the runtime waits for an adapter, and the line that ends the wait."""
+
+    seconds: float
+    reached: TimeLimitStep
+
+    @property
+    def limit_min(self) -> int:
+        """Return the limit in whole minutes, rounded down and at least 1."""
+        return max(1, math.floor(self.seconds / 60))
+
+    @property
+    def reason(self) -> tuple[str, str]:
+        """Return the reason code and summary of an adapter stopped at the limit."""
+        match self.reached:
+            case "work-limit-reached":
+                return (
+                    "sdi.stage.deadline-exceeded",
+                    "The Stage adapter exceeded its work limit.",
+                )
+            case "run-deadline-reached":
+                return (
+                    "sdi.run.deadline-exceeded",
+                    "The Pipeline integration run deadline expired.",
+                )
+
+    def running_line(self, stage: StageName) -> EventLine:
+        """Return the `adapter-running` line that announces this limit."""
+        return EventLine(stage, "adapter-running", {"limit_min": self.limit_min})
+
+    def reached_line(self, stage: StageName) -> EventLine:
+        """Return the line printed when the adapter reaches this limit."""
+        match self.reached:
+            case "work-limit-reached":
+                return EventLine(stage, self.reached, {"limit_min": self.limit_min})
+            case "run-deadline-reached":
+                return EventLine(stage, self.reached)
+
+
+def adapter_time_limit(
+    work_limit_seconds: int, deadline_monotonic: float | None, now_monotonic: float
+) -> AdapterTimeLimit:
+    """Return the work limit, unless the time left before the deadline is shorter."""
+    if deadline_monotonic is not None:
+        remaining = max(0.0, deadline_monotonic - now_monotonic)
+        if remaining < work_limit_seconds:
+            return AdapterTimeLimit(remaining, "run-deadline-reached")
+    return AdapterTimeLimit(float(work_limit_seconds), "work-limit-reached")
+
+
 def _terminate_process_group(
     process: subprocess.Popen[bytes], process_group: int, *, immediate: bool = False
 ) -> None:
@@ -1495,17 +1551,11 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
             _publish_execution(attempt_root, execution)
             return execution
         process_group = process.pid
-        timeout_seconds = float(effective_work_limit_seconds)
-        timeout_code = "sdi.stage.deadline-exceeded"
-        timeout_summary = "The Stage adapter exceeded its work limit."
-        if deadline_monotonic is not None:
-            remaining = max(0.0, deadline_monotonic - time.monotonic())
-            if remaining < timeout_seconds:
-                timeout_seconds = remaining
-                timeout_code = "sdi.run.deadline-exceeded"
-                timeout_summary = "The Pipeline integration run deadline expired."
+        limit = adapter_time_limit(
+            effective_work_limit_seconds, deadline_monotonic, time.monotonic()
+        )
         try:
-            return_code = process.wait(timeout=timeout_seconds)
+            return_code = process.wait(timeout=limit.seconds)
         except ExternalCancellation:
             _terminate_process_group(process, process_group, immediate=True)
             raise
@@ -1519,8 +1569,8 @@ def execute_identified_stage(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
                 finished_at=datetime.now(UTC),
                 conclusion="timed_out",
                 termination="timed_out",
-                code=timeout_code,
-                summary=timeout_summary,
+                code=limit.reason[0],
+                summary=limit.reason[1],
             )
             _publish_execution(attempt_root, execution)
             return execution
