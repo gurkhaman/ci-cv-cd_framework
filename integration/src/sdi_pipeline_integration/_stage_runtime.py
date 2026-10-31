@@ -72,9 +72,11 @@ from ._stage_documents import validate_stage_documents
 from ._stage_profiles import stage_profile_bytes
 from ._stage_registry import (
     COMMITTED_SLOTS,
+    EXPECTED_STAGE_ATTACHMENTS,
     EXPECTED_STAGE_EVIDENCE,
     EXPECTED_STAGE_INPUT_SLOTS,
     EXPECTED_STAGE_OUTPUTS,
+    MAX_ATTACHMENT_BYTES,
     SLOT_BY_NAME,
     SLOT_BY_SCHEMA,
     STAGES,
@@ -437,6 +439,8 @@ def _capture_candidate(  # noqa: C901, PLR0912, PLR0913, PLR0915, PLR0917
     validated_outputs: dict[str, BaseModel] = {}
     for slot in response.produced_outputs:
         grant = output_by_slot[slot]
+        if grant.role == "stage_attachment":
+            continue
         model = OUTPUT_MODELS.get(grant.schema_version)
         if model is None:
             msg = "candidate output uses an unsupported schema version"
@@ -1067,6 +1071,17 @@ def load_stage_execution(  # noqa: C901, PLR0912, PLR0915
     ) or (evidence_files and envelope.execution_conclusion != "succeeded"):
         msg = "accepted attempt evidence does not match the reviewed Stage grant"
         raise InputError(msg)
+    attachment_files = [
+        item for item in envelope.accepted_files if item.role == "stage_attachment"
+    ]
+    if any(
+        (item.path, item.media_type, item.schema_version)
+        != EXPECTED_STAGE_ATTACHMENTS[expected_stage].get(item.slot)
+        or item.byte_size > MAX_ATTACHMENT_BYTES
+        for item in attachment_files
+    ) or (attachment_files and envelope.execution_conclusion != "succeeded"):
+        msg = "accepted attempt attachment does not match the reviewed Stage grant"
+        raise InputError(msg)
     if (
         envelope.execution_conclusion == "succeeded"
         and envelope.domain_outcome != "failed"
@@ -1143,6 +1158,8 @@ def load_stage_execution(  # noqa: C901, PLR0912, PLR0915
             if contains_sensitive_material(diagnostic):
                 msg = "accepted attempt diagnostic contains sensitive material"
                 raise InputError(msg)
+            continue
+        if accepted.role == "stage_attachment":
             continue
         model = OUTPUT_MODELS.get(accepted.schema_version)
         if model is None:

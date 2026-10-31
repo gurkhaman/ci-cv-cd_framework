@@ -438,31 +438,44 @@ def script_stage(repository: Path, stage: StageName, entrypoint: Path) -> None:
     descriptor.write_text(scripted)
 
 
-def select_evidence_adapter(
+def select_evidence_adapter(  # noqa: PLR0913, PLR0917
     repository: Path,
     stage: Literal["cv", "cd"],
     domain_outcome: str,
     evidence: dict[str, Any] | None,
     reason: dict[str, str] | None,
+    attachment: bytes | None = None,
 ) -> None:
     (grant,) = STAGES[stage].grant.evidence
+    attachments = {
+        item.name: item.file_name for item in STAGES[stage].grant.attachments
+    }
     adapter = repository.parent / f"scripted-{stage}-adapter"
     write_scripted_adapter(
         adapter,
         f"""evidence = {evidence!r}
+attachment = {attachment!r}
+attachments = {attachments!r}
+produced = []
 if evidence is not None:
     evidence["source_inputs"] = [
         {{"slot": item["slot"], "sha256": item["sha256"]}} for item in request["inputs"]
     ]
     (output / "outputs").mkdir()
     (output / "outputs/{grant.file_name}").write_text(json.dumps(evidence))
+    produced.append({grant.name!r})
+if attachment is not None:
+    (output / "outputs").mkdir(exist_ok=True)
+    for slot, name in attachments.items():
+        (output / "outputs" / name).write_bytes(attachment)
+        produced.append(slot)
 response = {{
     "schema_version": "sdi.stage-adapter-response/v1",
     "correlation": request["correlation"],
     "execution_conclusion": "succeeded",
     "domain_outcome": {domain_outcome!r},
     "consumed_inputs": [item["slot"] for item in request["inputs"]],
-    "produced_outputs": [] if evidence is None else [{grant.name!r}],
+    "produced_outputs": produced,
     "diagnostic": {{"present": False, "truncated": False}},
 }}
 reason = {reason!r}
