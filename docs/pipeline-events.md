@@ -252,6 +252,57 @@ One Stage's runtime lines follow one of these paths:
 A Stage that is killed stops after any step of a path, before
 `stage-finished`. Only the last Stage that printed can stop early.
 
+## Who Prints
+
+Events go to stderr only. Each command's stdout stays what it was: one JSON
+document, or nothing.
+
+| Command | Lines it prints |
+| -- | -- |
+| `preflight-jenkins-run` | `run-accepted`, as its last action, after every check passed |
+| `execute-jenkins-stage` | the lines of its Stage |
+| `finalize-jenkins-run` | the final `run-finished` line, as its last action, after the bundle is in place |
+| `dispatch-local` | `run-accepted` before the first Stage, the lines of each Stage it runs, and the final `run-finished` line after the bundle is in place |
+| `execute-stage` | the lines of its Stage, with no run-level line |
+
+The Stage runtime prints a Stage's lines, whichever command runs the Stage.
+It prints `stage-started` just before it starts the adapter, after the
+Stage's inputs, request and environment are ready. A Stage that fails before
+that point prints nothing. A Stage skipped before its adapter starts prints
+only `stage-finished`.
+
+These print nothing:
+
+- `execute-jenkins-stage` when the run deadline has already passed (exit 3)
+  or its agent image is stale (exit 4).
+- A command that fails before its first line, such as
+  `preflight-jenkins-run` when any check fails.
+- A Stage that `dispatch-local` or Finalize skips because an earlier Stage
+  blocked it. The final line still shows it as `SKIPPED`.
+- `attempt-allows-continuation`, `bundle-conclusion`, `deployment-manifest`
+  and `integration-code-digest`.
+
+A process stopped by SIGINT or SIGTERM prints nothing more, so its Stage has
+no `stage-finished` line.
+
+`execute-stage` rows have single-Stage scope, as [Statuses](#statuses)
+describes for `ci_status`. The command has no run deadline, so the only time
+limit line it can print is `work-limit-reached`.
+
+`{limit_min}` in `adapter-running` and `work-limit-reached` is how long the
+runtime waits for the adapter: the Stage's work limit, or the time left
+before the run deadline when that is shorter. It is rounded down to whole
+minutes, and it is at least 1. When the time left before the run deadline is
+the shorter one, the runtime prints `run-deadline-reached` instead of
+`work-limit-reached`.
+
+To check the events of a local run, keep its stderr and check the file:
+
+```sh
+uv run --frozen sdi-integration dispatch-local ... 2> stderr.txt
+uv run --frozen sdi-integration check-events stderr.txt --real-run
+```
+
 ## Checking a Console
 
 `check-events` checks the events in a console file, such as a test's captured
