@@ -847,31 +847,44 @@ CV_REASONS = {
 }
 
 
-def _select_evidence_adapter(
+def _select_evidence_adapter(  # noqa: PLR0913, PLR0917
     repository: Path,
     stage: Literal["cv", "cd"],
     domain_outcome: str,
     evidence: dict[str, Any] | None,
     reason: dict[str, str] | None,
+    attachment: bytes | None = None,
 ) -> None:
     (grant,) = STAGES[stage].grant.evidence
+    attachments = {
+        item.name: item.file_name for item in STAGES[stage].grant.attachments
+    }
     adapter = repository.parent / f"scripted-{stage}-adapter"
     write_scripted_adapter(
         adapter,
         f"""evidence = {evidence!r}
+attachment = {attachment!r}
+attachments = {attachments!r}
+produced = []
 if evidence is not None:
     evidence["source_inputs"] = [
         {{"slot": item["slot"], "sha256": item["sha256"]}} for item in request["inputs"]
     ]
     (output / "outputs").mkdir()
     (output / "outputs/{grant.file_name}").write_text(json.dumps(evidence))
+    produced.append({grant.name!r})
+if attachment is not None:
+    (output / "outputs").mkdir(exist_ok=True)
+    for slot, name in attachments.items():
+        (output / "outputs" / name).write_bytes(attachment)
+        produced.append(slot)
 response = {{
     "schema_version": "sdi.stage-adapter-response/v1",
     "correlation": request["correlation"],
     "execution_conclusion": "succeeded",
     "domain_outcome": {domain_outcome!r},
     "consumed_inputs": [item["slot"] for item in request["inputs"]],
-    "produced_outputs": [] if evidence is None else [{grant.name!r}],
+    "produced_outputs": produced,
     "diagnostic": {{"present": False, "truncated": False}},
 }}
 reason = {reason!r}
@@ -904,7 +917,10 @@ def _commit_and_execute(
 
 
 def _implemented_cv_chain(
-    tmp_path: Path, domain_outcome: str, evidence: dict[str, Any] | None
+    tmp_path: Path,
+    domain_outcome: str,
+    evidence: dict[str, Any] | None,
+    attachment: bytes | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
     repository = _implemented_upstream(tmp_path, CV_IMAGES, placements=CV_PLACEMENTS)
     _select_evidence_adapter(
@@ -913,6 +929,7 @@ def _implemented_cv_chain(
         domain_outcome,
         evidence,
         CV_REASONS[domain_outcome],
+        attachment,
     )
     return _commit_and_execute(tmp_path, repository)
 
@@ -938,6 +955,58 @@ def test_cv_verdict_sets_the_run_colour(
         if artifact["stage"] == "cv"
     ] == ["validation_evidence"]
     assert conclusion.returncode == run_conclusion, conclusion.stderr
+
+
+# Not a playable video: the runtime and the bundle never parse an attachment.
+RECORDING = b"\x00\x00\x00\x18ftypmp42" + bytes(range(256)) * 4
+
+
+@pytest.mark.parametrize(
+    ("evidence", "run_conclusion"),
+    [(SUCCEEDED, 0), (FAILED, 1)],
+    ids=["succeeded-green", "failed-red"],
+)
+def test_cv_recording_reaches_the_bundle_unparsed(
+    tmp_path: Path, evidence: dict[str, Any], run_conclusion: int
+) -> None:
+    conclusion, result = _implemented_cv_chain(
+        tmp_path, evidence["domain_outcome"], evidence, RECORDING
+    )
+
+    assert conclusion.returncode == run_conclusion, conclusion.stderr
+    cv = result["attempts"][2]
+    assert cv["adapter_response_accepted"] is True, cv.get("reason")
+    (recording,) = [
+        artifact
+        for artifact in result["artifacts"]
+        if artifact["stage"] == "cv" and artifact["role"] == "stage_attachment"
+    ]
+    assert recording["slot"] == "sim_recording"
+    assert recording["path"] == "stages/cv/sim-recording.mp4"
+    assert recording["media_type"] == "video/mp4"
+    assert recording["byte_size"] == len(RECORDING)
+    bundle_root = tmp_path / "run" / "bundle"
+    assert (bundle_root / recording["path"]).read_bytes() == RECORDING
+    validated = subprocess.run(
+        ["sdi-integration", "validate-bundle", "--bundle-root", str(bundle_root)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert validated.returncode == 0, validated.stderr
+
+
+def test_cv_recording_without_evidence_is_rejected(tmp_path: Path) -> None:
+    conclusion, result = _implemented_cv_chain(tmp_path, "succeeded", None, RECORDING)
+
+    cv = result["attempts"][2]
+    assert cv["adapter_response_accepted"] is False
+    assert cv.get("reason", {}).get("code") == "sdi.adapter.output-missing", cv
+    assert all(
+        artifact["stage"] != "cv" or artifact["role"] == "diagnostic"
+        for artifact in result["artifacts"]
+    )
+    assert conclusion.returncode == 1
 
 
 def test_cv_implemented_execution_must_publish_its_evidence(tmp_path: Path) -> None:
