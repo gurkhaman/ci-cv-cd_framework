@@ -178,7 +178,7 @@ def test_stale_stage_wiring_fails_with_the_write_command(tmp_path: Path) -> None
     jenkinsfile = tmp_path / "Jenkinsfile"
     committed = JENKINSFILE.read_text(encoding="utf-8")
     jenkinsfile.write_text(
-        committed.replace("safetyTimeoutSeconds: 660", "safetyTimeoutSeconds: 600"),
+        committed.replace("safetyTimeoutSeconds: 1860", "safetyTimeoutSeconds: 1800"),
         encoding="utf-8",
     )
 

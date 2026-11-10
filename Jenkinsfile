@@ -9,7 +9,7 @@ def integrationLabel = 'integration'
 def runLimitSeconds = 5400
 def stages = [
     [name: 'Composition', stage: 'composition', label: 'composition',
-     safetyTimeoutSeconds: 660,
+     safetyTimeoutSeconds: 960,
      credentials: [[id: 'sdi-openai-api-key', variable: 'OPENAI_API_KEY']]],
     [name: 'Image build', stage: 'image_build', label: 'image-build',
      safetyTimeoutSeconds: 1860,

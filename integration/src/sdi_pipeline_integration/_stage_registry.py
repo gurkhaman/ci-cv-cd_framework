@@ -186,7 +186,7 @@ STAGES: dict[StageName, Stage] = {
                 "service_repository",
                 "composition_settings",
             ),
-            work_limit_seconds=10 * 60,
+            work_limit_seconds=15 * 60,
             domain_output_max_bytes=32768,
             diagnostic_max_bytes=16384,
             evidence=(

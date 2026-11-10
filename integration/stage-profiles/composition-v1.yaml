@@ -1,7 +1,7 @@
 schema_version: sdi.stage-profile/v1
 profile_version: sdi.composition-stage-profile/v1
 stage: composition
-work_limit_seconds: 600
+work_limit_seconds: 900
 inputs:
   - slot: run_request
     path: run-request.yaml
