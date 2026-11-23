@@ -20,7 +20,9 @@ Authority is intentionally local:
 - `integration/src/sdi_pipeline_integration/` also owns Stage invocation policy
   and limits, and renders `integration/stage-profiles/` from them.
 - `deployment/jenkins/adapters/` owns which immutable implementation image and
-  process satisfy each Stage seam.
+  process satisfy each Stage seam. Each descriptor's `image:` must equal its
+  `SDI_<STAGE>_ADAPTER_IMAGE` pin in `deployment/installation.env`, which is the
+  reviewed authority.
 - `deployment/jenkins/casc/jenkins.yaml`, `jobs/`, `compose.yaml`, and the root
   `Jenkinsfile` own reconstructable scheduling and security configuration.
 - `.github/workflows/pipeline-integration.yml` owns the protected external
@@ -66,7 +68,9 @@ into integration code, or mutate a running container. With Jenkins idle:
 
 1. Review the image provenance, license, vulnerability posture, process command,
    declared inputs/outputs, secret bindings, and supported architecture.
-2. Commit the one descriptor and any independently versioned contract change.
+2. Commit the one descriptor, its matching `SDI_<STAGE>_ADAPTER_IMAGE` pin in
+   `deployment/installation.env`, and any independently versioned contract
+   change. Validation fails when the descriptor and the pin differ.
 3. Run `integration/scripts/verify`.
 4. Run `stack reconcile-agent <ci|image-build|cv|cd>` for only that descriptor's
    agent.
@@ -77,13 +81,17 @@ into integration code, or mutate a running container. With Jenkins idle:
 ## Verification And Readiness
 
 `integration/scripts/verify` is the deterministic repository acceptance command.
-It checks generated-schema, Stage-profile, and Fixture-case freshness, formatting, linting, type
-safety, tests, and an ephemeral Jenkins smoke of the controller, five agents,
-the builder and pipeline registry, the CV engine, the handoff-runner image, and the runner's
-egress confinement through its proxy.
+It checks generated-schema, Stage-profile, Jenkinsfile, and Fixture-case freshness,
+the workflow schema, formatting, linting, type safety, and tests.
+It runs an ephemeral Jenkins smoke only when a smoke input changed since the
+merge base with `origin/main`, when `HEAD` has no commits beyond that merge
+base, or when no merge base exists. The smoke covers the controller, five agents, the builder and pipeline
+registry, the CV engine, the handoff-runner image, and the runner's egress
+confinement through its proxy. `integration/scripts/verify --fast` stops before
+the slow tests and skips the smoke.
 It does not prove GitHub protection, protected-environment delivery, a
 registered runner, production credentials, restoration, or a live protected-main
-run or dispatch.
+run or dispatch. It does not run the `cv_engine` and `k3s` pytest tiers.
 
 Repeat the relevant readiness sections after any change to installation pins,
 workflow permissions, branch/environment protection, runner, controller,

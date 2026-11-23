@@ -31,7 +31,9 @@ socket, Jenkins state, or secret files, and the stack operator registers it.
 Use Ubuntu LTS 24.04 or 26.04 on x86_64 with:
 
 - Docker Engine 27 or newer and the Docker Compose plugin 2.20.2 or newer,
-  available to the stack operator without privilege escalation;
+  available to the stack operator without privilege escalation. The stack
+  needs Compose 2.20.2 for the healthcheck `start_interval` key. `stack
+  preflight` checks only the Compose major version;
 - Git 2 or newer, Python 3, `uv` 0.12.1, systemd, `curl`, `sha256sum`, and
   `tar`;
 - the GitHub CLI `gh`, to pipe a runner registration token into the stack;
@@ -166,8 +168,15 @@ label `sdi-jenkins-handoff`.
 
 GitHub assigns a queued job to any online runner with that label, so only one
 installation may have an online upstream runner. When ETRI's runner goes live,
-the development host's upstream runner must be stopped by setting its
-`GITHUB_RUNNERS=fork` and restarting its stack.
+the development host's operator must stop its upstream runner. On that host,
+set `GITHUB_RUNNERS=fork` and run:
+
+```sh
+deployment/jenkins/bin/stack stop
+deployment/jenkins/bin/stack start
+```
+
+`stack start` alone leaves a running `runner-upstream` container up.
 
 ## 5. Configure GitHub
 
@@ -266,5 +275,9 @@ one-at-a-time credential or agent replacement.
   its own registration secret, and a disposable workspace rather than shared
   mutable state.
 - **Manual host provisioning:** ETRI retains control of operating-system,
-  network, account, storage-encryption, and package policy; preflight verifies
-  the capabilities the scaffold actually needs.
+  network, account, storage-encryption, and package policy. `stack preflight`
+  checks the Ubuntu release, the required tools, the Docker Engine, Compose,
+  and Git major versions, a clean checkout, outbound HTTPS, Docker access, and
+  the pins. It does not check the arm64 binfmt emulator, the Compose minor version,
+  `gh`, `sha256sum`, or `tar`. The operator confirms these. A missing emulator
+  shows up only at the smoke test or `stack verify-live`.

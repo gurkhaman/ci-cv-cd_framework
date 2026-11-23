@@ -128,7 +128,7 @@ except possibly the final one.
 
 | Field | Value |
 | -- | -- |
-| `ci_duration_ms` | Composition's and Image build's process durations, summed |
+| `ci_duration_ms` | Composition's and Image build's process durations, summed, or null until `ci_status` is terminal |
 | `blueprint_ref` | `stages/composition/composition-blueprint.json` |
 | `deployment_schema_ref` | `stages/composition/deployment-schema.json` |
 | `image_build_result_ref` | `stages/image-build/image-build-result.json` |
@@ -148,7 +148,7 @@ except possibly the final one.
 | `validation_evidence_ref` | `stages/cv/validation-evidence.json` |
 | `cv_platform` | the platform the evidence records, such as `"linux/amd64"` |
 | `cv_services_participating`, `cv_services_blocked`, `cv_services_total` | service counts |
-| `cv_service_issues` | `{"service_id", "participation", "reason"}` for each service that did not participate or was not evaluated |
+| `cv_service_issues` | `{"service_id", "participation", "reason"}` for each service that did not participate or was not evaluated, except a `not_evaluated` service with reason `blocked`, which `cv_services_blocked` counts |
 | `mission_setup` | `passed`, `timed_out`, or null |
 | `mission_steps` | the eight S-04 steps in order, each `{"id", "status"}` |
 
@@ -206,8 +206,10 @@ files. A ref is set when its Stage accepted the file. The image tags need the
 deployment schema, so `image_ref`, `platform_status` and `detected_platform`
 are null in an `execute-stage image_build` row.
 
-While a Stage runs, its accepted adapter reports fill item fields. The first
-report for an item wins.
+The row model also defines item fields that accepted adapter reports fill
+while a Stage runs. The first report for an item wins. No Stage sends these
+reports at this commit, because the runtime discards adapter output. Before a
+Stage's `stage-finished` line, its item fields are null.
 
 | Report | Fills |
 | -- | -- |
@@ -217,14 +219,15 @@ report for an item wins.
 | `pod-not-running` | a `placement_issues` entry, `failed` |
 
 From the Stage's `stage-finished` line on, its result files win. A Stage that
-ended without a result file, such as a CV that timed out, shows null there,
-even where its live lines showed values.
+ended without a result file, such as a CV that timed out, shows null there.
 
 ## Steps
 
-The runtime prints the run-level and every-Stage steps. A Stage's adapter
-reports the Stage-specific steps through its progress channel. `{Stage}` is
-`Composition`, `Image build`, `CV` or `CD`.
+The runtime prints the run-level and every-Stage steps. The catalogue also
+defines Stage-specific steps for adapter reports, and the checker accepts them.
+No Stage prints them at this commit, because the runtime discards adapter
+output. A real run prints only the run-level and every-Stage steps. `{Stage}`
+is `Composition`, `Image build`, `CV` or `CD`.
 
 | Scope | Steps |
 | -- | -- |
@@ -235,9 +238,10 @@ reports the Stage-specific steps through its progress channel. `{Stage}` is
 | CV | `screening`, `service-unfit`, `leftover-cleanup`, `sim-cached`, `sim-build`, `pull`, `pull-blocked`, `start`, `mission`, `mission-setup-done`, `mission-step`, `collecting-result`, `teardown` |
 | CD | `nodes-wait`, `nodes-ready`, `applying`, `pod-running`, `pod-not-running`, `settling`, `judging`, `cleanup` |
 
-While `generation`, `sim-build`, `building` or `mission` is a Stage's last
-step, the runtime repeats it every three minutes with its heartbeat message
-and the same step code.
+The catalogue defines a heartbeat message for `generation`, `sim-build`,
+`building` and `mission`. A heartbeat line repeats the step with the same step
+code. The checker accepts heartbeat lines, but no Stage prints them at this
+commit.
 
 One Stage's runtime lines follow one of these paths:
 
@@ -327,6 +331,10 @@ The checker reads only lines that start at column 0 with `[sdi] ` or
 `PRISM_EVENT` line needs its `[sdi]` line directly before it. A console
 decorator such as a timestamp prefix fails the check. Each pair must be
 byte-equal to the renderer's output for the row the `PRISM_EVENT` line holds.
+
+The checker also accepts a plain `sdi-integration: dropped N progress reports`
+line after a Stage's `stage-started` line and before its `publishing` line.
+Elsewhere that line is a violation. Nothing prints it at this commit.
 
 The final line's statuses equal those of the last `stage-finished` line, or
 all `PENDING` when there is none. When the final `failure_reason` is

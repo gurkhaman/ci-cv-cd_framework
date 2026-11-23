@@ -27,7 +27,7 @@ Main features of this pipeline framework is:
 ![CI Flow](assets/CI_main.png)
 * **Continuous Validation (CV)**: Simulation(e.g., Gazebo, CARLA)-based virtual validation of autonomous driving software
 ![Gazebo Simulation](assets/gazebo_office_world.png)
-* **Continuous Deployment (CD)**: Split deployment of moiblity software to mobility device and infrastrucutre (e.g., edge or cloud servers)
+* **Continuous Deployment (CD)**: Split deployment of mobility software to mobility device and infrastructure (e.g., edge or cloud servers)
 
 For more details please check the APSEC'25 Tools Paper - [OrchestML](/CI/APSEC_2025_Tools.pdf).
 
@@ -87,16 +87,21 @@ operation, maintenance, and readiness guidance is indexed under [`docs/`](docs/)
 
 ### Development
 
-Install [`uv`](https://docs.astral.sh/uv/) and run the deterministic baseline
-verification command from any directory:
+Install [`uv`](https://docs.astral.sh/uv/) 0.12.1 and `flock`, then run the
+deterministic baseline verification command from any directory:
 
 ```sh
 integration/scripts/verify
 ```
 
-The command installs the exact locked Python 3.12 environment; checks schemas,
-the public CLI, Ruff, and Basedpyright; and runs the ephemeral Jenkins stack
-smoke check on the supported Docker host. The installed command is:
+The command installs the exact locked Python 3.12 environment. It checks
+schemas, Stage profiles, the `Jenkinsfile`, Fixtures, the workflow file, the
+public CLI, Ruff, and Basedpyright, and runs the pytest suite. It runs the
+ephemeral Jenkins stack smoke check on the supported Docker host only when a
+smoke input changed since the merge base with `origin/main`, or when `HEAD` has
+no commits beyond that merge base. Otherwise it prints that the smoke check was
+skipped. `integration/scripts/verify --fast` runs only the fast checks and
+tests, and skips the slow tests and the smoke check. The installed command is:
 
 ```sh
 uv run --project integration sdi-integration --help

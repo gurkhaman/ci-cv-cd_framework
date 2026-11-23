@@ -35,7 +35,7 @@ and Jenkins volume.
 - [ ] Jenkins HTTP publication is loopback-only; no inbound-agent TCP port exists
 - [ ] Administrator, handoff machine user, runner, and five agents are separate identities
 - [ ] Handoff machine user has only reviewed read/build/cancel permission
-- [ ] Runner container is non-root with no sudo, Docker socket, Jenkins state, or persistent Jenkins credential; it reaches only the controller and its own proxy, and `stack verify-live` passed its network `check` and GitHub `egress` check
+- [ ] Each runner container is non-root with no sudo, Docker socket, Jenkins state, or persistent Jenkins credential; it reaches only the controller and its own proxy, and `stack verify-live` passed its network `check` and GitHub `egress` check
 - [ ] Each agent receives only its own registration secret and declared Stage secrets
 - [ ] Security review evidence references and UTC time:
 
@@ -56,7 +56,7 @@ and Jenkins volume.
 - [ ] Fresh controller passwords and five secure agent-secret destinations were staged before restore
 - [ ] The disposable recovery stack proved its replacement HMAC key and all five issued agent secrets before the target restore
 - [ ] Complete controller volume restored and tracked configuration reconverged
-- [ ] Controller, job, plugins, agents, labels, executors, and authorization passed `verify-live`
+- [ ] Controller, both jobs, plugins, agents, labels, executors, and authorization passed `verify-live`
 - [ ] Fresh credentials were validated before archived credentials were activated or replaced
 - [ ] Restoration evidence references and UTC time:
 

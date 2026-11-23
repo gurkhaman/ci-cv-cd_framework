@@ -17,8 +17,9 @@ Before enabling dispatch:
    human release approval.
 5. Add environment variables `SDI_JENKINS_JOB_PATH`,
    `SDI_JENKINS_REPOSITORY`, and `SDI_JENKINS_USERNAME`. The workflow
-   hard-codes the Jenkins base URL `http://controller:8080` and no longer reads
-   `SDI_JENKINS_BASE_URL`; delete that variable where it remains.
+   sets `SDI_JENKINS_BASE_URL` to `http://controller:8080` itself and no longer
+   reads it from the environment. Delete that environment variable where it
+   remains.
 6. Add environment secret `SDI_JENKINS_API_TOKEN` containing the named Jenkins
    machine user's API token, not its password.
 7. Require approval for every external fork workflow and never approve untrusted

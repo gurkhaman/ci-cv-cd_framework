@@ -93,7 +93,7 @@ requires `--service-repository` for composition, image-build and CV, rejects
 rejects all three for CD. `execute-jenkins-stage` takes no
 `--service-repository`: a Stage granted the service repository reads
 `service-repository/` from the checked-out commit, and only composition accepts
-the other two. `dispatch-local` runs both
+the other two. `dispatch-local` runs all four
 Stages, so it always requires `--service-repository`. The Jenkins preflight
 takes only `--composition-config` and `--generator`, to check the config's key
 names, and `finalize-jenkins-run` takes none of them.
@@ -303,8 +303,8 @@ the first mission step that failed or timed out.
 
 | Outcome code | Execution | Domain outcome | Category | Published |
 | --- | --- | --- | --- | --- |
-| `sdi.cv.succeeded` | succeeded | succeeded | no reason | Validation evidence |
-| `sdi.cv.failed` | succeeded | failed | domain | Validation evidence |
+| `sdi.cv.succeeded` | succeeded | succeeded | no reason | Validation evidence, sim recording |
+| `sdi.cv.failed` | succeeded | failed | domain | Validation evidence, sim recording |
 | `sdi.cv.not-evaluated` | succeeded | not evaluated | dependency | Validation evidence |
 | `sdi.cv.engine-unreachable` | failed | not evaluated | dependency | diagnostic |
 | `sdi.cv.pull-failed` | failed | not evaluated | dependency | diagnostic |
@@ -329,6 +329,11 @@ setup and each mission step with its elapsed seconds, each service's
 participation, the message counts, the topic-constant check, and the ROS graph
 grouped by publisher set. Log tails of the containers that explain the outcome
 share the space that is left.
+
+When the scenario runs to the end, CV also attaches `sim-recording.mp4`
+(`sdi.sim-recording/v1`, at most 64 MiB), a video of the run. The attachment is
+optional. A failed recording does not change the verdict, and no later Stage
+reads it.
 
 Locally, CV never runs. After a successful composition it is blocked, and the
 Fixture chain's output makes it skip with `sdi.dependency.fixture-evidence`.
@@ -414,7 +419,7 @@ six-combination verdict.
 
 ## Jenkins Pipeline Operations
 
-The root `Jenkinsfile` composes six public CLI operations rather than parsing or
+The root `Jenkinsfile` composes seven public CLI operations rather than parsing or
 constructing contracts in Groovy:
 
 - `preflight-jenkins-run` takes `--integration-node` and
@@ -429,7 +434,8 @@ constructing contracts in Groovy:
   for its own agent. It then reconstructs prior accepted attempts from bounded
   Jenkins stashes, validates every transferred byte, and executes the Stage's
   reviewed Jenkins descriptor from the Stage registry on its matching immutable
-  agent under the work limit of the Stage's grant. An expired run deadline
+  agent under the work limit of the Stage's grant. `--work-limit-seconds` can
+  lower that limit, but not below the grant's minimum. An expired run deadline
   returns control without launching an adapter so integration-owned
   finalization can create the typed skip.
 - `attempt-allows-continuation` derives whether another Domain Stage may run.
@@ -465,8 +471,8 @@ uv run --project integration sdi-integration jenkinsfile --write --jenkinsfile J
 `jenkinsfile --check` fails while the block is stale, and `scripts/verify` runs
 it beside the schema and Stage-profile checks. `adapter-image --repository .
 --stage STAGE`, repeated once per Stage, prints the runtime image of each
-Stage's Jenkins adapter descriptor, one per line in argument order; `bin/stack`
-selects the agent images with it.
+Stage's Jenkins adapter descriptor, one per line in argument order;
+`deployment/jenkins/bin/stack` selects the agent images with it.
 
 These commands are pipeline-facing primitives. Operators submit only through the
 fixed Jenkins job; they do not manually coordinate the primitives or reuse their
@@ -564,6 +570,22 @@ The helper prints each exact run URL before waiting and stops on failed or
 cancelled integration. It does not introduce a batch record or KPI
 interpretation. See `docs/pipeline-integration-trigger.md` for all UI, CLI, and
 REST trigger and retrieval procedures.
+
+## Other Commands
+
+These commands check generated files, validate inputs, or run one composition
+step outside a Stage:
+
+| Command | What it does | Key flags |
+| --- | --- | --- |
+| `schemas` | Writes or checks the generated input contract schemas. | `--check` or `--write`, `--directory` (default `schemas`) |
+| `stage-profiles` | Writes or checks the Stage profiles rendered from the slot registry. | `--check` or `--write`, `--directory` (default `stage-profiles`) |
+| `check-events` | Checks the pipeline events in a console log against a golden or a real run. See [Pipeline events](../docs/pipeline-events.md). | `console`, `--golden NAME` or `--real-run`, `--goldens` |
+| `validate-installation` | Validates every tracked source against the installation authority. | `--repository`, `--installation` |
+| `validate-service-repository` | Validates the `SDI.md` of every service folder and prints each path, `service_id`, and SHA-256 as JSON. | `--service-repository` |
+| `stage-status` | Prints each Stage's Jenkins and local implementation mode. | `--repository` |
+| `assess-proposals` | Checks and ranks composition proposals against a service repository and prints the assessment as JSON. | `--service-repository`, `--target-profile`, `--requirements-specification`, `--proposals` |
+| `generate-proposals` | Asks the configured model for composition proposals and writes them and their evidence. | `--service-repository`, `--target-profile`, `--requirements-specification`, `--composition-config`, `--generator`, `--output`, `--evidence` |
 
 ## Settled Failure Semantics
 
