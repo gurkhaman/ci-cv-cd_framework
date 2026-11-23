@@ -65,7 +65,9 @@ but they are not configuration authority.
 - Ubuntu LTS on x86_64.
 - Docker Engine 27 or newer with the Docker Compose plugin 2.20.2 or newer,
   which the healthcheck `start_interval` key requires, usable by the operator
-  without privilege escalation.
+  without privilege escalation. Preflight checks only the Compose major
+  version, so the operator confirms the 2.20.2 minimum.
+- `curl` for preflight HTTPS reachability checks.
 - Python 3 for the isolated smoke-check client.
 - `uv` for strict adapter-descriptor validation and runtime-image selection.
 - Outbound HTTPS access to Docker Hub, GHCR, `registry.k8s.io`, the Jenkins
@@ -93,10 +95,10 @@ deployment/jenkins/bin/stack preflight
 
 `setup` creates only the private local configuration directory and a private
 copy of the tracked example when one is absent. Edit that local file, create its
-two controller password files, and select five writable future agent-secret
+two controller password files and the OpenAI API key file, and select five writable future agent-secret
 paths outside the checkout before running `preflight`.
 The preflight verifies supported Ubuntu LTS x86_64, Docker Engine and Compose,
-systemd, Git, `uv`, required HTTPS access, checkout/configuration permissions,
+systemd, Git, `curl`, `uv`, required HTTPS access, checkout/configuration permissions,
 secret permissions, required Docker capabilities, Compose interpolation, and
 that every tracked software pin still agrees with `deployment/installation.env`.
 Diagnostics are capability-oriented and suppress raw network and tool output.
@@ -144,7 +146,7 @@ not the GitHub-to-Jenkins contract.
 Each dedicated GitHub runner is a stack service, described in
 [GitHub Handoff Runners](#github-handoff-runners). It runs as a non-root user
 with no Docker socket, Jenkins state, or secret files. The container receives
-no environment and never persists this API token; GitHub releases it only to
+no environment except its proxy settings and never persists this API token; GitHub releases it only to
 the protected handoff job.
 
 Jenkins serves two repositories through two otherwise identical jobs:
@@ -212,10 +214,10 @@ the key while no build runs: rewrite the file, keep it mode `0600`, then run
 HTTPS egress to `api.openai.com`, which serves both luna and the embeddings.
 Without a valid key or that egress, composition fails with
 `sdi.composition.dense-discovery-unavailable` and the build is red.
-The composition and image-build Stage commands read `service-repository/` from
-their own checkout of the submitted commit, because the Stage registry grants
-it to them, and the image-build command refuses to run unless its capture
-matches the one composition accepted. The CV and CD Stage commands, preflight,
+The composition, image-build, and CV Stage commands read `service-repository/`
+from their own checkout of the submitted commit, because the Stage registry
+grants it to them. The image-build and CV commands refuse to run unless their
+capture matches the one composition accepted. The CD Stage command, preflight,
 and finalization take no service repository.
 
 Each image contains an immutable role and label identity under `/etc/sdi` on its
@@ -523,7 +525,8 @@ registration secret is validated or mounted during reconciliation.
 
 `bin/stack destroy` is the explicit destructive operation for reconstruction. It
 removes the controller, its named volume, the runner state volumes with their
-registrations, and the builder cache, pipeline registry, and CV engine volumes. Back up
+registrations, and the builder cache, pipeline registry, CV engine, and `k3s-kubeconfig`
+volumes. Back up
 operational state first if it must be retained.
 
 ## Safe Shutdown
@@ -538,7 +541,8 @@ deployment/jenkins/bin/stack stop
 
 `quiesce` refuses while any runner executes a job and stops the running runner
 containers, giving each 60 seconds. It then asks Jenkins to stop accepting new
-work and refuses while the fixed job has queued or building work. If it
+work and refuses while the Jenkins queue has items or either fixed job is
+building. If it
 observes active work, it cancels quiet mode, restarts the runners, and leaves
 the stack running. A job that GitHub assigns between the runner check and the
 stop is cancelled gracefully by the stop, and its workflow run shows cancelled.
@@ -563,8 +567,9 @@ deployment/jenkins/bin/recovery snapshot \
 
 The acknowledgement flags record operator decisions; the scaffold cannot prove
 storage encryption or GitHub-side quiescence. The command then runs
-`stack quiesce`, which stops the runners and quiesces Jenkins, refuses queued
-or building runs, cleanly stops every container, and archives the complete
+`stack preflight`, then `stack quiesce`, which stops the runners and quiesces
+Jenkins and refuses queued or building runs. It then runs `stack stop`, which
+cleanly stops every container, and archives the complete
 `jenkins-home` named volume with numeric ownership. The runner state volumes,
 and so the runner registrations, and the builder cache, pipeline registry, and CV engine
 volumes are not part of the snapshot. It creates an
@@ -761,8 +766,10 @@ the isolated smoke volumes and prunes dangling images labelled
 image tags. Unlabelled images, base images,
 and the build cache are untouched.
 
-`integration/scripts/verify` includes this smoke check after the Python package
-checks. The smoke also replaces the controller passwords and Jenkins inbound
+`integration/scripts/verify` runs this smoke check after the Python package
+checks when a smoke input changed since the merge base with `origin/main`, when
+`HEAD` is that merge base, or when no merge base exists. Otherwise it skips the
+smoke check. The smoke also replaces the controller passwords and Jenkins inbound
 agent HMAC key, proves all five newly issued registration secrets differ, and
 reconnects every agent. It therefore requires the supported Docker host,
 arm64 emulation, and network access when the controller, builder, and registry
